@@ -7,8 +7,8 @@ from pathlib import Path
 
 from loguru import logger
 
-from hitodama.app.logging_setup import configure_logging
-from hitodama.app.single_instance import SingleInstance
+from jarvis.app.logging_setup import configure_logging
+from jarvis.app.single_instance import SingleInstance
 
 
 def test_logging_writes_rotating_file(tmp_path: Path) -> None:
@@ -20,8 +20,8 @@ def test_logging_writes_rotating_file(tmp_path: Path) -> None:
 
 
 def test_second_instance_is_refused() -> None:
-    first = SingleInstance("HitodamaTest")
-    second = SingleInstance("HitodamaTest")
+    first = SingleInstance("JarvisTest")
+    second = SingleInstance("JarvisTest")
     assert first.acquire()
     try:
         assert not second.acquire()
@@ -34,13 +34,13 @@ def test_second_instance_is_refused() -> None:
 def test_app_starts_and_exits_cleanly(isolated_env: Path) -> None:
     env = {**os.environ, "QT_QPA_PLATFORM": os.environ.get("QT_QPA_PLATFORM", "offscreen")}
     result = subprocess.run(
-        [sys.executable, "-m", "hitodama", "--exit-after", "1.5"],
+        [sys.executable, "-m", "jarvis", "--exit-after", "1.5"],
         env=env,
         capture_output=True,
         text=True,
         timeout=60,
     )
     assert result.returncode == 0, result.stderr
-    log = (isolated_env / "logs" / "hitodama.log").read_text(encoding="utf-8")
+    log = (isolated_env / "logs" / "jarvis.log").read_text(encoding="utf-8")
     assert "running" in log
     assert "exited cleanly" in log

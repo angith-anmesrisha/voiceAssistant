@@ -33,7 +33,7 @@ class MemoryKeyring(KeyringBackend):
 def isolated_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
     """Point app data at a temp dir and use an in-memory keyring for every test."""
     data = tmp_path / "data"
-    monkeypatch.setenv("HITODAMA_DATA_DIR", str(data))
+    monkeypatch.setenv("JARVIS_DATA_DIR", str(data))
     previous = keyring.get_keyring()
     keyring.set_keyring(MemoryKeyring())
     yield data

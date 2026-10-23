@@ -4,7 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from hitodama.core.hotkeys import ChordTracker, _token_for, normalize_token, parse_chord
+from jarvis.voice.hotkeys import ChordTracker, _token_for, normalize_token, parse_chord
 
 
 def test_parse_chord_normalizes() -> None:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from hitodama.app.events import Event, EventBus
+from jarvis.app.events import Event, EventBus
 
 
 @dataclass(frozen=True, slots=True)

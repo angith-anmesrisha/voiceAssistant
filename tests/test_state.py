@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from hitodama.app.events import EventBus
-from hitodama.app.state import AppState, InvalidTransitionError, StateChanged, StateMachine
+from jarvis.app.events import EventBus
+from jarvis.app.state import AppState, InvalidTransitionError, StateChanged, StateMachine
 
 
 async def test_starts_idle_and_publishes_changes() -> None:
@@ -51,6 +51,6 @@ async def test_invalid_transition_raises() -> None:
 
 @pytest.mark.parametrize("state", list(AppState))
 async def test_every_state_can_return_to_idle(state: AppState) -> None:
-    from hitodama.app.state import ALLOWED_TRANSITIONS
+    from jarvis.app.state import ALLOWED_TRANSITIONS
 
     assert state is AppState.IDLE or AppState.IDLE in ALLOWED_TRANSITIONS[state]

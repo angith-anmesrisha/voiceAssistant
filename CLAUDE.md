@@ -1,78 +1,70 @@
-# CLAUDE.md: Hitodama
+# CLAUDE.md: JARVIS
 
-Voice-first AI companion for Windows 10/11. Full spec: `docs/MASTER_PROMPT.md`
-(written for the placeholder name "Wisp"; the product name is **Hitodama**, package `hitodama`).
+Voice assistant and agentic AI for the Windows 10/11 desktop. Current requirements:
+`docs/JARVIS_SPEC.md`. `docs/MASTER_PROMPT.md` is the older "Wisp/Hitodama" spec; its
+working rules and safety rules still apply where they don't conflict.
 
-## Working rules (from the spec)
-- One milestone at a time. Plan first, build, run ruff/mypy/pytest, give a manual test
-  checklist, then STOP until the owner confirms.
-- Commit after each milestone: `feat(mN): ...`. Never commit secrets.
-- Verify Gemini model names and SDK signatures against ai.google.dev and the installed
-  `google-genai` source before use. Model names live in config only.
-- Every PC action is a `@tool(risk=...)` in `hitodama/tools/`. Modules talk through the
-  event bus. Never log audio, API keys, or dictated text.
+## Working rules
+- Plan first, build, run ruff/mypy/pytest, give a manual test checklist, then wait for the
+  owner to confirm on Windows.
+- Work on a branch and open a PR to `main`. Never commit secrets.
+- Verify model names and API shapes against provider docs before use. Model names live in
+  config only.
+- Every PC action is a tool in `jarvis/tools/builtin.py` with a `Risk`. There is no shell,
+  file, or registry tool, and none may be added. Never log audio, API keys, or dictated text.
+- Never claim a provider/model answered unless it did; the UI shows the real provider/model.
 
 ## Stack
-Python 3.12, PySide6 + qasync, google-genai (Live API), sounddevice, pywin32, loguru,
-pydantic, keyring, SQLite (aiosqlite), APScheduler, PyInstaller + Inno Setup.
+Python 3.12, PySide6 + qasync, httpx (OpenAI-compatible endpoints), sounddevice, pynput,
+pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 
 ## Commands
-- Run: `python -m hitodama` (`--log-level DEBUG`, `--exit-after N`)
+- Run: `python -m jarvis` (`--log-level DEBUG`, `--hidden`, `--exit-after N`)
 - Lint/type/test: `ruff check . && ruff format --check . && mypy && pytest`
 - Headless (Linux/CI): set `QT_QPA_PLATFORM=offscreen`.
+- Renders: `QT_QPA_PLATFORM=offscreen PYTHONPATH=. python scripts/render_ui.py docs/renders`
 
-## Layout (implemented so far)
-- `hitodama/main.py`: entry; single-instance lock, QApplication, qasync loop, tray, waits
-  for `QuitRequested`.
-- `app/paths.py`: data dir (`%LOCALAPPDATA%\Hitodama`; `HITODAMA_DATA_DIR` overrides).
-- `app/config.py`: pydantic `Settings` (models, hotkeys, audio, loadout) in `settings.json`.
-- `app/secrets.py`: Gemini key in the OS credential store via `keyring`.
-- `app/events.py`: `EventBus` (async pub/sub by event class, MRO-aware, isolates handler errors).
-- `app/state.py`: `StateMachine` with `ALLOWED_TRANSITIONS`, publishes `StateChanged`.
-- `app/single_instance.py`: Windows named mutex; `QLockFile` elsewhere.
-- `app/logging_setup.py`: loguru, 5 MB x 5 rotating file, `diagnose=False`.
-- `ui/tray.py`, `ui/icons.py`: tray icon (drawn in code), menu, "Set Gemini API key…"
-  dialog, and tray balloons for `UserNotice` events.
-- `core/hotkeys.py`: `ChordTracker` (pure, tested) + `GlobalHotkeys` (pynput hook) publishing
-  `PushToTalkPressed/Released`.
-- `core/audio_io.py`: `Microphone` (16 kHz, 32 ms blocks, open only while held) and
-  `Speaker` (24 kHz, `PlaybackBuffer`, `on_drained` callback). sounddevice imported lazily.
-- `core/live_session.py`: `LiveSession` (Gemini Live connection, queued outgoing audio,
-  session resumption, context compression, GoAway resume, backoff reconnect) and
-  `classify_error` (invalid key / quota / region / bad config / transient).
-- `core/voice_loop.py`: `VoiceLoop` owns the voice turn state machine, barge-in, reply
-  timeout, idle disconnect, and friendly notices.
-- `core/personality.py`: compact system prompt (identity, personality preset, rules, time).
-- `tools/`, `features/`, `ui/island_panels/`, `storage/`: empty packages for later milestones.
+## Layout
+- `jarvis/main.py`: entry; wires router, store, tools, window, assistant, voice, tray, hotkeys.
+- `app/`: paths (`%LOCALAPPDATA%\JARVIS`, `JARVIS_DATA_DIR` override), config (pydantic
+  `Settings` in `settings.json`), events (`EventBus`), state (`StateMachine`), logging,
+  single instance.
+- `providers/`: `base.py` (types, `ProviderError`, `ErrorKind`, `ProviderState`),
+  `openai_compat.py` (shared chat/transcribe/probe), `backends.py` (Groq, Gemini, Ollama),
+  `network.py` (TCP reachability), `router.py` (priority, capability routing, bounded
+  retries with backoff, fallback, `AllProvidersFailedError`).
+- `storage/db.py`: `HistoryStore` (SQLite conversations + messages, via `asyncio.to_thread`).
+- `tools/`: `registry.py` (`Risk`, `ToolSpec`, arg validation), `desktop.py` (`WindowsDesktop`:
+  approved launches with `shell=False`, pynput keys/typing, lock/sleep, delayed shutdown),
+  `builtin.py` (the tool set).
+- `agent/`: `prompts.py` (Analyze/Assist/Execute prompts), `assistant.py` (one turn: history,
+  screenshot for Analyze, tool loop for Execute, confirmations).
+- `voice/`: `audio_io.py` (mic → WAV recorder), `tts.py` (SAPI on its own thread),
+  `hotkeys.py` (global push-to-talk).
+- `controller.py`: glues UI, voice, and assistant; owns busy/listening.
+- `ui/`: `theme.py`, `main_window.py`, `tray.py`, `icons.py`, `widgets/` (orb HUD, glass
+  panels, chat, side panels, command bar, confirm overlay).
+- `assets/fonts/`: Orbitron, Rajdhani, Inter (OFL).
 
 ## Decisions
-- Non-secret settings in JSON for now; may move to SQLite with the M8 storage work.
-- `--exit-after` exists so tests can smoke-run the real app headless.
-- M1 (verified 2026-10-23 against ai.google.dev and google-genai 2.33): Live model
-  `gemini-3.8-live`, text/vision `gemini-3.8-flash`. Input `audio/pcm;rate=16000`, output 24 kHz.
-- Push-to-talk uses **manual activity detection** (server VAD disabled; we send
-  `activity_start`/`activity_end`). Nothing is sent unless the key is held.
-- The Live connection opens on the first press (audio is queued meanwhile) and closes after
-  `live.idle_disconnect_s` (300 s) idle. The resumption handle is kept, so context carries
-  over for about 2 hours.
-- Barge-in: pressing while it speaks clears playback; audio that arrives while the key is
-  held is dropped as part of the talked-over reply.
-- The audio hot path uses direct `LiveHandler` callbacks, not the event bus; state, notices
-  and captions go through the bus.
-- If setup is refused (1007/1008/4xx) before the first connection, `LiveSession` tries
-  `models.live_fallbacks` in order (default `gemini-3.1-flash-live-preview`). The server's
-  close reason is logged and shown in the error balloon.
-- API key entry is a tray dialog for now; the full onboarding flow is M12.
-- Transcripts are published as `Transcript` events for captions (M4) and never logged.
+- All three providers use their OpenAI-compatible chat-completions endpoints, so history and
+  tool calls move between providers unchanged. Groq STT uses `/audio/transcriptions`; Gemini
+  STT goes through chat with an `input_audio` part; Ollama has no STT.
+- Keys come only from environment variables (`GROQ_API_KEY`, `GEMINI_API_KEY`).
+- Gemini returns HTTP 400 "API key not valid" for a bad key; it is classified as AUTH.
+- Medium risk asks Yes/No; High risk requires typing CONFIRM. Shutdown/restart run with a
+  60 s delay and can be cancelled.
+- Screen, web, and file text is treated as information, never instructions (in every prompt).
+- The orb animates on a QTimer with QPainter only (no blur effects); it slows when calm and
+  stops when hidden, for Iris Xe.
+- Closing the window hides to the tray; Quit is in the tray menu.
 
 ## Known issues
-- Tray icon is a placeholder drawn in code; a real icon comes with M13 packaging.
-- "Settings…" tray item is disabled until the settings window exists.
-- Live API calls cannot be exercised in CI (no key). Tests use fakes in `tests/fakes.py`.
-- The first question after startup or an idle disconnect waits for the connection (about 1 s extra).
-- The Space keystroke of Ctrl+Alt+Space still reaches the focused app (not suppressed).
-- Errors are shown as tray balloons only. Spoken errors and the island come in M4.
+- Groq and Ollama calls aren't exercised from CI; tests use `httpx.MockTransport` and fakes.
+- SAPI TTS, global hotkeys, and the desktop tools are untested on real Windows so far.
+- The Space keystroke of Ctrl+Alt+Space still reaches the focused app.
+- No settings window yet; edit `settings.json` in the data dir.
 
-## Current milestone
-**M1 (live voice loop)**: built, awaiting owner confirmation on Windows. Next: M2, tools and
-function calling. (M0 confirmed 2026-10-23.)
+## Current status
+JARVIS rebuild (replaces the Hitodama Gemini Live loop from PR #1): built, awaiting owner
+testing on Windows.

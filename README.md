@@ -1,54 +1,85 @@
-# Hitodama
+# JARVIS
 
-A voice-first AI companion for Windows 10/11 (64-bit). It lives in a floating island at
-the top of the screen, listens when called, talks back, and does things on your PC.
+A voice assistant and safe desktop agent for Windows 10/11, with a futuristic HUD.
+Talk or type; JARVIS answers using **Groq** (primary), **Gemini** (backup) or **Ollama**
+(offline on your PC), and can carry out narrowly scoped desktop actions with your permission.
 
-Status: **M1, live voice loop.** Hold a hotkey, talk, and hear Gemini answer.
-The full spec is in [`docs/MASTER_PROMPT.md`](docs/MASTER_PROMPT.md).
+![JARVIS idle](docs/renders/01-idle.png)
+
+More renders (listening, thinking, speaking, executing, confirmations, offline) are in
+[`docs/renders`](docs/renders). Regenerate them with
+`QT_QPA_PLATFORM=offscreen python scripts/render_ui.py`.
 
 ## Setup (Windows)
 
-1. Install **Python 3.12 (64-bit)** from python.org. Tick "Add python.exe to PATH".
-2. In this folder, open PowerShell and run:
+1. Install **Python 3.12 (64-bit)** from python.org (tick "Add python.exe to PATH").
+2. In this folder:
 
    ```powershell
    py -3.12 -m venv .venv
    .\.venv\Scripts\Activate.ps1
-   python -m pip install --upgrade pip
    pip install -e ".[dev]"
    ```
 
-   If activation is blocked, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once.
+3. Add API keys as **environment variables** (they are never written to files):
+
+   ```powershell
+   setx GROQ_API_KEY "gsk_..."      # https://console.groq.com/keys  (primary)
+   setx GEMINI_API_KEY "AIza..."    # https://aistudio.google.com/apikey  (backup, screen analysis)
+   ```
+
+   Close and reopen the terminal after `setx`. You can use either key, or both.
+
+4. Optional, for offline use: install [Ollama](https://ollama.com) and run
+   `ollama pull llama3.2`.
 
 ## Run
 
 ```powershell
-python -m hitodama
+python -m jarvis            # opens the window
+python -m jarvis --hidden   # starts in the tray
 ```
 
-A flame icon appears in the system tray (check the `^` overflow area).
+- **Type** in the command bar and press Enter, or **talk**: tap the mic button, or hold
+  **Ctrl+Alt+Space** anywhere in Windows and release to send. Spoken questions get spoken
+  answers (Windows' built-in voice); tap the mic to interrupt.
+- **Modes**
+  - **Analyze** looks at your screen (JARVIS hides itself for the screenshot) and answers
+    about it. Press Enter with an empty box to just analyze. Needs Gemini (or an Ollama
+    vision model set in settings).
+  - **Assist** is chat: answers, writing, planning. It never touches your PC.
+  - **Execute** lets JARVIS use its tools: open approved apps and sites, search the web,
+    press media and common shortcuts, type dictated text into the window you were using,
+    lock, sleep, and delayed shutdown or restart.
+- Each answer is labelled with the provider and model that actually produced it.
+- Closing the window keeps JARVIS in the tray. Quit from the tray icon.
 
-1. Get a free API key at [Google AI Studio](https://aistudio.google.com/apikey).
-2. Right-click the tray icon, choose **Set Gemini API key…**, and paste it.
-3. **Hold `Ctrl+Alt+Space`**, speak, and let go. The reply plays through your speakers.
-   Press the hotkey again while it's talking to interrupt it.
+## Safety
 
-Right-click the icon and choose **Quit Hitodama** to exit. Only one copy can run at a time.
+| Level | Examples | Behaviour |
+|---|---|---|
+| Low | time, system status, approved apps, trusted sites, web search, media keys | runs directly |
+| Medium | typing text, other shortcuts, untrusted sites, lock, sleep | asks first |
+| High | shutdown or restart (60 s delay, cancellable) | you must type CONFIRM |
+| Blocked | shell commands, deleting or editing files, registry or system settings | no such tool exists |
 
-Options: `--log-level DEBUG`, `--exit-after SECONDS` (quits on its own; for smoke tests).
+Only programs in `approved_apps` can be launched, only http(s) URLs can be opened, and nothing
+runs a command line written by the model. Text read from the screen is treated as data, never
+as instructions.
 
-Logs: `%LOCALAPPDATA%\Hitodama\logs\hitodama.log`
-Settings: `%LOCALAPPDATA%\Hitodama\settings.json`
-API key: Windows Credential Manager, entry `Hitodama` / `gemini_api_key` (never in a file).
+## Settings
+
+`%LOCALAPPDATA%\JARVIS\settings.json` (created when you first save settings; defaults apply
+otherwise). You can change provider priority, model names, timeouts and retries, approved
+apps, trusted sites, the hotkey and the voice. Conversation history is stored in
+`%LOCALAPPDATA%\JARVIS\jarvis.sqlite3`; logs are in `%LOCALAPPDATA%\JARVIS\logs` and never
+contain your messages, audio or keys.
 
 ## Develop
 
 ```powershell
-ruff check .
-ruff format --check .
-mypy
-pytest
+ruff check . ; ruff format --check . ; mypy ; pytest
 ```
 
-Tests use a temporary data folder and an in-memory keyring, so they never touch your real
-settings or Credential Manager.
+Fonts: Orbitron, Rajdhani and Inter, bundled under the SIL Open Font License
+(`jarvis/assets/fonts`).
