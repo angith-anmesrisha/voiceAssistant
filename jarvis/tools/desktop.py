@@ -17,9 +17,12 @@ import sys
 import threading
 import time
 import webbrowser
+from pathlib import Path
 from typing import Any, Protocol
 
 from loguru import logger
+
+from jarvis.tools.apps import InstalledApp, start_menu_folders
 
 
 class DesktopUnsupportedError(RuntimeError):
@@ -28,6 +31,7 @@ class DesktopUnsupportedError(RuntimeError):
 
 class Desktop(Protocol):
     def launch(self, target: str) -> None: ...
+    def open_installed(self, app: InstalledApp) -> None: ...
     def open_url(self, url: str) -> None: ...
     def press(self, keys: list[str]) -> None: ...
     def type_text(self, text: str) -> None: ...
@@ -125,6 +129,20 @@ class WindowsDesktop:
             subprocess.Popen([path], shell=False, close_fds=True)
         else:
             os.startfile(target)  # type: ignore[attr-defined]  # App Paths lookup
+
+    def open_installed(self, app: InstalledApp) -> None:
+        """Open a Start menu entry the way the Start menu does (no command line)."""
+        self._require_windows()
+        if app.shortcut is not None:
+            path = Path(app.shortcut).resolve()
+            roots = [root.resolve() for root in start_menu_folders()]
+            if not any(path.is_relative_to(root) for root in roots):
+                raise PermissionError("not a Start menu shortcut")
+            os.startfile(str(path))  # type: ignore[attr-defined]
+        elif app.app_id is not None:
+            os.startfile("shell:AppsFolder\\" + app.app_id)  # type: ignore[attr-defined]
+        else:
+            raise ValueError("nothing to open")
 
     def open_url(self, url: str) -> None:
         if not webbrowser.open(url, new=2):

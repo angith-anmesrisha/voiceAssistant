@@ -96,7 +96,10 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     store = HistoryStore(database_file())
     desktop = WindowsDesktop()
     desktop.start_tracking()
-    registry = build_registry(settings.tools, desktop)
+    from jarvis.tools.apps import AppIndex
+
+    installed = AppIndex()
+    registry = build_registry(settings.tools, desktop, installed)
 
     hotkey_label = "+".join(
         part.strip().title() for part in settings.hotkeys.push_to_talk.split("+")
@@ -213,6 +216,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         wake.start()
         spawn(check_wake())
 
+    spawn(asyncio.to_thread(installed.refresh))  # so "open Valorant" is instant later
     probes = asyncio.create_task(router.run_probes(config.probe_interval_s))
     logger.info("{} {} running", APP_NAME, __version__)
 

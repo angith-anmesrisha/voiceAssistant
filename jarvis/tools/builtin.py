@@ -7,6 +7,7 @@ from typing import Any
 from urllib.parse import quote_plus, urlparse
 
 from jarvis.app.config import ToolSettings
+from jarvis.tools.apps import AppIndex
 from jarvis.tools.desktop import Desktop, DesktopUnsupportedError
 from jarvis.tools.registry import Risk, ToolRegistry, ToolResult, ToolSpec
 
@@ -60,8 +61,11 @@ def _safe(action: str, fn: Any) -> ToolResult:
     return ToolResult(True, action[0].upper() + action[1:] + ".")
 
 
-def build_registry(settings: ToolSettings, desktop: Desktop) -> ToolRegistry:
+def build_registry(
+    settings: ToolSettings, desktop: Desktop, installed: AppIndex | None = None
+) -> ToolRegistry:
     registry = ToolRegistry()
+    installed = installed if installed is not None else AppIndex()
     apps = {name.lower(): target for name, target in settings.approved_apps.items()}
 
     # --- read-only (LOW) ---
@@ -127,13 +131,17 @@ def build_registry(settings: ToolSettings, desktop: Desktop) -> ToolRegistry:
     # --- opening things ---
 
     def open_app(name: str) -> ToolResult:
-        target = apps.get(name.strip().lower())
-        if target is None:
-            return ToolResult(
-                False,
-                f"'{name}' isn't an approved app. Approved: {', '.join(sorted(apps))}.",
-            )
-        return _safe(f"open {name}", lambda: desktop.launch(target))
+        name = name.strip()
+        target = apps.get(name.lower())
+        if target is not None:
+            return _safe(f"open {name}", lambda: desktop.launch(target))
+        # Otherwise anything installed, as listed in the Start menu.
+        app, close = installed.find(name)
+        if app is None:
+            hint = f" Closest installed: {', '.join(close)}." if close else ""
+            return ToolResult(False, f"{name} isn't installed on this PC.{hint}")
+        found = app
+        return _safe(f"open {found.name}", lambda: desktop.open_installed(found))
 
     def open_url(url: str) -> ToolResult:
         parsed = urlparse(url.strip())
@@ -149,9 +157,12 @@ def build_registry(settings: ToolSettings, desktop: Desktop) -> ToolRegistry:
     registry.register(
         ToolSpec(
             "open_app",
-            "Open an approved desktop app by name.",
+            "Open any app or game installed on this PC (anything in the Start menu, e.g. "
+            "Valorant, Discord, Steam, Word, WhatsApp) by its name. Always try this when the "
+            "user asks to open or launch an app; it reports if the app isn't installed. "
+            f"Built-in shortcuts: {', '.join(sorted(apps))}.",
             _schema(
-                {"name": {"type": "string", "enum": sorted(apps), "description": "App name"}},
+                {"name": {"type": "string", "maxLength": 100, "description": "App name"}},
                 ["name"],
             ),
             open_app,

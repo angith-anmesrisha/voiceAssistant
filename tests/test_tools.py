@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from jarvis.app.config import ToolSettings
+from jarvis.tools.apps import AppIndex, InstalledApp
 from jarvis.tools.builtin import build_registry
 from jarvis.tools.registry import ArgumentError, Risk, ToolRegistry, validate_args
 from tests.fakes import FakeDesktop
@@ -15,9 +17,34 @@ def desktop() -> FakeDesktop:
     return FakeDesktop()
 
 
+def start_menu(root: Path) -> Path:
+    """A stand-in Start menu with a few shortcuts, as Windows lays them out."""
+    programs = root / "Programs"
+    for relative in (
+        "Riot Games/VALORANT.lnk",
+        "Riot Games/Uninstall VALORANT.lnk",
+        "Discord Inc/Discord.lnk",
+        "Visual Studio Code/Visual Studio Code.lnk",
+        "Windows PowerShell/Windows PowerShell.lnk",
+        "System Tools/Command Prompt.lnk",
+        "Administrative Tools/Registry Editor.lnk",
+        "Steam/Steam Support Center.url",
+        "Notes.txt",
+    ):
+        path = programs / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"")
+    return programs
+
+
 @pytest.fixture
-def registry(desktop: FakeDesktop) -> ToolRegistry:
-    return build_registry(ToolSettings(), desktop)
+def index(tmp_path: Path) -> AppIndex:
+    return AppIndex([start_menu(tmp_path)], apps_folder=False)
+
+
+@pytest.fixture
+def registry(desktop: FakeDesktop, index: AppIndex) -> ToolRegistry:
+    return build_registry(ToolSettings(), desktop, index)
 
 
 async def run(registry: ToolRegistry, tool: str, /, **args: Any) -> Any:
@@ -57,16 +84,60 @@ def test_risk_levels(registry: ToolRegistry) -> None:
     assert risk(registry, "shutdown_or_restart_pc", action="shutdown") is Risk.HIGH
 
 
-async def test_open_app_only_allows_approved_apps(
+async def test_open_app_prefers_built_in_shortcuts(
     registry: ToolRegistry, desktop: FakeDesktop
 ) -> None:
     result = await run(registry, "open_app", name="Notepad")
     assert result.ok
     assert desktop.calls == [("launch", "notepad.exe")]
-    spec = registry.get("open_app")
-    assert spec is not None
-    with pytest.raises(ArgumentError):
-        validate_args(spec.parameters, {"name": "powershell"})
+
+
+@pytest.mark.parametrize(
+    ("asked", "opened"),
+    [
+        ("Valorant", "VALORANT"),
+        ("valorant", "VALORANT"),
+        ("discord", "Discord"),
+        ("photoshop", None),  # not installed: reported, not guessed
+        ("code", "Visual Studio Code"),
+        ("visual studio code", "Visual Studio Code"),
+    ],
+)
+async def test_open_app_opens_anything_installed(
+    registry: ToolRegistry, desktop: FakeDesktop, asked: str, opened: str | None
+) -> None:
+    result = await run(registry, "open_app", name=asked)
+    if opened is None:
+        assert not result.ok and desktop.calls == []
+        return
+    assert result.ok, result.summary
+    [(call, app)] = desktop.calls
+    assert call == "open_installed" and isinstance(app, InstalledApp)
+    assert app.name == opened and app.shortcut is not None
+
+
+async def test_open_app_reports_missing_apps(registry: ToolRegistry, desktop: FakeDesktop) -> None:
+    result = await run(registry, "open_app", name="Fortnite")
+    assert not result.ok and "isn't installed" in result.summary
+    result = await run(registry, "open_app", name="Valorent")  # a typo still finds it
+    assert result.ok
+    assert len(desktop.calls) == 1
+
+
+@pytest.mark.parametrize(
+    "name", ["powershell", "Windows PowerShell", "command prompt", "cmd", "registry editor"]
+)
+async def test_shells_and_system_editors_can_never_be_opened(
+    registry: ToolRegistry, desktop: FakeDesktop, name: str
+) -> None:
+    result = await run(registry, "open_app", name=name)
+    assert not result.ok
+    assert desktop.calls == []
+
+
+def test_uninstallers_and_links_are_not_apps(index: AppIndex) -> None:
+    names = sorted(app.name for app in index.apps())
+    assert names == ["Discord", "VALORANT", "Visual Studio Code"]
 
 
 async def test_open_url_rejects_non_web_schemes(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -140,7 +141,7 @@ class Assistant:
         ]
         return turns[-self._history_messages :]
 
-    async def _emit(self, kind: EntryKind, text: str, **meta: str | None) -> None:
+    async def _emit(self, kind: EntryKind, text: str, **meta: Any) -> None:
         await self._bus.publish(ChatEntry(kind=kind, text=text, **meta))
 
     async def handle(self, text: str, *, spoken: bool = False) -> Reply:
@@ -155,6 +156,7 @@ class Assistant:
             return await self._switch_provider(conversation, choice)
         await self._state.transition(AppState.THINKING)
         self._did = set()
+        self._failed = False
         try:
             if wants_screen(text):
                 self._did.add(LOOKED)
@@ -184,7 +186,12 @@ class Assistant:
             mode=label,
         )
         await self._emit(
-            EntryKind.ASSISTANT, reply, provider=result.provider, model=result.model, mode=label
+            EntryKind.ASSISTANT,
+            reply,
+            provider=result.provider,
+            model=result.model,
+            mode=label,
+            failed=self._failed or says_it_cannot(reply),
         )
         return Reply(reply, ok=True, provider=result.provider, model=result.model)
 
@@ -258,6 +265,7 @@ class Assistant:
             approved = await self._confirm(ConfirmRequest(spec.name, risk, description))
             if not approved:
                 await self._emit(EntryKind.ACTION, f"Declined: {description}")
+                self._failed = True
                 return ToolResult(False, "The user declined this action.")
         await self._state.transition(AppState.ACTING)
         self._did.add(ACTED)
@@ -267,8 +275,22 @@ class Assistant:
             logger.exception("Tool {} crashed", spec.name)
             result = ToolResult(False, f"The tool failed ({type(exc).__name__}).")
         logger.info("Tool {} -> ok={}", spec.name, result.ok)
+        self._failed = not result.ok  # a later success (e.g. a retry) clears it
         await self._emit(EntryKind.ACTION, ("✓ " if result.ok else "✕ ") + result.summary)
         return result
+
+
+_CANNOT = re.compile(
+    r"^\W*(?:(?:sorry|unfortunately|apologies)\W+)?(?:but\s+)?i(?:\s+am|'m)?\s+"
+    r"(?:can'?t|cannot|couldn'?t|could\s+not|was\s+unable|unable|not\s+able|"
+    r"wasn'?t\s+able|don'?t\s+have\s+(?:the\s+)?(?:ability|access|permission))\b",
+    re.IGNORECASE,
+)
+
+
+def says_it_cannot(reply: str) -> bool:
+    """Whether a reply opens by saying the request couldn't be carried out."""
+    return bool(_CANNOT.match(reply))
 
 
 class _NoScreenError(Exception):

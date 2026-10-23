@@ -11,6 +11,9 @@ class FakeDesktop:
     def launch(self, target: str) -> None:
         self.calls.append(("launch", target))
 
+    def open_installed(self, app: object) -> None:
+        self.calls.append(("open_installed", app))
+
     def open_url(self, url: str) -> None:
         self.calls.append(("open_url", url))
 

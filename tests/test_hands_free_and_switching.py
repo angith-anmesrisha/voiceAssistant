@@ -14,6 +14,7 @@ from jarvis.app.config import load_settings, save_choice
 from jarvis.app.events import ChatEntry, EntryKind, WakeWordHeard
 from jarvis.app.state import AppState
 from jarvis.providers.base import ProviderState, ProviderStatus
+from jarvis.ui import theme
 from jarvis.ui.widgets.stage import Tween
 from jarvis.voice.audio_io import EndOfSpeech
 from jarvis.voice.hotkeys import ChordTracker, HookFilter, parse_chord, token_for_vk
@@ -265,5 +266,72 @@ async def test_capture_screen_returns_jpeg(qapp: QApplication) -> None:
     window = MainWindow()
     jpeg = await window.capture_screen()
     assert jpeg is None or jpeg.startswith(b"\xff\xd8")
+    window.quitting = True
+    window.close()
+
+
+# --- failures are flagged, so the UI turns red ---
+
+
+@pytest.mark.parametrize(
+    ("reply", "cannot"),
+    [
+        ("I can't open Valorant because it isn't an approved app.", True),
+        ("Sorry, I couldn't find Valorant on this PC.", True),
+        ("I'm unable to do that.", True),
+        ("Unfortunately I cannot open that.", True),
+        ("I can open it if you install it first.", False),
+        ("Done. Valorant is opening.", False),
+        ("Opened Discord. I couldn't find your server, though.", False),
+    ],
+)
+def test_says_it_cannot(reply: str, cannot: bool) -> None:
+    from jarvis.agent.assistant import says_it_cannot
+
+    assert says_it_cannot(reply) is cannot
+
+
+async def test_failed_tool_marks_the_reply_failed(tmp_path: Path) -> None:
+    from tests.test_assistant import text_reply, tool_reply
+
+    rig = Rig(
+        tmp_path,
+        ScriptedRouter(
+            tool_reply("open_app", name="Fortnite"),
+            text_reply("Fortnite isn't installed on this PC."),
+        ),
+    )
+    await rig.assistant.handle("open fortnite")
+    actions = [e.text for e in rig.entries if e.kind is EntryKind.ACTION]
+    assert actions == ["✕ Fortnite isn't installed on this PC."]
+    assert rig.entries[-1].kind is EntryKind.ASSISTANT and rig.entries[-1].failed
+
+
+async def test_retry_that_works_is_not_a_failure(tmp_path: Path) -> None:
+    from tests.test_assistant import text_reply, tool_reply
+
+    rig = Rig(
+        tmp_path,
+        ScriptedRouter(
+            tool_reply("open_app", name="Fortnite"),
+            tool_reply("open_app", name="notepad"),
+            text_reply("Fortnite isn't installed, so I opened Notepad instead."),
+        ),
+    )
+    await rig.assistant.handle("open fortnite or notepad")
+    assert not rig.entries[-1].failed
+
+
+async def test_plain_refusal_turns_the_ui_red(qapp: QApplication) -> None:
+    from jarvis.ui.main_window import MainWindow
+
+    window = MainWindow()
+    window.add_entry(ChatEntry(EntryKind.USER, "open valorant"))
+    window.add_entry(
+        ChatEntry(EntryKind.ASSISTANT, "I can't open Valorant.", "Groq", "m", failed=True)
+    )
+    window.settle_animations()
+    assert window.alarm == 1.0 and window.orb._alarm_on
+    assert window.card._accent == theme.DANGER  # the reply card is red too
     window.quitting = True
     window.close()

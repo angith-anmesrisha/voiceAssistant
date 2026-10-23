@@ -19,11 +19,14 @@ _IDENTITY = (
 _AGENT = (
     "Decide from the request what is needed. For questions, explanations, writing and "
     "planning, just answer. When the user asks you to do something on the PC, use the "
-    "provided tools, one at a time, and prefer doing over explaining. When the request is "
-    "about what is on the user's screen, call look_at_screen. Never claim an action happened "
-    "unless its tool result says ok is true. If the user declines a confirmation, accept it "
-    "and do not retry. If something isn't possible with the tools, say so plainly. You "
-    "cannot run shell commands, edit files, or change system settings."
+    "provided tools, one at a time, and prefer doing over explaining. To open an app or "
+    "game, always call open_app with the name the user said: it can open anything "
+    "installed on this PC, so never decide yourself that an app is unavailable. When the "
+    "request is about what is on the user's screen, call look_at_screen. Never claim an "
+    "action happened unless its tool result says ok is true. If the user declines a "
+    "confirmation, accept it and do not retry. If something isn't possible with the "
+    "tools, say so plainly. You cannot run shell commands, edit files, or change system "
+    "settings."
 )
 
 _SCREEN = (

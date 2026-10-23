@@ -36,7 +36,9 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 - `app/keys.py`: API keys from the process env, then (Windows) the user env in
   `HKCU\Environment`; saving from the UI writes there too, like `setx`.
 - `storage/db.py`: `HistoryStore` (SQLite conversations + messages, via `asyncio.to_thread`).
-- `tools/`: `registry.py` (`Risk`, `ToolSpec`, arg validation), `desktop.py` (`WindowsDesktop`:
+- `tools/`: `apps.py` (`AppIndex` of installed apps: Start menu .lnk/.url + shell:AppsFolder,
+  minus uninstallers/help/links and blocked shells/system editors; fuzzy `best_match`),
+  `registry.py` (`Risk`, `ToolSpec`, arg validation), `desktop.py` (`WindowsDesktop`:
   approved launches with `shell=False`, pynput keys/typing, lock/sleep, delayed shutdown),
   `builtin.py` (the tool set).
 - `agent/`: `commands.py` ("use Gemini from now on" → provider switch, no model call),
@@ -95,7 +97,14 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   after a failure). Screen capture hides it too.
 - `router.preferred` (persisted as `providers.preferred` via `save_choice`, which edits
   only that key) puts one provider first; the others still back it up.
-- Failure feedback: an ERROR entry or an ACTION starting with "✕"/"Declined" tints the
+- `open_app` takes any name: `approved_apps` first, then the installed-app index (LOW risk).
+  It opens the shortcut file (must be inside a Start menu folder) or
+  `shell:AppsFolder\<AUMID>` with `os.startfile`; never a command line. Shells and system
+  editors are excluded from the index so the typing tool can't drive them. The prompt
+  tells the model to always call open_app rather than refusing.
+- Failure feedback: an ERROR entry, an ASSISTANT entry with `failed` (a tool failed or was
+  declined with no later success, or the reply opens with "I can't…"; see
+  `says_it_cannot`), or an ACTION starting with "✕"/"Declined" tints the
   window (red wash and edge), the orbs and the reply card red for 6 s or until the next
   request.
 - Animation: one `FrameClock`; layout transitions are critically damped springs

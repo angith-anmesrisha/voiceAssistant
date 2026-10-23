@@ -85,13 +85,17 @@ python -m jarvis --hidden   # starts in the tray
 
 | Level | Examples | Behaviour |
 |---|---|---|
-| Low | time, system status, approved apps, trusted sites, web search, media keys | runs directly |
+| Low | time, system status, opening installed apps and games, trusted sites, web search, media keys | runs directly |
 | Medium | typing text, other shortcuts, untrusted sites, lock, sleep | asks first |
 | High | shutdown or restart (60 s delay, cancellable) | you must type CONFIRM |
 | Blocked | shell commands, deleting or editing files, registry or system settings | no such tool exists |
 
-Only programs in `approved_apps` can be launched, only http(s) URLs can be opened, and nothing
-runs a command line written by the model. Text read from the screen is treated as data, never
+JARVIS can open anything installed on the PC that the Start menu lists (games such as
+Valorant included), plus the built-in shortcuts in `approved_apps`. It opens them the way
+the Start menu does, through the shortcut or the app's Windows ID. Shells and system
+editors (PowerShell, Command Prompt, terminals, WSL, Registry Editor, Services) are never
+opened. Only http(s) URLs can be opened, and nothing runs a command line written by the
+model. Text read from the screen is treated as data, never
 as instructions.
 
 ## Settings

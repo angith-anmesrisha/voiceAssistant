@@ -12,6 +12,7 @@ from jarvis.app.state import AppState, StateChanged, StateMachine
 from jarvis.providers.base import Capability, ChatResult, ToolCall
 from jarvis.providers.router import AllProvidersFailedError, Attempt
 from jarvis.storage.db import HistoryStore
+from jarvis.tools.apps import AppIndex
 from jarvis.tools.builtin import build_registry
 from jarvis.tools.registry import Risk
 from tests.fakes import FakeDesktop
@@ -83,7 +84,7 @@ class Rig:
         self.assistant = Assistant(
             router,  # type: ignore[arg-type]
             self.store,
-            build_registry(ToolSettings(), self.desktop),
+            build_registry(ToolSettings(), self.desktop, AppIndex([], apps_folder=False)),
             self.bus,
             self.state,
             confirm,
@@ -158,7 +159,7 @@ async def test_unknown_tool_and_bad_args_are_reported_to_model(tmp_path: Path) -
         tmp_path,
         ScriptedRouter(
             tool_reply("run_shell", command="del C:\\"),
-            tool_reply("open_app", name="regedit"),
+            tool_reply("press_shortcut", shortcut="alt_f4"),
             text_reply("I can't do that."),
         ),
     )

@@ -112,6 +112,7 @@ class ChatEntry(Event):
     provider: str | None = None
     model: str | None = None
     mode: str | None = None
+    failed: bool = False  # the request couldn't be carried out (the UI turns red)
 
 
 @dataclass(frozen=True, slots=True)

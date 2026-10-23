@@ -325,8 +325,10 @@ class MainWindow(HudBackdrop):
         self._start_animation()
 
     def add_entry(self, entry: ChatEntry) -> None:
-        if entry.kind is EntryKind.ERROR or (
-            entry.kind is EntryKind.ACTION and entry.text.startswith(("✕", "Declined"))
+        if (
+            entry.kind is EntryKind.ERROR
+            or entry.failed
+            or (entry.kind is EntryKind.ACTION and entry.text.startswith(("✕", "Declined")))
         ):
             self.flash_failure()
         elif entry.kind is EntryKind.USER:
@@ -446,7 +448,10 @@ class MainWindow(HudBackdrop):
         if not self.overlay.isVisible():
             return
         if entry.kind is EntryKind.ASSISTANT:
-            self.overlay.say("JARVIS", entry.text)
+            if entry.failed:
+                self.overlay.say("DIDN'T WORK", entry.text, error=True)
+            else:
+                self.overlay.say("JARVIS", entry.text)
         elif entry.kind is EntryKind.ERROR:
             self.overlay.say("DIDN'T WORK", entry.text, error=True)
         elif entry.kind is EntryKind.ACTION and entry.text.startswith(("✕", "Declined")):
