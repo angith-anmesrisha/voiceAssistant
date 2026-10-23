@@ -1,13 +1,18 @@
 """Global press-and-hold hotkeys.
 
-``ChordTracker`` is pure logic (tested); ``GlobalHotkeys`` feeds it from a pynput
-low-level keyboard hook on a background thread and publishes events on the loop.
-Keys are only compared against the configured chords, never stored or logged.
+``ChordTracker`` and ``HookFilter`` are pure logic (tested); ``GlobalHotkeys`` feeds them
+from a pynput low-level keyboard hook on a background thread and publishes events on the
+loop. Keys are only compared against the configured chords, never stored or logged.
+
+On Windows the hook also swallows the chord's main key (the ` of Alt+`), so it doesn't
+reach the focused app, and taps a harmless unassigned key so releasing Alt doesn't open
+that app's menu bar.
 """
 
 from __future__ import annotations
 
 import asyncio
+import sys
 from collections.abc import Callable
 from typing import Any
 
@@ -40,7 +45,7 @@ def normalize_token(token: str) -> str:
 
 
 def parse_chord(spec: str) -> frozenset[str]:
-    """``"Ctrl+Alt+Space"`` -> ``{"ctrl", "alt", "space"}``."""
+    """``"Alt+`"`` -> ``{"alt", "`"}``."""
     keys = frozenset(normalize_token(part) for part in spec.split("+") if part.strip())
     if not keys:
         raise ValueError(f"Empty hotkey: {spec!r}")
@@ -66,6 +71,10 @@ class ChordTracker:
         self._down: set[str] = set()
         self._active = False
 
+    @property
+    def active(self) -> bool:
+        return self._active
+
     def key_down(self, token: str) -> None:
         self._down.add(token)
         if not self._active and self.chord <= self._down:
@@ -77,6 +86,64 @@ class ChordTracker:
         if self._active and token in self.chord:
             self._active = False
             self._on_release()
+
+
+_MODIFIERS = frozenset({"ctrl", "alt", "shift", "win"})
+
+# Windows virtual-key codes for the keys a chord can use.
+_VK_TOKENS = {
+    0x10: "shift",
+    0xA0: "shift",
+    0xA1: "shift",
+    0x11: "ctrl",
+    0xA2: "ctrl",
+    0xA3: "ctrl",
+    0x12: "alt",
+    0xA4: "alt",
+    0xA5: "alt",
+    0x5B: "win",
+    0x5C: "win",
+    0x20: "space",
+    0x0D: "enter",
+    0x1B: "escape",
+    0x09: "tab",
+    0xC0: "`",  # the key left of 1 on US/Indian layouts
+    0xDF: "`",  # the same key on UK layouts
+}
+_VK_TOKENS.update({0x70 + i: f"f{i + 1}" for i in range(12)})
+_VK_TOKENS.update({vk: chr(vk).lower() for vk in range(0x41, 0x5B)})
+_VK_TOKENS.update({vk: chr(vk) for vk in range(0x30, 0x3A)})
+
+_WM_KEYDOWN, _WM_KEYUP, _WM_SYSKEYDOWN, _WM_SYSKEYUP = 0x100, 0x101, 0x104, 0x105
+_LLKHF_INJECTED = 0x10
+_VK_MASK = 0xE8  # unassigned; tapped so a lone Alt release doesn't focus a menu bar
+
+
+def token_for_vk(vk: int) -> str | None:
+    return _VK_TOKENS.get(vk)
+
+
+class HookFilter:
+    """Decides, per raw key event, whether the chord's main key must be swallowed.
+
+    Updates the trackers as it goes. Modifiers always pass through; only the chord's
+    other key (e.g. the backtick) is held back, for as long as the chord is active.
+    """
+
+    def __init__(self, trackers: list[ChordTracker]) -> None:
+        self._trackers = trackers
+
+    def key(self, token: str, down: bool) -> bool:
+        """Returns True if this event should be swallowed."""
+        swallow = False
+        for tracker in self._trackers:
+            if down:
+                tracker.key_down(token)
+                swallow |= tracker.active and token in tracker.chord
+            else:
+                swallow |= tracker.active and token in tracker.chord
+                tracker.key_up(token)
+        return swallow and token not in _MODIFIERS
 
 
 def _token_for(key: Any) -> str | None:
@@ -91,7 +158,7 @@ def _token_for(key: Any) -> str | None:
     char = getattr(key, "char", None)
     if isinstance(char, str) and char.isprintable():
         return char.lower()
-    return None
+    return token_for_vk(vk) if isinstance(vk, int) else None
 
 
 class GlobalHotkeys:
@@ -122,22 +189,54 @@ class GlobalHotkeys:
             logger.error("Global hotkeys unavailable: {}", type(exc).__name__)
             return False
 
-        def on_press(key: Any) -> None:
-            token = _token_for(key)
-            if token:
-                for tracker in self._trackers:
-                    tracker.key_down(token)
+        if sys.platform == "win32":
+            self._listener = self._windows_listener(keyboard)
+        else:
 
-        def on_release(key: Any) -> None:
-            token = _token_for(key)
-            if token:
-                for tracker in self._trackers:
-                    tracker.key_up(token)
+            def on_press(key: Any) -> None:
+                token = _token_for(key)
+                if token:
+                    for tracker in self._trackers:
+                        tracker.key_down(token)
 
-        self._listener = keyboard.Listener(on_press=on_press, on_release=on_release)
+            def on_release(key: Any) -> None:
+                token = _token_for(key)
+                if token:
+                    for tracker in self._trackers:
+                        tracker.key_up(token)
+
+            self._listener = keyboard.Listener(on_press=on_press, on_release=on_release)
         self._listener.daemon = True
         self._listener.start()
         return True
+
+    def _windows_listener(self, keyboard: Any) -> Any:
+        """Handle keys in the raw hook so the chord's main key can be swallowed."""
+        import ctypes
+
+        hook = HookFilter(self._trackers)
+        listener: Any = None
+
+        def tap_mask_key() -> None:
+            user32 = ctypes.windll.user32  # type: ignore[attr-defined]
+            user32.keybd_event(_VK_MASK, 0, 0, 0)
+            user32.keybd_event(_VK_MASK, 0, 2, 0)  # KEYEVENTF_KEYUP
+
+        def event_filter(msg: int, data: Any) -> bool:
+            if data.flags & _LLKHF_INJECTED:
+                return True  # our own mask key, or another program's typing
+            token = token_for_vk(int(data.vkCode))
+            if token is None or msg not in (_WM_KEYDOWN, _WM_KEYUP, _WM_SYSKEYDOWN, _WM_SYSKEYUP):
+                return True
+            down = msg in (_WM_KEYDOWN, _WM_SYSKEYDOWN)
+            if hook.key(token, down):
+                if down:
+                    tap_mask_key()
+                listener.suppress_event()
+            return True
+
+        listener = keyboard.Listener(win32_event_filter=event_filter)
+        return listener
 
     def stop(self) -> None:
         if self._listener is not None:

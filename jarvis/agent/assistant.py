@@ -9,6 +9,7 @@ from typing import Any
 
 from loguru import logger
 
+from jarvis.agent.commands import AUTO, provider_command
 from jarvis.agent.prompts import system_prompt, wants_screen
 from jarvis.app.events import ChatEntry, EntryKind, EventBus
 from jarvis.app.state import AppState, StateMachine
@@ -72,6 +73,7 @@ class Assistant:
         *,
         history_messages: int = 20,
         max_tool_rounds: int = 5,
+        on_prefer: Callable[[str | None], None] | None = None,
     ) -> None:
         self._router = router
         self._store = store
@@ -82,6 +84,7 @@ class Assistant:
         self._capture_screen = capture_screen
         self._history_messages = history_messages
         self._max_tool_rounds = max_tool_rounds
+        self._on_prefer = on_prefer
         self._conversation_id: int | None = None
         self._did: set[str] = set()
 
@@ -92,6 +95,40 @@ class Assistant:
 
     async def new_conversation(self) -> None:
         self._conversation_id = await self._store.new_conversation()
+
+    def prefer(self, name: str | None) -> str:
+        """Put a provider first (None = automatic) and say what that means."""
+        self._router.set_preferred(name)
+        if self._on_prefer is not None:
+            self._on_prefer(name)
+        order = [p.display_name for p in self._router.ordered]
+        if name is None:
+            return "Okay, back to automatic: " + ", then ".join(order) + "."
+        provider = self._router.provider(name)
+        assert provider is not None
+        message = f"Okay, I'll use {provider.display_name} from now on."
+        status = self._router.statuses.get(name)
+        if status is not None and not status.usable:
+            why = f" ({status.detail})" if status.detail else ""
+            message += (
+                f" It isn't available right now{why}, so I'll use {order[1]} until it is."
+                if len(order) > 1
+                else f" It isn't available right now{why}."
+            )
+        return message
+
+    async def _switch_provider(self, conversation: int, choice: str) -> Reply:
+        name = None if choice == AUTO else choice
+        if name is not None and self._router.provider(name) is None:
+            message = f"{name.title()} isn't set up, so I can't switch to it."
+            await self._emit(EntryKind.ERROR, message)
+            return Reply(message, ok=False)
+        reply = self.prefer(name)
+        await self._store.add_message(
+            conversation, {"role": "assistant", "content": reply}, mode="settings"
+        )
+        await self._emit(EntryKind.ASSISTANT, reply, mode="settings")
+        return Reply(reply, ok=True)
 
     async def _context(self) -> list[Message]:
         """Recent user/assistant text turns (tool traffic is not replayed)."""
@@ -113,6 +150,9 @@ class Assistant:
         shown = text or "What's on my screen?"
         await self._emit(EntryKind.USER, shown)
         await self._store.add_message(conversation, {"role": "user", "content": shown})
+        choice = provider_command(text)
+        if choice is not None:
+            return await self._switch_provider(conversation, choice)
         await self._state.transition(AppState.THINKING)
         self._did = set()
         try:

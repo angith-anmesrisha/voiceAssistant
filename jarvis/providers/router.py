@@ -74,10 +74,31 @@ class ProviderRouter:
         }
         self.network = NetworkStatus(online=False)
         self.last_used: tuple[str, str] | None = None  # (provider, model)
+        # Chosen by the user ("use Gemini from now on"): tried first, others still back it up.
+        self.preferred: str | None = None
 
     @property
     def ordered(self) -> list[Provider]:
-        return [self._providers[name] for name in self._priority]
+        names = self._priority
+        if self.preferred in names:
+            names = [self.preferred, *(n for n in names if n != self.preferred)]
+        return [self._providers[name] for name in names]
+
+    @property
+    def names(self) -> list[str]:
+        return list(self._priority)
+
+    def provider(self, name: str) -> Provider | None:
+        return self._providers.get(name) if name in self._priority else None
+
+    def set_preferred(self, name: str | None) -> None:
+        """Put one provider first (None = the configured priority)."""
+        if name is not None and name not in self._priority:
+            raise KeyError(name)
+        if name != self.preferred:
+            self.preferred = name
+            if self._on_change is not None:
+                self._on_change()
 
     def any_usable(self) -> bool:
         return any(self.statuses[p.name].usable for p in self.ordered)

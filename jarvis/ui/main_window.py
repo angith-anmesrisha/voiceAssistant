@@ -14,7 +14,7 @@ from collections.abc import Callable
 
 from PySide6.QtCore import QBuffer, QIODevice, QRect, Qt, QTimer
 from PySide6.QtGui import QCloseEvent, QColor, QGuiApplication, QImage, QMouseEvent, QPainter
-from PySide6.QtWidgets import QHBoxLayout, QWidget
+from PySide6.QtWidgets import QGraphicsOpacityEffect, QHBoxLayout, QWidget
 
 from jarvis.agent.assistant import ConfirmRequest
 from jarvis.app.events import (
@@ -29,6 +29,7 @@ from jarvis.app.state import AppState, StateChanged
 from jarvis.providers.base import Capability, ProviderState
 from jarvis.providers.router import ProviderRouter
 from jarvis.ui import theme
+from jarvis.ui.frame_clock import FrameClock
 from jarvis.ui.theme import AMBER, CYAN, DANGER, ELECTRIC, ICE, STEEL
 from jarvis.ui.widgets.chat import ChatView
 from jarvis.ui.widgets.glass import (
@@ -43,6 +44,7 @@ from jarvis.ui.widgets.glass import (
 )
 from jarvis.ui.widgets.keys import KeyField, KeysOverlay
 from jarvis.ui.widgets.orb import OrbHud, VisualState
+from jarvis.ui.widgets.overlay import OrbOverlay
 from jarvis.ui.widgets.panels import (
     STATE_COLORS,
     CommandBar,
@@ -55,6 +57,7 @@ from jarvis.ui.widgets.stage import (
     CenterCaption,
     CornerText,
     HudBackdrop,
+    ProviderSwitch,
     ReplyCard,
     StatusStrip,
     TopBar,
@@ -62,8 +65,11 @@ from jarvis.ui.widgets.stage import (
 )
 
 _CAPTIONS: dict[VisualState, tuple[str, str]] = {
-    VisualState.IDLE: ("STANDING BY", "Hold {hotkey} or tap the mic, then just ask"),
-    VisualState.LISTENING: ("LISTENING", "Release the hotkey or tap the mic again to send"),
+    VisualState.IDLE: ("STANDING BY", "Say “Jarvis”, hold {hotkey} or tap the mic, then just ask"),
+    VisualState.LISTENING: (
+        "LISTENING",
+        "Go ahead: it sends when you pause, or when you let go of the hotkey",
+    ),
     VisualState.THINKING: ("THINKING", "Working on it…"),
     VisualState.SPEAKING: ("SPEAKING", "Tap the mic to interrupt"),
     VisualState.ACTING: ("EXECUTING", "Running an approved action"),
@@ -127,7 +133,7 @@ class _DetailsOverlay(QWidget):
 
 
 class MainWindow(HudBackdrop):
-    def __init__(self, hotkey_label: str = "Ctrl+Alt+Space") -> None:
+    def __init__(self, hotkey_label: str = "Alt+`") -> None:
         super().__init__()
         self.setWindowTitle("JARVIS")
         self.setMinimumSize(1100, 700)
@@ -143,15 +149,22 @@ class MainWindow(HudBackdrop):
         self.quitting = False
 
         # Eased layout values, advanced by one animation timer.
-        self._dock = Tween(0.0, 6.0)  # 0 = orb centred, 1 = docked bottom-right
-        self._drawer = Tween(0.0, 8.0)  # history drawer
-        self._glow = Tween(0.0, 5.0)  # screen-edge light
-        self._anim = QTimer(self)
-        self._anim.setTimerType(Qt.TimerType.PreciseTimer)
-        self._anim.timeout.connect(self._animate)
+        # Springs (stiffness ~ 4.7 / seconds to settle), advanced on the display-synced
+        # frame clock only while something is moving.
+        self._dock = Tween(0.0, 8.5)  # 0 = orb centred, 1 = docked bottom-right
+        self._drawer = Tween(0.0, 12.0)  # history drawer
+        self._glow = Tween(0.0, 7.0)  # screen-edge light
+        self._alarm = Tween(0.0, 9.0)  # red tint after a failed command
+        self._alarm_timer = QTimer(self)
+        self._alarm_timer.setSingleShot(True)
+        self._alarm_timer.timeout.connect(self.clear_failure)
+        self._anim: int | None = None
         self._last_anim = time.perf_counter()
 
         self.header = TopBar(self)
+        self.provider_switch = ProviderSwitch(self)
+        self._on_prefer: Callable[[str | None], None] = lambda _name: None
+        self.provider_switch.chosen.connect(lambda name: self._on_prefer(name))
         self.history_button = HudButton(icon_assist, "Conversation history", 34)
         self.history_button.setParent(self)
         self.keys_button = HudButton(icon_key, "API keys: add or change Groq and Gemini keys", 34)
@@ -190,6 +203,13 @@ class MainWindow(HudBackdrop):
         self.history_button.clicked.connect(self.toggle_history)
         self.keys_button.clicked.connect(self.open_keys)
 
+        # The corner orb shown over other apps while JARVIS works in the background.
+        self.overlay = OrbOverlay(lambda: self._level())
+        self.overlay.clicked.connect(self._open_from_overlay)
+        self._overlay_hide = QTimer(self)
+        self._overlay_hide.setSingleShot(True)
+        self._overlay_hide.timeout.connect(self.overlay.hide)
+
         self.confirm_overlay = ConfirmOverlay(self)
         self.keys_overlay = KeysOverlay(self, on_save=lambda _values: None)
 
@@ -212,8 +232,11 @@ class MainWindow(HudBackdrop):
         on_new_chat: Callable[[], None],
         key_fields: Callable[[], list[KeyField]] = list,
         on_save_keys: Callable[[dict[str, str]], None] | None = None,
+        on_prefer: Callable[[str | None], None] | None = None,
     ) -> None:
         self._router = router
+        if on_prefer is not None:
+            self._on_prefer = on_prefer
         self._key_fields = key_fields
         if on_save_keys is not None:
             self.keys_overlay._on_save = on_save_keys
@@ -275,7 +298,31 @@ class MainWindow(HudBackdrop):
         self._dock.target = 0.0
         self._start_animation()
 
+    def flash_failure(self) -> None:
+        """Tint the whole UI red for a while: the last command didn't work."""
+        self._alarm.target = 1.0
+        self.orb.set_alarm(True)
+        self.overlay.orb.set_alarm(True)
+        self._alarm_timer.start(6000)
+        self._start_animation()
+
+    def clear_failure(self) -> None:
+        self._alarm_timer.stop()
+        if self._alarm.target == 0.0:
+            return
+        self._alarm.target = 0.0
+        self.orb.set_alarm(False)
+        self.overlay.orb.set_alarm(False)
+        self._start_animation()
+
     def add_entry(self, entry: ChatEntry) -> None:
+        if entry.kind is EntryKind.ERROR or (
+            entry.kind is EntryKind.ACTION and entry.text.startswith(("✕", "Declined"))
+        ):
+            self.flash_failure()
+        elif entry.kind is EntryKind.USER:
+            self.clear_failure()
+        self._overlay_entry(entry)
         if entry.kind is EntryKind.ERROR:
             if entry.text == self._last_error:
                 self.show_notice("Same problem again; see the conversation.", NoticeLevel.WARNING)
@@ -294,7 +341,8 @@ class MainWindow(HudBackdrop):
                 meta += f" · {entry.provider.upper()} · {entry.model}"
             if entry.mode:
                 meta += f" · {entry.mode.upper()}"
-            self._open_card(meta, entry.text, error=False)
+            # Red if something in this request just failed.
+            self._open_card(meta, entry.text, error=self._alarm.target > 0)
         elif entry.kind is EntryKind.ACTION:
             self._actions.append(entry.text)
         elif entry.kind is EntryKind.ERROR:
@@ -356,7 +404,48 @@ class MainWindow(HudBackdrop):
         else:
             self._pulse.stop()
         self.mic.set_active(listening, 0.4)
+        if listening:
+            self.clear_failure()
+        self._update_overlay(visual, title, hint)
         self._start_animation()
+
+    # --- corner overlay ---
+
+    def _in_front(self) -> bool:
+        return self.isVisible() and not self.isMinimized() and self.isActiveWindow()
+
+    def _update_overlay(self, visual: VisualState, title: str, hint: str) -> None:
+        overlay = self.overlay
+        overlay.orb.set_state(visual)
+        if visual in (VisualState.IDLE, VisualState.OFFLINE):
+            if overlay.isVisible():
+                self._overlay_hide.start(7000 if self._alarm.target > 0 else 4500)
+            return
+        self._overlay_hide.stop()
+        if self._in_front():
+            overlay.hide()
+            return
+        if visual is VisualState.LISTENING:
+            overlay.say(title, "Go ahead, I'm listening.")
+        elif visual is VisualState.THINKING or visual is VisualState.ACTING:
+            overlay.say(title, self._asked)
+        if not overlay.isVisible():
+            overlay.place()
+            overlay.show()
+
+    def _overlay_entry(self, entry: ChatEntry) -> None:
+        if not self.overlay.isVisible():
+            return
+        if entry.kind is EntryKind.ASSISTANT:
+            self.overlay.say("JARVIS", entry.text)
+        elif entry.kind is EntryKind.ERROR:
+            self.overlay.say("DIDN'T WORK", entry.text, error=True)
+        elif entry.kind is EntryKind.ACTION and entry.text.startswith(("✕", "Declined")):
+            self.overlay.say("DIDN'T WORK", entry.text.lstrip("✕ "), error=True)
+
+    def _open_from_overlay(self) -> None:
+        self.overlay.hide()
+        self.show_and_raise()
 
     def _update_mic_button(self) -> None:
         self.mic.set_active(True, min(1.0, 0.3 + self._level() * 1.4))
@@ -381,6 +470,13 @@ class MainWindow(HudBackdrop):
             row.set_status(status, model, active)
         if last is not None:
             self.providers.active.setText(f"Last answer from {last[0]} · {last[1]}")
+        self.provider_switch.set_items(
+            [
+                (p.name, p.display_name.upper(), STATE_COLORS[router.statuses[p.name].state])
+                for p in sorted(router.ordered, key=lambda p: router.names.index(p.name))
+            ],
+            router.preferred,
+        )
         net = router.network
         self.network.set_network(net.online, net.latency_ms)
         strip.append(("ONLINE" if net.online else "OFFLINE", CYAN if net.online else DANGER))
@@ -398,6 +494,7 @@ class MainWindow(HudBackdrop):
         else:
             self.header.set_status("NO AI AVAILABLE", DANGER)
             self.corner_left.set_text("NO AI AVAILABLE")
+        self._layout()
 
     def refresh_system_stats(self) -> None:
         try:
@@ -426,28 +523,30 @@ class MainWindow(HudBackdrop):
     # --- animation and layout ---
 
     def _start_animation(self) -> None:
-        if not self._anim.isActive():
+        if self._anim is None:
             self._last_anim = time.perf_counter()
-            self._anim.start(16)
+            self._anim = FrameClock.shared().subscribe(self._animate)
 
-    def _animate(self) -> None:
-        now = time.perf_counter()
+    def _animate(self, now: float) -> None:
         dt = min(0.1, now - self._last_anim)
         self._last_anim = now
-        glow_before = self.glow
-        moving = [t.step(dt) for t in (self._dock, self._drawer, self._glow)]
+        before = (self.glow, self.alarm)
+        moving = [t.step(dt) for t in (self._dock, self._drawer, self._glow, self._alarm)]
         self.glow = self._glow.value
+        self.alarm = max(0.0, min(1.0, self._alarm.value))
         self._layout()
-        if abs(self.glow - glow_before) > 0.002:
-            self.update()  # the edge light lives on the backdrop
-        if not any(moving):
-            self._anim.stop()
+        if abs(self.glow - before[0]) > 0.002 or abs(self.alarm - before[1]) > 0.002:
+            self.update()  # the edge light and red tint live on the backdrop
+        if not any(moving) and self._anim is not None:
+            FrameClock.shared().unsubscribe(self._anim)
+            self._anim = None
 
     def settle_animations(self) -> None:
         """Jump every transition to its end (used for renders and tests)."""
-        for tween in (self._dock, self._drawer, self._glow):
+        for tween in (self._dock, self._drawer, self._glow, self._alarm):
             tween.settle()
         self.glow = self._glow.value
+        self.alarm = self._alarm.value
         self._layout()
         self.update()
 
@@ -456,6 +555,8 @@ class MainWindow(HudBackdrop):
         self.header.setGeometry(0, 0, w, 64)
         self.keys_button.move(w - 58, 18)
         self.history_button.move(w - 100, 18)
+        pill = self.header.status_rect()
+        self.provider_switch.move(int(pill.left()) - self.provider_switch.width() - 12, 22)
 
         bar_w = min(720, int(w * 0.5))
         bar_h = self.command.sizeHint().height()
@@ -477,7 +578,11 @@ class MainWindow(HudBackdrop):
         cy = cy0 + (dock_cy - cy0) * d
         self.orb.setGeometry(QRect(int(cx - s / 2), int(cy - s / 2), int(s), int(s)))
         self.caption.setGeometry(int(cx0 - 300), int(cy0 + size / 2 - 6), 600, 96)
-        self.caption.setVisible(d < 0.3)
+        fade = 1.0 - _smooth(d / 0.35)
+        if abs(fade - self.caption.opacity) > 0.001:
+            self.caption.opacity = fade
+            self.caption.update()
+        self.caption.setVisible(fade > 0.0)
 
         # Reply card rises into place as the orb leaves the centre.
         card_w = min(860, w - 2 * (_DOCK_SIZE + 60))
@@ -486,7 +591,7 @@ class MainWindow(HudBackdrop):
         offset = int((1 - d) * 40)
         card_y = 92 + (room - card_h) // 2
         self.card.setGeometry((w - card_w) // 2, card_y + offset, card_w, card_h)
-        self.card.setVisible(d > 0.4)
+        self._fade(self.card, _smooth((d - 0.3) / 0.7))
 
         # History drawer slides in from the right.
         dw = 400
@@ -497,6 +602,19 @@ class MainWindow(HudBackdrop):
         for overlay in (self.details, self.confirm_overlay, self.keys_overlay):
             if overlay.isVisible():
                 overlay.setGeometry(self.rect())
+
+    @staticmethod
+    def _fade(widget: QWidget, opacity: float) -> None:
+        """Fade a widget in or out; the opacity effect is only attached mid-fade."""
+        widget.setVisible(opacity > 0.0)
+        if 0.0 < opacity < 1.0:
+            effect = widget.graphicsEffect()
+            if not isinstance(effect, QGraphicsOpacityEffect):
+                effect = QGraphicsOpacityEffect(widget)
+                widget.setGraphicsEffect(effect)
+            effect.setOpacity(opacity)
+        elif widget.graphicsEffect() is not None:
+            widget.setGraphicsEffect(None)  # type: ignore[arg-type]
 
     # --- confirmations and screen capture ---
 
@@ -516,15 +634,18 @@ class MainWindow(HudBackdrop):
         screen = self.screen() or QGuiApplication.primaryScreen()
         if screen is None:
             return None
-        was_visible = self.isVisible() and not self.isMinimized()
-        if was_visible:
-            self.setWindowOpacity(0.0)
+        hidden = [
+            w for w in (self, self.overlay) if w.isVisible() and not w.isMinimized()
+        ]  # keep JARVIS itself out of the picture
+        for widget in hidden:
+            widget.setWindowOpacity(0.0)
+        if hidden:
             await asyncio.sleep(0.25)
         try:
             image: QImage = screen.grabWindow(0).toImage()
         finally:
-            if was_visible:
-                self.setWindowOpacity(1.0)
+            for widget in hidden:
+                widget.setWindowOpacity(1.0)
         if image.isNull():
             return None
         if image.width() > 1600:
@@ -545,6 +666,7 @@ class MainWindow(HudBackdrop):
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         if self.quitting:
+            self.overlay.close()
             event.accept()
             return
         event.ignore()

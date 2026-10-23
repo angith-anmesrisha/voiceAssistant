@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from datetime import datetime
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
@@ -29,7 +30,7 @@ from PySide6.QtWidgets import (
 )
 
 from jarvis.ui import theme
-from jarvis.ui.theme import CYAN, ICE, STEEL, TEXT_DIM, TEXT_MUTED, rgba
+from jarvis.ui.theme import CYAN, DANGER, ICE, STEEL, TEXT_DIM, TEXT_MUTED, rgba
 from jarvis.ui.widgets.orb import paint_reactor_logo
 
 GRID = 30
@@ -44,6 +45,7 @@ class HudBackdrop(QWidget):
         self._cache: QPixmap | None = None
         self.glow = 0.0  # 0..1, edge light when JARVIS is active
         self.glow_color = CYAN
+        self.alarm = 0.0  # 0..1, red tint after a command failed
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
         self._cache = None
@@ -116,11 +118,18 @@ class HudBackdrop(QWidget):
         dpr = self._cache.devicePixelRatio()
         source = QRectF(area.x() * dpr, area.y() * dpr, area.width() * dpr, area.height() * dpr)
         p.drawPixmap(area, self._cache, source)
-        if self.glow > 0.01:
-            p.setRenderHint(QPainter.RenderHint.Antialiasing)
-            r = QRectF(self.rect())
+        if self.alarm > 0.01:
+            p.fillRect(area, QColor(160, 22, 40, int(62 * self.alarm)))
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect())
+        for color, amount in (
+            (self.glow_color, self.glow * (1 - self.alarm)),
+            (DANGER, self.alarm),
+        ):
+            if amount <= 0.01:
+                continue
             for inset, width, alpha in ((2.0, 10.0, 22), (2.0, 4.0, 70), (1.5, 1.6, 220)):
-                p.setPen(QPen(rgba(self.glow_color, int(alpha * self.glow)), width))
+                p.setPen(QPen(rgba(color, int(alpha * amount)), width))
                 p.drawRoundedRect(r.adjusted(inset, inset, -inset, -inset), 6, 6)
         p.end()
 
@@ -172,6 +181,74 @@ class TopBar(QWidget):
         p.end()
 
 
+class ProviderSwitch(QWidget):
+    """AUTO · GROQ · GEMINI · OLLAMA: pick which AI answers first."""
+
+    chosen = Signal(object)  # provider name, or None for automatic
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFixedHeight(26)
+        self.setToolTip("Choose the AI. Auto uses the first one that works.")
+        self._items: list[tuple[str | None, str, QColor]] = [(None, "AUTO", CYAN)]
+        self._current: str | None = None
+        self._fit()
+
+    def set_items(self, items: list[tuple[str, str, QColor]], current: str | None) -> None:
+        """``items``: (name, label, status colour) per provider."""
+        self._items = [(None, "AUTO", CYAN), *items]
+        self._current = current
+        self._fit()
+        self.update()
+
+    def _widths(self) -> list[float]:
+        fm = QFontMetricsF(theme.label_font(8.6))
+        return [fm.horizontalAdvance(label) + 24 for _, label, _ in self._items]
+
+    def _fit(self) -> None:
+        self.setFixedWidth(int(sum(self._widths())) + 4)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        x = 2.0
+        for (name, _, _), width in zip(self._items, self._widths(), strict=True):
+            if x <= event.position().x() < x + width:
+                if name != self._current:
+                    self.chosen.emit(name)
+                return
+            x += width
+
+    def paintEvent(self, _event: QPaintEvent) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setPen(QPen(rgba(CYAN, 70), 1))
+        p.setBrush(QColor(12, 17, 23, 200))
+        p.drawRoundedRect(r, 13, 13)
+        p.setFont(theme.label_font(8.6))
+        x = 2.0
+        for (name, label, color), width in zip(self._items, self._widths(), strict=True):
+            cell = QRectF(x, 2, width, r.height() - 3)
+            selected = name == self._current
+            if selected:
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(rgba(CYAN, 46))
+                p.drawRoundedRect(cell, 11, 11)
+            if name is not None:
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(color)
+                p.drawEllipse(QPointF(cell.left() + 9, cell.center().y()), 2.4, 2.4)
+            p.setPen(ICE if selected else TEXT_DIM)
+            text_rect = cell.adjusted(14 if name is not None else 0, 0, 0, 0)
+            align = Qt.AlignmentFlag.AlignCenter
+            p.drawText(text_rect.adjusted(0, 0, -4 if name is not None else 0, 0), align, label)
+            x += width
+        p.end()
+
+
 class CenterCaption(QWidget):
     """Under the orb: a large clock when idle, otherwise the state and a hint."""
 
@@ -183,6 +260,7 @@ class CenterCaption(QWidget):
         self._color = CYAN
         self._clock_mode = True
         self._fixed_now: datetime | None = None
+        self.opacity = 1.0
         self._clock = QTimer(self)
         self._clock.timeout.connect(self.update)
         self._clock.start(10_000)
@@ -206,6 +284,7 @@ class CenterCaption(QWidget):
 
     def paintEvent(self, _event: QPaintEvent) -> None:  # noqa: N802
         p = QPainter(self)
+        p.setOpacity(self.opacity)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         w = self.width()
         if self._clock_mode:
@@ -400,30 +479,42 @@ class CornerText(QWidget):
 
 
 class Tween:
-    """Eases a value toward a target on a shared timer (see MainWindow)."""
+    """A critically damped spring toward a target (see MainWindow).
+
+    Unlike a plain exponential ease it starts from rest, so movements accelerate in and
+    settle out with no jolt and no overshoot. ``rate`` is the spring's stiffness: about
+    4.7 / rate seconds to settle.
+    """
 
     def __init__(self, value: float = 0.0, rate: float = 7.0) -> None:
         self.value = value
         self.target = value
         self.rate = rate
+        self.velocity = 0.0
 
     def step(self, dt: float) -> bool:
-        """Advance; returns True while still moving."""
-        gap = self.target - self.value
-        if abs(gap) < 0.002:
-            self.value = self.target
+        """Advance by ``dt`` seconds; returns True while still moving."""
+        gap = self.value - self.target
+        if abs(gap) < 0.0005 and abs(self.velocity) < 0.005:
+            self.value, self.velocity = self.target, 0.0
             return False
-        self.value += gap * min(1.0, dt * self.rate)
+        # Exact solution of x'' = -w^2 x - 2w x', so any dt is stable.
+        w = self.rate
+        decay = math.exp(-w * dt)
+        drift = self.velocity + w * gap
+        self.value = self.target + (gap + drift * dt) * decay
+        self.velocity = (self.velocity - w * drift * dt) * decay
         return True
 
     def settle(self) -> None:
-        self.value = self.target
+        self.value, self.velocity = self.target, 0.0
 
 
 __all__ = [
     "CenterCaption",
     "CornerText",
     "HudBackdrop",
+    "ProviderSwitch",
     "ReplyCard",
     "StatusStrip",
     "TopBar",

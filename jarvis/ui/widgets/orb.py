@@ -4,9 +4,11 @@ At rest it is a slowly turning globe of light particles. When JARVIS is listenin
 thinking, speaking or acting it morphs into a glowing ring with orbiting arcs. Every
 change is eased, and motion is time based, so it stays smooth at any frame rate.
 
-Only QPainter primitives are used (no blur effects or shaders). The static HUD marks are
-cached in a pixmap, the timer runs only while the widget is visible, and the frame rate
-drops automatically when painting is slow, to stay light on integrated GPUs.
+Only QPainter primitives are used (no blur effects or shaders). Everything that doesn't
+move on its own (glow, ring, HUD marks, particle sprites, the name) is drawn once into
+cached pixmaps at a few fixed sizes and then just blitted, scaled and faded, so a frame
+costs a few milliseconds even while the orb glides between sizes. Frames come from the
+shared display-synced clock and stop while the widget is hidden.
 """
 
 from __future__ import annotations
@@ -16,10 +18,11 @@ import time
 from collections.abc import Callable
 from enum import StrEnum
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt
 from PySide6.QtGui import (
     QColor,
     QFont,
+    QFontMetricsF,
     QHideEvent,
     QPainter,
     QPaintEvent,
@@ -31,6 +34,7 @@ from PySide6.QtGui import (
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from jarvis.ui import theme
+from jarvis.ui.frame_clock import FrameClock
 from jarvis.ui.theme import CYAN, ELECTRIC, ICE, STEEL, rgba
 
 
@@ -75,8 +79,35 @@ def _sphere_points(n: int) -> list[tuple[float, float, float]]:
 _SPHERE = _sphere_points(_PARTICLES)
 
 
+_ALARM = (theme.DANGER, QColor(150, 40, 54), QColor(255, 200, 206))
+
+
+def _mix(a: QColor, b: QColor, t: float) -> QColor:
+    if t <= 0.0:
+        return a
+    if t >= 1.0:
+        return b
+    return QColor(
+        round(a.red() + (b.red() - a.red()) * t),
+        round(a.green() + (b.green() - a.green()) * t),
+        round(a.blue() + (b.blue() - a.blue()) * t),
+    )
+
+
 def _ease(current: float, target: float, dt: float, rate: float) -> float:
-    return current + (target - current) * min(1.0, dt * rate)
+    return current + (target - current) * (1.0 - math.exp(-dt * rate))
+
+
+# Cached layers are drawn at the smallest of these sizes that is at least the widget's
+# size, then scaled down a little, so gliding between sizes reuses a handful of pixmaps.
+_BUCKETS = tuple(round(96 * 1.25**k) for k in range(12))
+
+
+def _bucket(size: float) -> int:
+    for bucket in _BUCKETS:
+        if bucket >= size:
+            return bucket
+    return _BUCKETS[-1]
 
 
 class OrbHud(QWidget):
@@ -95,13 +126,15 @@ class OrbHud(QWidget):
         self._phase = 0.0  # integrated rotation time
         self._energy = self._target_energy()
         self._paint_ms = 0.0
-        self._decor: QPixmap | None = None
-        self._decor_key: tuple[int, int, int] | None = None
-        self._timer = QTimer(self)
-        self._timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self._timer.timeout.connect(self._tick)
+        self._layers: dict[tuple[object, ...], QPixmap] = {}
+        self._last_size = 0
+        self._alarm_on = False
+        self._alarm = 0.0  # 0 = normal blue, 1 = red (a request failed)
+        self._sprite_sets: dict[tuple[int, ...], list[QPixmap]] = {}
+        self._clock_token: int | None = None
+        self._fps = 0
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        self.setMinimumSize(140, 140)
+        self.setMinimumSize(96, 96)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
 
     def sizeHint(self) -> QSize:  # noqa: N802
@@ -116,13 +149,20 @@ class OrbHud(QWidget):
     def set_state(self, state: VisualState) -> None:
         if state != self._state:
             self._state = state
-            self._restart_timer()
+            self._schedule()
             self.update()
+
+    def set_alarm(self, on: bool) -> None:
+        """Turn red (a command failed) or back to blue; the colour change is eased."""
+        self._alarm_on = on
+        if self._fixed:
+            self._alarm = 1.0 if on else 0.0
+        self.update()
 
     def freeze(self, t: float, level: float = 0.0) -> None:
         """Pin the animation to a settled moment (used for renders and tests)."""
         self._fixed = True
-        self._timer.stop()
+        self._stop_clock()
         self._t = t
         self._level = level
         self._morph = self._target_morph()
@@ -131,21 +171,33 @@ class OrbHud(QWidget):
         self._energy = self._target_energy()
         self.update()
 
-    def _restart_timer(self) -> None:
+    def _schedule(self) -> None:
+        """Subscribe to the frame clock at the rate this state needs."""
         if self._fixed or not self.isVisible():
+            self._stop_clock()
             return
         calm = self._state in (VisualState.IDLE, VisualState.OFFLINE) and self._morph < 0.01
         fps = _CALM_FPS if calm or self._paint_ms > _SLOW_PAINT_MS else _ACTIVE_FPS
-        self._last_tick = time.perf_counter()
-        self._timer.start(round(1000 / fps))
+        clock = FrameClock.shared()
+        if self._clock_token is None:
+            self._last_tick = time.perf_counter()
+            self._clock_token = clock.subscribe(self._tick, fps)
+        elif fps != self._fps:
+            clock.set_rate(self._clock_token, fps)
+        self._fps = fps
+
+    def _stop_clock(self) -> None:
+        if self._clock_token is not None:
+            FrameClock.shared().unsubscribe(self._clock_token)
+            self._clock_token = None
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
         super().showEvent(event)
-        self._restart_timer()
+        self._schedule()
 
     def hideEvent(self, event: QHideEvent) -> None:  # noqa: N802
         super().hideEvent(event)
-        self._timer.stop()
+        self._stop_clock()
 
     def _target_morph(self) -> float:
         return 0.0 if self._state in (VisualState.IDLE, VisualState.OFFLINE) else 1.0
@@ -164,21 +216,31 @@ class OrbHud(QWidget):
             return 0.8
         return 0.45 + 0.05 * math.sin(t * 1.2)
 
-    def _tick(self) -> None:
-        now = time.perf_counter()
+    def _tick(self, now: float) -> None:
         dt = min(0.1, now - self._last_tick)
         self._last_tick = now
         self._t = now - self._started
         raw = self._level_source() if self._level_source else 0.0
         # Fast attack, slower release: follows the voice without flicker.
-        self._level = _ease(self._level, raw, dt, 16.0 if raw > self._level else 6.0)
+        self._level = _ease(self._level, raw, dt, 14.0 if raw > self._level else 5.0)
         was_calm = self._morph < 0.01
-        self._morph = _ease(self._morph, self._target_morph(), dt, 4.0)
-        self._speed = _ease(self._speed, _SPEEDS[self._state], dt, 2.5)
+        target = self._target_morph()
+        # Smoothstep-shaped morph: eases out of the old look and into the new one.
+        step = dt * 2.2
+        self._morph = (
+            min(target, self._morph + step)
+            if target > self._morph
+            else max(target, self._morph - step)
+        )
+        self._speed = _ease(self._speed, _SPEEDS[self._state], dt, 2.0)
         self._phase += self._speed * dt
-        self._energy = _ease(self._energy, self._target_energy(), dt, 7.0)
+        self._energy = _ease(self._energy, self._target_energy(), dt, 6.0)
+        alarm_target = 1.0 if self._alarm_on else 0.0
+        self._alarm = _ease(self._alarm, alarm_target, dt, 5.0)
+        if abs(self._alarm - alarm_target) < 0.002:
+            self._alarm = alarm_target
         if was_calm != (self._morph < 0.01):
-            self._restart_timer()
+            self._schedule()
         self.update()
 
     # --- painting ---
@@ -198,16 +260,44 @@ class OrbHud(QWidget):
         c = QPointF(w / 2, h / 2)
         outer = min(w, h) / 2 * 0.96
         ring = outer * 0.5
-        primary, secondary, highlight = self._colors()
-        morph, energy = self._morph, self._energy
+        base = self._colors()
+        alarm = self._alarm * self._alarm * (3 - 2 * self._alarm)
+        # Live strokes blend toward red; cached layers cross-fade between both palettes.
+        step = round(alarm * 10) / 10
+        primary, secondary, highlight = (
+            _mix(b, r, step) for b, r in zip(base, _ALARM, strict=True)
+        )
+        energy = self._energy
+        morph = self._morph * self._morph * (3 - 2 * self._morph)  # smoothstep
+        size = round(outer * 2)
+        # While the orb glides between sizes, reuse layers drawn at a few fixed sizes and
+        # scale them; once it settles, draw them at exactly this size (a plain copy).
+        moving = size != self._last_size
+        self._last_size = size
 
-        self._paint_halo(p, c, ring, outer, primary, energy, morph)
-        self._paint_decor(p, c, outer, primary, highlight, 0.3 + 0.7 * morph)
+        def layer(kind: str, opacity: float) -> None:
+            if alarm < 0.999:
+                self._draw_layer(
+                    p, kind, c, size, (base[0], base[2]), opacity * (1 - alarm), moving
+                )
+            if alarm > 0.001:
+                self._draw_layer(p, kind, c, size, (_ALARM[0], _ALARM[2]), opacity * alarm, moving)
+
+        # Glow: a soft base, plus the bright band of the ring as it forms.
+        strength = (0.35 + 0.65 * morph) * energy
+        layer("halo", strength)
+        layer("band", strength * morph)
+        layer("decor", 0.3 + 0.7 * morph)
         if morph < 0.99:
             self._paint_globe(p, c, ring * 0.92, primary, highlight, 1.0 - morph)
         if morph > 0.01:
-            pulse = 1.0 + 0.035 * (energy - 0.5) + 0.05 * self._level
-            self._paint_ring(p, c, ring * pulse, primary, highlight, energy, morph)
+            layer("bloom", morph * energy)
+            layer("ring", morph)
+            # A thin bright line that swells with the voice.
+            swell = ring * (1.0 + 0.03 * (energy - 0.5) + 0.06 * self._level)
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.setPen(QPen(rgba(highlight, int(150 * morph * energy)), 1.0))
+            p.drawEllipse(c, swell, swell)
             self._paint_arcs(p, c, ring, primary, secondary, highlight, morph)
             if self._state is VisualState.SPEAKING:
                 self._paint_ripples(p, c, ring, outer, primary, morph)
@@ -217,59 +307,59 @@ class OrbHud(QWidget):
         cost = (time.perf_counter() - started) * 1000
         was_slow = self._paint_ms > _SLOW_PAINT_MS
         self._paint_ms = 0.9 * self._paint_ms + 0.1 * cost
-        if (self._paint_ms > _SLOW_PAINT_MS) != was_slow and self._timer.isActive():
-            self._restart_timer()
+        if (self._paint_ms > _SLOW_PAINT_MS) != was_slow:
+            self._schedule()
 
-    def _paint_halo(
+    def _draw_layer(
         self,
         p: QPainter,
+        kind: str,
         c: QPointF,
-        ring: float,
-        outer: float,
-        color: QColor,
-        energy: float,
-        morph: float,
+        size: int,
+        colors: tuple[QColor, QColor],
+        opacity: float,
+        moving: bool,
     ) -> None:
-        reach = outer * 0.95
-        strength = (0.35 + 0.65 * morph) * energy
-        glow = QRadialGradient(c, reach)
-        inner = ring / reach
-        glow.setColorAt(0.0, rgba(color, int(26 * strength)))
-        glow.setColorAt(max(0.0, inner - 0.12), rgba(color, int(40 * strength)))
-        glow.setColorAt(inner, rgba(color, int(150 * strength * morph + 50 * strength)))
-        glow.setColorAt(min(1.0, inner + 0.16), rgba(color, int(36 * strength)))
-        glow.setColorAt(1.0, rgba(color, 0))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(glow)
-        p.drawEllipse(c, reach, reach)
+        if opacity <= 0.004:
+            return
+        dpr = self.devicePixelRatioF()
+        drawn_at = _bucket(size) if moving else size
+        key = (kind, drawn_at, colors[0].rgb(), colors[1].rgb(), round(dpr * 100))
+        pm = self._layers.get(key)
+        if pm is None:
+            if len(self._layers) > 60:
+                self._layers.clear()
+            pm = _render_layer(kind, drawn_at, colors[0], colors[1], dpr)
+            self._layers[key] = pm
+        p.setOpacity(min(1.0, opacity))
+        if moving:
+            soft = kind in ("halo", "band", "bloom")  # blurry anyway: the fast scaler will do
+            p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, not soft)
+            half = size / 2
+            target = QRectF(c.x() - half, c.y() - half, size, size)
+            p.drawPixmap(target, pm, QRectF(pm.rect()))
+        else:
+            p.drawPixmap(QPointF(round(c.x() - size / 2), round(c.y() - size / 2)), pm)
+        p.setOpacity(1.0)
 
-    def _paint_decor(
-        self, p: QPainter, c: QPointF, outer: float, color: QColor, hi: QColor, opacity: float
-    ) -> None:
-        """Dotted ring, compass ticks and diagonal markers: static, so cached."""
-        size = int(outer * 2) + 4
-        key = (size, color.rgb(), int(self.devicePixelRatioF() * 100))
-        if self._decor is None or self._decor_key != key:
-            self._decor = _render_decor(size, color, hi, self.devicePixelRatioF())
-            self._decor_key = key
-        p.save()
-        p.setOpacity(opacity)
-        p.drawPixmap(QPointF(c.x() - size / 2, c.y() - size / 2), self._decor)
-        p.restore()
+    def _sprites(self, color: QColor, hi: QColor, scale: float) -> list[QPixmap]:
+        dpr = self.devicePixelRatioF()
+        key = (round(scale * 10), color.rgb(), hi.rgb(), round(dpr * 100))
+        sprites = self._sprite_sets.get(key)
+        if sprites is None:
+            strip = _render_sprites(color, hi, round(scale * 10) / 10, dpr)
+            cell = strip.height()
+            sprites = [strip.copy(i * cell, 0, cell, cell) for i in range(3)]
+            for sprite in sprites:
+                sprite.setDevicePixelRatio(dpr)
+            if len(self._sprite_sets) > 24:
+                self._sprite_sets.clear()
+            self._sprite_sets[key] = sprites
+        return sprites
 
     def _paint_globe(
         self, p: QPainter, c: QPointF, r: float, color: QColor, hi: QColor, alpha: float
     ) -> None:
-        yaw = self._phase * 0.35
-        tilt = 0.38
-        cy, sy = math.cos(yaw), math.sin(yaw)
-        ct, st = math.cos(tilt), math.sin(tilt)
-        buckets: list[list[QPointF]] = [[], [], []]
-        for x0, y0, z0 in _SPHERE:
-            x, z = x0 * cy + z0 * sy, -x0 * sy + z0 * cy
-            y, z = y0 * ct - z * st, y0 * st + z * ct
-            depth = (z + 1) / 2  # 0 = back, 1 = front
-            buckets[min(2, int(depth * 3))].append(QPointF(c.x() + x * r, c.y() + y * r))
         # Soft inner haze so the particles float in light, not on black.
         haze = QRadialGradient(c, r * 1.1)
         haze.setColorAt(0.0, rgba(color, int(46 * alpha)))
@@ -279,53 +369,25 @@ class OrbHud(QWidget):
         p.setBrush(haze)
         p.drawEllipse(c, r * 1.1, r * 1.1)
         p.setBrush(Qt.BrushStyle.NoBrush)
-        for i, points in enumerate(buckets):
-            tone = hi if i == 2 else color
-            size = 1.4 + 1.0 * i
-            # A wide faint dot under a small bright one reads as a glowing particle.
-            glow = QPen(rgba(color, int((18 + 22 * i) * alpha)), size * 2.6)
-            glow.setCapStyle(Qt.PenCapStyle.RoundCap)
-            p.setPen(glow)
-            p.drawPoints(points)
-            core = QPen(rgba(tone, int((70 + 80 * i) * alpha)), size)
-            core.setCapStyle(Qt.PenCapStyle.RoundCap)
-            p.setPen(core)
-            p.drawPoints(points)
-        # Soft limb so the globe reads as a sphere.
-        p.setPen(QPen(rgba(color, int(70 * alpha)), 1.2))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawEllipse(c, r * 1.04, r * 1.04)
 
-    def _paint_ring(
-        self,
-        p: QPainter,
-        c: QPointF,
-        r: float,
-        color: QColor,
-        hi: QColor,
-        energy: float,
-        morph: float,
-    ) -> None:
-        a = morph
-        # Dark lens inside the ring.
-        lens = QRadialGradient(c, r)
-        lens.setColorAt(0.0, QColor(10, 16, 24, int(235 * a)))
-        lens.setColorAt(0.85, QColor(6, 10, 16, int(245 * a)))
-        lens.setColorAt(1.0, rgba(color, int(60 * a)))
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(lens)
-        p.drawEllipse(c, r, r)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        width = r * 0.075
-        # Layered strokes fake a bloom: wide and faint, then narrow and bright.
-        p.setPen(QPen(rgba(color, int(45 * a * energy)), width * 2.6))
-        p.drawEllipse(c, r, r)
-        p.setPen(QPen(rgba(color, int(150 * a * (0.5 + 0.5 * energy))), width * 1.3))
-        p.drawEllipse(c, r, r)
-        p.setPen(QPen(rgba(hi, int(235 * a)), max(1.2, width * 0.35)))
-        p.drawEllipse(c, r, r)
-        p.setPen(QPen(rgba(hi, int(120 * a)), 1.0))
-        p.drawEllipse(c, r * 0.83, r * 0.83)
+        sprites = self._sprites(color, hi, max(0.6, min(1.4, r / 115)))
+        half = sprites[0].width() / sprites[0].devicePixelRatioF() / 2
+
+        yaw = self._phase * 0.35
+        tilt = 0.38
+        cy, sy = math.cos(yaw), math.sin(yaw)
+        ct, st = math.cos(tilt), math.sin(tilt)
+        cx0, cy0 = c.x() - half, c.y() - half
+        p.setOpacity(alpha)
+        for x0, y0, z0 in _SPHERE:
+            x, z = x0 * cy + z0 * sy, -x0 * sy + z0 * cy
+            y, z = y0 * ct - z * st, y0 * st + z * ct
+            depth = min(2, int((z + 1) * 1.5))  # 0 = back, 2 = front
+            p.drawPixmap(QPointF(cx0 + x * r, cy0 + y * r), sprites[depth])
+        p.setOpacity(1.0)
+        # Soft limb so the globe reads as a sphere.
+        p.setPen(QPen(rgba(color, int(70 * alpha)), 1.0))
+        p.drawEllipse(c, r * 1.04, r * 1.04)
 
     def _paint_arcs(
         self,
@@ -359,7 +421,7 @@ class OrbHud(QWidget):
             rr = r * factor
             rect = QRectF(c.x() - rr, c.y() - rr, rr * 2, rr * 2)
             p.setPen(QPen(rgba(tone, int(alpha * a)), width, c=cap))
-            p.drawArc(rect, int((start % 360) * 16), int(span * 16))
+            p.drawArc(rect, round((start % 360) * 16), round(span * 16))
 
     def _paint_ripples(
         self, p: QPainter, c: QPointF, r: float, outer: float, color: QColor, morph: float
@@ -369,16 +431,115 @@ class OrbHud(QWidget):
             phase = (self._t * 0.7 + k / 3) % 1.0
             rr = r + (outer * 0.9 - r) * phase
             alpha = int(110 * (1 - phase) * morph * self._energy)
-            p.setPen(QPen(rgba(color, alpha), 1.4))
+            # 1 px lines take Qt's fast antialiased path; a second, fainter one adds body.
+            p.setPen(QPen(rgba(color, alpha), 1.0))
             p.drawEllipse(c, rr, rr)
+            p.setPen(QPen(rgba(color, alpha // 2), 1.0))
+            p.drawEllipse(c, rr + 1.0, rr + 1.0)
 
     def _paint_name(self, p: QPainter, c: QPointF, r: float, hi: QColor, morph: float) -> None:
         size = max(7.0, r * 0.13)
-        f = theme.font(theme.BODY_FAMILY, size, QFont.Weight.Medium, spacing=size * 0.32)
-        p.setFont(f)
-        p.setPen(rgba(hi, int(200 + 40 * morph)))
-        box = QRectF(c.x() - r, c.y() - size, r * 2, size * 2)
-        p.drawText(box, Qt.AlignmentFlag.AlignCenter, "JARVIS")
+        dpr = self.devicePixelRatioF()
+        key = ("name", round(size * 2), hi.rgb(), round(dpr * 100))
+        pm = self._layers.get(key)
+        if pm is None:
+            pm = _render_name(round(size * 2) / 2, hi, dpr)
+            self._layers[key] = pm
+        w, h = pm.width() / dpr, pm.height() / dpr
+        p.setOpacity((200 + 40 * morph) / 255)
+        p.drawPixmap(QPointF(round(c.x() - w / 2), round(c.y() - h / 2)), pm)
+        p.setOpacity(1.0)
+
+
+def _new_pixmap(width: int, height: int, dpr: float) -> QPixmap:
+    pm = QPixmap(max(1, round(width * dpr)), max(1, round(height * dpr)))
+    pm.setDevicePixelRatio(dpr)
+    pm.fill(Qt.GlobalColor.transparent)
+    return pm
+
+
+def _render_layer(kind: str, size: int, color: QColor, hi: QColor, dpr: float) -> QPixmap:
+    """One cached layer, drawn for an orb whose outer radius is ``size / 2``."""
+    if kind == "decor":
+        return _render_decor(size, color, hi, dpr)
+    pm = _new_pixmap(size, size, dpr)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    c = QPointF(size / 2, size / 2)
+    outer = size / 2
+    ring = outer * 0.5
+    if kind in ("halo", "band"):
+        reach = outer * 0.95
+        inner = ring / reach
+        glow = QRadialGradient(c, reach)
+        if kind == "halo":
+            stops = ((0.0, 26), (inner - 0.12, 40), (inner, 50), (inner + 0.16, 36), (1.0, 0))
+        else:
+            stops = ((0.0, 0), (inner - 0.12, 0), (inner, 150), (inner + 0.16, 0), (1.0, 0))
+        for at, alpha in stops:
+            glow.setColorAt(max(0.0, min(1.0, at)), rgba(color, alpha))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(glow)
+        p.drawEllipse(c, reach, reach)
+    elif kind == "bloom":
+        # Wide, faint strokes: the part of the glow that breathes with the voice.
+        width = ring * 0.075
+        p.setPen(QPen(rgba(color, 45), width * 2.6))
+        p.drawEllipse(c, ring, ring)
+        p.setPen(QPen(rgba(color, 75), width * 1.3))
+        p.drawEllipse(c, ring, ring)
+    elif kind == "ring":
+        lens = QRadialGradient(c, ring)
+        lens.setColorAt(0.0, QColor(10, 16, 24, 235))
+        lens.setColorAt(0.85, QColor(6, 10, 16, 245))
+        lens.setColorAt(1.0, rgba(color, 60))
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(lens)
+        p.drawEllipse(c, ring, ring)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        width = ring * 0.075
+        p.setPen(QPen(rgba(color, 75), width * 1.3))
+        p.drawEllipse(c, ring, ring)
+        p.setPen(QPen(rgba(hi, 235), max(1.2, width * 0.35)))
+        p.drawEllipse(c, ring, ring)
+        p.setPen(QPen(rgba(hi, 120), 1.0))
+        p.drawEllipse(c, ring * 0.83, ring * 0.83)
+    p.end()
+    return pm
+
+
+def _render_sprites(color: QColor, hi: QColor, scale: float, dpr: float) -> QPixmap:
+    """Three glowing particle sprites side by side: back, middle and front of the globe."""
+    cell = math.ceil(3.4 * 2.6 * scale) + 4
+    pm = _new_pixmap(cell * 3, cell, dpr)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setPen(Qt.PenStyle.NoPen)
+    for i in range(3):
+        c = QPointF(cell * i + cell / 2, cell / 2)
+        size = (1.4 + 1.0 * i) * scale
+        p.setBrush(rgba(color, 18 + 22 * i))
+        p.drawEllipse(c, size * 1.3, size * 1.3)
+        p.setBrush(rgba(hi if i == 2 else color, 70 + 80 * i))
+        p.drawEllipse(c, size / 2, size / 2)
+    p.end()
+    return pm
+
+
+def _render_name(size: float, hi: QColor, dpr: float) -> QPixmap:
+    f = theme.font(theme.BODY_FAMILY, size, QFont.Weight.Medium, spacing=size * 0.32)
+    metrics = QFontMetricsF(f)
+    w = math.ceil(metrics.horizontalAdvance("JARVIS") + size) + 4
+    h = math.ceil(metrics.height()) + 4
+    pm = _new_pixmap(w, h, dpr)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+    p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
+    p.setFont(f)
+    p.setPen(hi)
+    p.drawText(QRectF(0, 0, w, h), Qt.AlignmentFlag.AlignCenter, "JARVIS")
+    p.end()
+    return pm
 
 
 def _render_decor(size: int, color: QColor, hi: QColor, dpr: float) -> QPixmap:

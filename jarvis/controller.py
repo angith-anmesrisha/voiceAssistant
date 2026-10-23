@@ -23,6 +23,7 @@ from jarvis.app.events import (
     PushToTalkPressed,
     PushToTalkReleased,
     UserNotice,
+    WakeWordHeard,
 )
 from jarvis.app.state import AppState, InvalidTransitionError, StateMachine
 from jarvis.providers.router import AllProvidersFailedError, ProviderRouter
@@ -66,6 +67,7 @@ class AppController:
         self._max_timer: asyncio.TimerHandle | None = None
         bus.subscribe(PushToTalkPressed, self._on_ptt_pressed)
         bus.subscribe(PushToTalkReleased, self._on_ptt_released)
+        bus.subscribe(WakeWordHeard, self._on_wake_word)
 
     @property
     def busy(self) -> bool:
@@ -104,15 +106,20 @@ class AppController:
     async def _on_ptt_released(self, _event: PushToTalkReleased) -> None:
         await self.stop_listening()
 
-    async def start_listening(self) -> None:
+    async def _on_wake_word(self, _event: WakeWordHeard) -> None:
+        await self.start_listening(hands_free=True)
+
+    async def start_listening(self, *, hands_free: bool = False) -> None:
+        """Start recording. Hands-free recordings stop by themselves when you go quiet."""
         if self._recorder.recording:
             return
         if self._speaker.speaking or self._state.state is AppState.SPEAKING:
             self._speaker.stop()  # barge-in
         elif self.busy:
             return
+        on_done = (lambda: self._spawn(self._finish_hands_free())) if hands_free else None
         try:
-            self._recorder.start()
+            self._recorder.start(on_done)
         except AudioDeviceError as exc:
             await self._bus.publish(ChatEntry(EntryKind.ERROR, f"Microphone problem: {exc}"))
             return
@@ -121,6 +128,14 @@ class AppController:
         self._max_timer = loop.call_later(
             self._voice.max_recording_s, lambda: self._spawn(self.stop_listening())
         )
+
+    async def _finish_hands_free(self) -> None:
+        if not self._recorder.recording:
+            return
+        if not self._recorder.heard_speech:
+            self._discard_recording()  # woken, but nobody said anything
+            return
+        await self.stop_listening()
 
     async def stop_listening(self) -> None:
         if not self._recorder.recording:

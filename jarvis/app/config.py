@@ -73,6 +73,8 @@ def _ollama() -> ProviderSettings:
 class ProvidersConfig(BaseModel):
     # Tried in this order; unavailable providers are skipped.
     priority: list[str] = Field(default_factory=lambda: ["groq", "gemini", "ollama"])
+    # Provider the user picked (top bar, or "use Gemini from now on"); "" = automatic.
+    preferred: str = ""
     groq: ProviderSettings = Field(default_factory=_groq)
     gemini: ProviderSettings = Field(default_factory=_gemini)
     ollama: ProviderSettings = Field(default_factory=_ollama)
@@ -87,7 +89,7 @@ class ProvidersConfig(BaseModel):
 
 
 class HotkeySettings(BaseModel):
-    push_to_talk: str = "ctrl+alt+space"
+    push_to_talk: str = "alt+`"
 
 
 class VoiceSettings(BaseModel):
@@ -99,6 +101,10 @@ class VoiceSettings(BaseModel):
     tts_voice: str = ""
     tts_rate: int = 1  # SAPI rate, -10..10
     max_recording_s: float = 60.0
+    # Offline wake word (Windows speech recognition). Say it, pause, then speak.
+    wake_word: bool = True
+    wake_phrases: list[str] = Field(default_factory=lambda: ["Jarvis", "Hey Jarvis"])
+    wake_min_confidence: str = "normal"  # low | normal | high
 
 
 def _default_apps() -> dict[str, str]:
@@ -159,6 +165,29 @@ def load_settings(path: Path | None = None) -> Settings:
     except (OSError, ValueError, ValidationError) as exc:
         logger.warning("Settings file unreadable ({}); using defaults", type(exc).__name__)
         return Settings()
+
+
+def save_choice(section: str, key: str, value: object, path: Path | None = None) -> None:
+    """Remember one choice made in the app, leaving the rest of settings.json as it is."""
+    path = path or settings_file()
+    try:
+        data = json.loads(path.read_text(encoding="utf-8")) if path.exists() else {}
+    except (OSError, ValueError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    part = data.setdefault(section, {})
+    if not isinstance(part, dict):
+        part = data[section] = {}
+    part[key] = value
+    try:
+        Settings.model_validate(data)
+    except ValidationError:
+        logger.warning("Not saving {}.{}: settings file is invalid", section, key)
+        return
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2), encoding="utf-8")
+    tmp.replace(path)
 
 
 def save_settings(settings: Settings, path: Path | None = None) -> None:

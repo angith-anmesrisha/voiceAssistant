@@ -15,7 +15,7 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
 from jarvis import APP_NAME, __version__
-from jarvis.app.config import Settings, load_settings
+from jarvis.app.config import Settings, load_settings, save_choice
 from jarvis.app.events import (
     EventBus,
     NoticeLevel,
@@ -24,11 +24,12 @@ from jarvis.app.events import (
     PushToTalkReleased,
     QuitRequested,
     UserNotice,
+    WakeWordHeard,
 )
 from jarvis.app.logging_setup import configure_logging
 from jarvis.app.paths import database_file
 from jarvis.app.single_instance import SingleInstance
-from jarvis.app.state import StateMachine
+from jarvis.app.state import AppState, StateChanged, StateMachine
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -61,6 +62,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     from jarvis.voice.hotkeys import GlobalHotkeys
     from jarvis.voice.local_stt import WindowsDictation
     from jarvis.voice.tts import Speaker
+    from jarvis.voice.wake_word import WakeWordListener
 
     bus = EventBus()
     state = StateMachine(bus)
@@ -86,6 +88,11 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         {name: config.get(name).max_retries for name in ("groq", "gemini", "ollama")},
         on_change=lambda: spawn(bus.publish(ProvidersChanged())),
     )
+    if config.preferred:
+        try:
+            router.set_preferred(config.preferred)
+        except KeyError:
+            logger.warning("Unknown preferred provider in settings; using automatic")
     store = HistoryStore(database_file())
     desktop = WindowsDesktop()
     desktop.start_tracking()
@@ -105,6 +112,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         capture_screen=window.capture_screen,
         history_messages=settings.history_messages,
         max_tool_rounds=settings.tools.max_tool_rounds,
+        on_prefer=lambda name: save_choice("providers", "preferred", name or ""),
     )
     speaker = Speaker(settings.voice.tts_voice, settings.voice.tts_rate)
     speaker.start()
@@ -147,6 +155,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         on_new_chat=lambda: spawn(assistant.new_conversation()),
         key_fields=key_fields,
         on_save_keys=save_keys,
+        on_prefer=lambda name: window.show_notice(assistant.prefer(name)),
     )
 
     # Restore the last conversation into the panel.
@@ -177,6 +186,33 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
             )
         )
 
+    # Offline wake word: paused whenever JARVIS is busy, so it never hears itself.
+    wake = WakeWordListener(
+        settings.voice.wake_phrases,
+        on_wake=lambda: loop.call_soon_threadsafe(lambda: spawn(bus.publish(WakeWordHeard()))),
+        min_confidence=settings.voice.wake_min_confidence,
+    )
+
+    async def pause_wake(event: StateChanged) -> None:
+        wake.pause(event.current is not AppState.IDLE)
+
+    async def check_wake() -> None:
+        await asyncio.sleep(4)
+        if not wake.running and wake.error:
+            await bus.publish(
+                UserNotice(
+                    "Wake word unavailable",
+                    f"Windows speech recognition couldn't start ({wake.error}). "
+                    f"Use {hotkey_label} or the mic button.",
+                    NoticeLevel.WARNING,
+                )
+            )
+
+    if settings.voice.wake_word and wake.available:
+        bus.subscribe(StateChanged, pause_wake)
+        wake.start()
+        spawn(check_wake())
+
     probes = asyncio.create_task(router.run_probes(config.probe_interval_s))
     logger.info("{} {} running", APP_NAME, __version__)
 
@@ -189,6 +225,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         await stop.wait()
     finally:
         probes.cancel()
+        wake.stop()
         hotkeys.stop()
         desktop.stop_tracking()
         await controller.shutdown()

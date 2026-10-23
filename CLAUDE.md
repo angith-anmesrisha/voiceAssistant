@@ -39,17 +39,22 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 - `tools/`: `registry.py` (`Risk`, `ToolSpec`, arg validation), `desktop.py` (`WindowsDesktop`:
   approved launches with `shell=False`, pynput keys/typing, lock/sleep, delayed shutdown),
   `builtin.py` (the tool set).
-- `agent/`: `prompts.py` (one system prompt; `wants_screen` regex), `assistant.py` (one turn:
+- `agent/`: `commands.py` ("use Gemini from now on" → provider switch, no model call),
+  `prompts.py` (one system prompt; `wants_screen` regex), `assistant.py` (one turn:
   history, screen fast path, otherwise a tool loop with tools + `look_at_screen`,
   confirmations).
-- `voice/`: `audio_io.py` (mic → WAV recorder), `tts.py` (SAPI on its own thread),
-  `hotkeys.py` (global push-to-talk), `local_stt.py` (offline SAPI dictation fallback).
+- `voice/`: `audio_io.py` (mic → WAV recorder, `EndOfSpeech` for hands-free), `tts.py`
+  (SAPI on its own thread), `hotkeys.py` (global push-to-talk; Windows hook swallows the
+  chord's main key), `local_stt.py` (offline SAPI dictation fallback), `wake_word.py`
+  (offline SAPI command grammar for "Jarvis").
 - `controller.py`: glues UI, voice, and assistant; owns busy/listening.
 - `ui/`: `theme.py`, `main_window.py` (HUD stage, tweens, layout), `tray.py`, `icons.py`,
   `widgets/`: `orb.py` (particle globe when idle, morphs into the glowing ring), `stage.py`
   (backdrop, top bar, clock/state caption, reply card, status strip, `Tween`), `panels.py`
   (provider/network/safety panels in the details overlay, command bar, confirm overlay),
-  `chat.py` (history drawer), `keys.py` (API key overlay), `glass.py`.
+  `chat.py` (history drawer), `keys.py` (API key overlay), `glass.py`, `overlay.py`
+  (always-on-top corner orb). `frame_clock.py`: one shared animation clock (vsync via
+  `DwmFlush` on Windows, precise timer elsewhere).
 - `assets/fonts/`: Orbitron, Rajdhani, Inter (OFL).
 
 ## Decisions
@@ -76,14 +81,34 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   idle, cyan ring + screen-edge glow when active, reply card in the centre with the orb
   docked bottom-right. QPainter only (no blur effects), static layers cached as pixmaps,
   time-based easing; 60 fps when active, 30 when calm or if a frame takes >10 ms; stops
-  when hidden, for Iris Xe.
+  when hidden, for Iris Xe. The owner liked this UI; keep its look.
 - Closing the window hides to the tray; Quit is in the tray menu.
+- Push-to-talk is Alt+` (vk 0xC0, or 0xDF on UK layouts). On Windows the backtick is
+  swallowed while the chord is held and an unassigned key (0xE8) is tapped so releasing
+  Alt doesn't focus the app's menu bar.
+- Wake word: SAPI in-process recognizer on the default mic with a command grammar of
+  `voice.wake_phrases`; only matches at or above `wake_min_confidence` count; paused
+  whenever the app state isn't IDLE. The user says "Jarvis", pauses, then speaks; the
+  hands-free recording ends after ~1.1 s of quiet (or 6 s with no speech, then dropped).
+- When activated while the main window isn't the active window, a frameless, no-focus,
+  always-on-top `OrbOverlay` shows at the bottom-right; it hides 4.5 s after IDLE (7 s
+  after a failure). Screen capture hides it too.
+- `router.preferred` (persisted as `providers.preferred` via `save_choice`, which edits
+  only that key) puts one provider first; the others still back it up.
+- Failure feedback: an ERROR entry or an ACTION starting with "✕"/"Declined" tints the
+  window (red wash and edge), the orbs and the reply card red for 6 s or until the next
+  request.
+- Animation: one `FrameClock`; layout transitions are critically damped springs
+  (`Tween`); orb layers are cached at exact size when still and at bucketed sizes while
+  gliding (smooth scaled blits are ~30x slower than plain ones in the raster engine);
+  moving thin lines use 1 px pens (Qt's fast antialiased path). Orb ~3 ms/frame.
 
 ## Known issues
 - Groq and Ollama calls aren't exercised from CI; tests use `httpx.MockTransport` and fakes.
-- SAPI TTS and dictation, global hotkeys, the key dialog's registry write, and the desktop
+- SAPI TTS, dictation and the wake word, global hotkeys (and the backtick swallowing),
+  the vsync clock, the corner overlay, the key dialog's registry write, and the desktop
   tools are untested on real Windows so far.
-- The Space keystroke of Ctrl+Alt+Space still reaches the focused app.
+- The wake word needs a pause after "Jarvis"; words said in the same breath are lost.
 - No settings window yet; edit `settings.json` in the data dir.
 
 ## Current status

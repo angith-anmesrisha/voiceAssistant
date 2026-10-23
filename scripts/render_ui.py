@@ -12,6 +12,7 @@ from pathlib import Path
 
 import httpx
 import qasync
+from PySide6.QtGui import QColor, QImage, QLinearGradient, QPainter
 from PySide6.QtWidgets import QApplication
 
 from jarvis.app.config import Settings
@@ -24,6 +25,7 @@ from jarvis.providers.router import ProviderRouter
 from jarvis.tools.registry import Risk
 from jarvis.ui import theme
 from jarvis.ui.main_window import MainWindow
+from jarvis.ui.widgets.orb import VisualState
 
 SIZE = (1440, 900)
 
@@ -173,6 +175,49 @@ async def render(out: Path) -> None:
     window._router = demo_router(False)
     window.refresh_providers()
     await shot("12-offline", AppState.IDLE, 8.0)
+
+    # A command that couldn't be carried out: everything turns red for a few seconds.
+    window._router = demo_router(True)
+    window._router.set_preferred("gemini")
+    window.refresh_providers()
+    window.add_entry(ChatEntry(EntryKind.USER, "Open Spotify and play my liked songs"))
+    window.add_entry(ChatEntry(EntryKind.ACTION, "✕ Spotify isn't installed on this PC."))
+    window.add_entry(
+        ChatEntry(
+            EntryKind.ASSISTANT,
+            "I couldn't open Spotify: it isn't installed on this PC. Want me to open the "
+            "Spotify web player instead?",
+            "Gemini",
+            "gemini-3.8-flash",
+            "used tools",
+        )
+    )
+    window.orb.set_alarm(True)
+    await shot("13-failed", AppState.IDLE, 9.0)
+    window.clear_failure()
+    window.close_card()
+
+    # The corner orb over other apps (drawn on a stand-in desktop).
+    overlay = window.overlay
+    overlay.orb.set_state(VisualState.SPEAKING)
+    overlay.say("JARVIS", "Done. YouTube is open with lo-fi coding music.")
+    overlay.orb.freeze(5.6)
+    for _ in range(3):
+        QApplication.processEvents()
+    desktop = QImage(1280, 720, QImage.Format.Format_ARGB32_Premultiplied)
+    p = QPainter(desktop)
+    wallpaper = QLinearGradient(0, 0, 1280, 720)
+    wallpaper.setColorAt(0.0, QColor(36, 74, 128))
+    wallpaper.setColorAt(1.0, QColor(18, 30, 58))
+    p.fillRect(desktop.rect(), wallpaper)
+    p.fillRect(120, 70, 860, 520, QColor(246, 247, 249))
+    p.fillRect(120, 70, 860, 34, QColor(226, 229, 234))
+    p.fillRect(0, 672, 1280, 48, QColor(28, 32, 40, 235))
+    image = overlay.grab()
+    p.drawPixmap(1280 - image.width() // int(image.devicePixelRatio()) - 22, 672 - 22 - 230, image)
+    p.end()
+    desktop.save(str(out / "14-corner-orb.png"))
+    print(out / "14-corner-orb.png")
     window.quitting = True
     window.close()
 

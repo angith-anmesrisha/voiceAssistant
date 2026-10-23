@@ -45,10 +45,26 @@ python -m jarvis            # opens the window
 python -m jarvis --hidden   # starts in the tray
 ```
 
-- **Type** in the command bar and press Enter, or **talk**: tap the mic button, or hold
-  **Ctrl+Alt+Space** anywhere in Windows and release to send. Spoken questions get spoken
-  answers (Windows' built-in voice); tap the mic to interrupt. Speech is turned into text
-  by Groq (or Gemini); with neither, Windows' offline speech recognition is used.
+- **Type** in the command bar and press Enter, or **talk**:
+  - say **"Jarvis"**, wait for the orb, then speak. It sends when you pause. The wake
+    word runs offline with Windows' own speech recognition (it needs an English speech
+    language under Settings > Time & language > Speech), and it is paused while JARVIS
+    is busy, so it never hears itself;
+  - or hold **Alt+`** (the key left of 1) anywhere in Windows and let go to send;
+  - or tap the mic button.
+
+  Spoken questions get spoken answers (Windows' built-in voice); talk again to interrupt.
+  Speech is turned into text by Groq (or Gemini); with neither, Windows' offline speech
+  recognition is used.
+- When you call JARVIS while working in another app, only the **orb appears in the
+  bottom-right corner**, above your other windows, with a short caption. It never steals
+  focus, and it fades away when JARVIS is done. Click it to open the full window.
+- **Pick the AI** with AUTO · GROQ · GEMINI · OLLAMA at the top, or just say it: "use
+  Gemini from now on", "switch to the local model", "go back to automatic". The choice is
+  remembered. If the chosen one isn't available, JARVIS says so and uses the next one,
+  and every answer is labelled with the provider that really produced it.
+- If a command **can't be carried out** (a tool fails, you decline it, or no AI can
+  answer), the whole UI turns red for a few seconds, then goes back to blue.
 - **No modes to pick.** JARVIS works out what you want from what you say:
   - Ask about your screen ("what's this error?", "summarise this page") and it takes a
     screenshot (hiding itself first) and answers about it. Press Enter with an empty box
@@ -82,7 +98,8 @@ as instructions.
 
 `%LOCALAPPDATA%\JARVIS\settings.json` (created when you first save settings; defaults apply
 otherwise). You can change provider priority, model names, timeouts and retries, approved
-apps, trusted sites, the hotkey and the voice. Conversation history is stored in
+apps, trusted sites, the hotkey (`hotkeys.push_to_talk`, default ``alt+` ``), the wake word (`voice.wake_word`,
+`voice.wake_phrases`, `voice.wake_min_confidence`: `low`, `normal` or `high`) and the voice. Conversation history is stored in
 `%LOCALAPPDATA%\JARVIS\jarvis.sqlite3`; logs are in `%LOCALAPPDATA%\JARVIS\logs` and never
 contain your messages, audio or keys.
 

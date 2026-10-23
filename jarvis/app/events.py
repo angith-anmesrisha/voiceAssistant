@@ -91,6 +91,11 @@ class PushToTalkReleased(Event):
     pass
 
 
+@dataclass(frozen=True, slots=True)
+class WakeWordHeard(Event):
+    """Someone said the wake word: listen hands-free until they go quiet."""
+
+
 class EntryKind(StrEnum):
     USER = "user"
     ASSISTANT = "assistant"
