@@ -36,9 +36,6 @@ _FATAL_MESSAGES: dict[LiveErrorKind, str] = {
         "or check your quota in Google AI Studio."
     ),
     LiveErrorKind.REGION: "The Gemini API isn't available in your region with this key.",
-    LiveErrorKind.BAD_CONFIG: (
-        "Gemini refused the session setup. The model name in settings may be out of date."
-    ),
 }
 
 
@@ -200,7 +197,8 @@ class VoiceLoop:
             self._spawn(self._go_idle())
 
     def on_fatal_error(self, kind: LiveErrorKind, detail: str) -> None:
-        self._notify("Gemini problem", _FATAL_MESSAGES.get(kind, detail), NoticeLevel.ERROR)
+        message = _FATAL_MESSAGES.get(kind) or f"Gemini refused the session setup: {detail}"
+        self._notify("Gemini problem", message, NoticeLevel.ERROR)
         self._holding = False
         self._mic.stop()
         self._speaker.clear()

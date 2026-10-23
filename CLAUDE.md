@@ -59,6 +59,9 @@ pydantic, keyring, SQLite (aiosqlite), APScheduler, PyInstaller + Inno Setup.
   held is dropped as part of the talked-over reply.
 - The audio hot path uses direct `LiveHandler` callbacks, not the event bus; state, notices
   and captions go through the bus.
+- If setup is refused (1007/1008/4xx) before the first connection, `LiveSession` tries
+  `models.live_fallbacks` in order (default `gemini-3.1-flash-live-preview`). The server's
+  close reason is logged and shown in the error balloon.
 - API key entry is a tray dialog for now; the full onboarding flow is M12.
 - Transcripts are published as `Transcript` events for captions (M4) and never logged.
 

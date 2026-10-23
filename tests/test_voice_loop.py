@@ -49,7 +49,7 @@ class Rig:
         def session_factory(handler: LiveHandler) -> LiveSession | None:
             if not self.has_key:
                 return None
-            return LiveSession(self.connector, "m", handler, lambda: "SYS")
+            return LiveSession(self.connector, ["m"], handler, lambda: "SYS")
 
         def speaker_factory(on_drained: object) -> FakeSpeaker:
             self.speaker = FakeSpeaker(on_drained)  # type: ignore[arg-type]
@@ -224,3 +224,10 @@ async def test_api_key_change_drops_session() -> None:
     await settle()
     assert rig.loop._session is None
     await rig.loop.shutdown()
+
+
+async def test_bad_config_notice_includes_server_reason() -> None:
+    rig = Rig()
+    rig.loop.on_fatal_error(LiveErrorKind.BAD_CONFIG, "models/x is not found")
+    await settle()
+    assert "models/x is not found" in rig.notices[-1].message

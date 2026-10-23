@@ -7,7 +7,7 @@ import pytest
 from google.genai import errors, types
 
 from hitodama.core import live_session as ls
-from hitodama.core.live_session import LiveErrorKind, LiveSession, classify_error
+from hitodama.core.live_session import LiveErrorKind, LiveSession, classify_error, error_detail
 from tests.fakes import FakeConnector, audio_msg, settle, turn_complete_msg
 
 
@@ -40,7 +40,16 @@ def no_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def make(connector: FakeConnector, handler: RecordingHandler) -> LiveSession:
-    return LiveSession(connector, "test-live-model", handler, lambda: "SYSTEM", voice="Kore")
+    return LiveSession(connector, ["test-live-model"], handler, lambda: "SYSTEM", voice="Kore")
+
+
+def api_error(code: int, message: str) -> errors.APIError:
+    """What the SDK raises when the server closes the socket with a reason."""
+    try:
+        errors.APIError.raise_error(code, message, None)
+    except errors.APIError as exc:
+        return exc
+    raise AssertionError("unreachable")
 
 
 @pytest.mark.parametrize(
@@ -193,3 +202,34 @@ async def test_invalid_key_is_fatal_and_stops() -> None:
     await settle()
     assert handler.events == [("fatal", LiveErrorKind.INVALID_KEY)]
     assert not session.running
+
+
+async def test_refused_setup_falls_back_to_next_model() -> None:
+    connector, handler = FakeConnector(), RecordingHandler()
+    connector.fail_with = [api_error(1008, "models/new-live is not found for API version v1beta")]
+    session = LiveSession(connector, ["new-live", "old-live"], handler, lambda: "SYS")
+    session.start()
+    await asyncio.wait_for(connector.connected.wait(), 1)
+    assert connector.models == ["new-live", "old-live"]
+    assert session.model == "old-live"
+    assert handler.events == []
+    await session.stop()
+
+
+async def test_refused_setup_with_no_fallback_reports_server_reason() -> None:
+    connector, handler = FakeConnector(), RecordingHandler()
+    reason = "Invalid JSON payload received. Unknown name \"foo\" at 'setup'"
+    connector.fail_with = [api_error(1007, reason), api_error(1007, reason)]
+    details: list[str] = []
+    handler.on_fatal_error = lambda kind, detail: details.append(detail)  # type: ignore[method-assign]
+    session = LiveSession(connector, ["a", "b"], handler, lambda: "SYS")
+    session.start()
+    await settle()
+    assert connector.models == ["a", "b"]
+    assert details == [reason]
+    assert not session.running
+
+
+def test_error_detail_trims_long_reasons() -> None:
+    assert error_detail(api_error(1008, "short reason")) == "short reason"
+    assert len(error_detail(api_error(1008, "x" * 500))) == 200

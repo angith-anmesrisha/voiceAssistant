@@ -19,6 +19,8 @@ from hitodama.app.paths import settings_file
 class ModelSettings(BaseModel):
     # Checked against ai.google.dev/gemini-api/docs/models on 2026-10-23.
     live: str = "gemini-3.8-live"
+    # Tried in order if the server refuses to set up a session with ``live``.
+    live_fallbacks: list[str] = Field(default_factory=lambda: ["gemini-3.1-flash-live-preview"])
     text: str = "gemini-3.8-flash"
     vision: str = "gemini-3.8-flash"
 

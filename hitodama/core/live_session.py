@@ -50,6 +50,14 @@ def classify_error(exc: BaseException) -> LiveErrorKind:
     return LiveErrorKind.TRANSIENT
 
 
+def error_detail(exc: BaseException, limit: int = 200) -> str:
+    """The server's own explanation (e.g. a WebSocket close reason), trimmed for display."""
+    details = getattr(exc, "details", None)
+    text = details if isinstance(details, str) and details else str(exc)
+    text = " ".join(text.split())
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 class LiveHandler(Protocol):
     """Callbacks from the live session. All are called on the event loop thread."""
 
@@ -69,13 +77,17 @@ class LiveSession:
     def __init__(
         self,
         connector: Connector,
-        model: str,
+        models: list[str],
         handler: LiveHandler,
         system_prompt: Callable[[], str],
         voice: str | None = None,
     ) -> None:
+        if not models:
+            raise ValueError("At least one Live model is required")
         self._connector = connector
-        self._model = model
+        # Preferred model first; later ones are tried only if setup is refused.
+        self._models = list(models)
+        self._model_index = 0
         self._handler = handler
         self._system_prompt = system_prompt
         self._voice = voice
@@ -86,6 +98,10 @@ class LiveSession:
         self._resume_handle: str | None = None
         self._go_away = False
         self._turn_active = False
+
+    @property
+    def model(self) -> str:
+        return self._models[self._model_index]
 
     @property
     def running(self) -> bool:
@@ -153,13 +169,17 @@ class LiveSession:
 
     async def _run(self) -> None:
         attempt = 0
+        ever_connected = False
         while True:
             try:
-                async with self._connector(self._model, self._config()) as session:
+                async with self._connector(self.model, self._config()) as session:
                     logger.info(
-                        "Live session connected ({})", "resumed" if self._resume_handle else "new"
+                        "Live session connected to {} ({})",
+                        self.model,
+                        "resumed" if self._resume_handle else "new",
                     )
                     attempt = 0
+                    ever_connected = True
                     self._go_away = False
                     self._session = session
                     self._connected.set()
@@ -169,9 +189,21 @@ class LiveSession:
                 raise
             except Exception as exc:
                 kind = classify_error(exc)
+                detail = error_detail(exc)
+                if (
+                    kind is LiveErrorKind.BAD_CONFIG
+                    and not ever_connected
+                    and self._model_index + 1 < len(self._models)
+                ):
+                    logger.warning(
+                        "Model {} refused setup ({}); trying fallback", self.model, detail
+                    )
+                    self._model_index += 1
+                    self._resume_handle = None  # handles don't carry across models
+                    continue
                 if kind is not LiveErrorKind.TRANSIENT:
-                    logger.error("Live session failed: {} ({})", kind.value, type(exc).__name__)
-                    self._handler.on_fatal_error(kind, str(exc))
+                    logger.error("Live session failed: {} ({})", kind.value, detail)
+                    self._handler.on_fatal_error(kind, detail)
                     return
                 was_connected = self._connected.is_set()
                 delay = _BACKOFF_S[min(attempt, len(_BACKOFF_S) - 1)]

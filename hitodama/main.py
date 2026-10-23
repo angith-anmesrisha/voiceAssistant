@@ -113,7 +113,7 @@ def _make_live_session(settings: Settings, handler: LiveHandler) -> LiveSession 
     client = genai.Client(api_key=api_key)
     return LiveSession(
         connector=lambda model, config: client.aio.live.connect(model=model, config=config),
-        model=settings.models.live,
+        models=[settings.models.live, *settings.models.live_fallbacks],
         handler=handler,
         system_prompt=lambda: build_system_prompt(settings.loadout),
         voice=settings.loadout.voice,
