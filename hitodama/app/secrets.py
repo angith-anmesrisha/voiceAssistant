@@ -5,6 +5,8 @@ The key is never written to a plain file and never logged.
 
 from __future__ import annotations
 
+import contextlib
+
 import keyring
 from keyring.errors import KeyringError, PasswordDeleteError
 from loguru import logger
@@ -31,10 +33,8 @@ def set_api_key(key: str) -> None:
 
 
 def delete_api_key() -> None:
-    try:
+    with contextlib.suppress(PasswordDeleteError):
         keyring.delete_password(_SERVICE, _GEMINI_KEY)
-    except PasswordDeleteError:
-        pass
 
 
 def has_api_key() -> bool:

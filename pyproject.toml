@@ -16,6 +16,9 @@ dependencies = [
     "pydantic-settings>=2.3",
     "loguru>=0.7",
     "keyring>=25.0",
+    "google-genai>=2.30",
+    "sounddevice>=0.5",
+    "pynput>=1.8",
     "pywin32>=306; sys_platform == 'win32'",
 ]
 
@@ -48,7 +51,7 @@ packages = ["hitodama", "tests"]
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["qasync", "qasync.*", "win32event", "win32api", "winerror", "pytestqt.*"]
+module = ["qasync", "qasync.*", "sounddevice", "pynput", "pynput.*", "win32event", "win32api", "winerror", "pytestqt.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

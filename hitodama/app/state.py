@@ -19,9 +19,10 @@ class AppState(StrEnum):
 _S = AppState
 
 # Any state may return to IDLE (cancel/error). LISTENING is reachable from SPEAKING
-# for barge-in and from THINKING/ACTING when the user interrupts.
+# for barge-in and from THINKING/ACTING when the user interrupts. IDLE -> SPEAKING
+# covers a reply that arrives after a timeout (and proactive speech later on).
 ALLOWED_TRANSITIONS: dict[AppState, frozenset[AppState]] = {
-    _S.IDLE: frozenset({_S.LISTENING, _S.THINKING, _S.ACTING}),
+    _S.IDLE: frozenset({_S.LISTENING, _S.THINKING, _S.SPEAKING, _S.ACTING}),
     _S.LISTENING: frozenset({_S.IDLE, _S.THINKING, _S.SPEAKING}),
     _S.THINKING: frozenset({_S.IDLE, _S.LISTENING, _S.SPEAKING, _S.ACTING}),
     _S.SPEAKING: frozenset({_S.IDLE, _S.LISTENING, _S.THINKING, _S.ACTING}),

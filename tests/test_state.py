@@ -43,9 +43,10 @@ async def test_same_state_is_noop() -> None:
 
 async def test_invalid_transition_raises() -> None:
     sm = StateMachine(EventBus())
+    await sm.transition(AppState.LISTENING)
     with pytest.raises(InvalidTransitionError):
-        await sm.transition(AppState.SPEAKING)
-    assert sm.state is AppState.IDLE
+        await sm.transition(AppState.ACTING)
+    assert sm.state is AppState.LISTENING
 
 
 @pytest.mark.parametrize("state", list(AppState))

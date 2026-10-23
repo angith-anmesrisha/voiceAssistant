@@ -31,17 +31,45 @@ pydantic, keyring, SQLite (aiosqlite), APScheduler, PyInstaller + Inno Setup.
 - `app/state.py`: `StateMachine` with `ALLOWED_TRANSITIONS`, publishes `StateChanged`.
 - `app/single_instance.py`: Windows named mutex; `QLockFile` elsewhere.
 - `app/logging_setup.py`: loguru, 5 MB x 5 rotating file, `diagnose=False`.
-- `ui/tray.py`, `ui/icons.py`: tray icon (drawn in code) and menu.
-- `core/`, `tools/`, `features/`, `ui/island_panels/`, `storage/`: empty packages for later milestones.
+- `ui/tray.py`, `ui/icons.py`: tray icon (drawn in code), menu, "Set Gemini API key…"
+  dialog, and tray balloons for `UserNotice` events.
+- `core/hotkeys.py`: `ChordTracker` (pure, tested) + `GlobalHotkeys` (pynput hook) publishing
+  `PushToTalkPressed/Released`.
+- `core/audio_io.py`: `Microphone` (16 kHz, 32 ms blocks, open only while held) and
+  `Speaker` (24 kHz, `PlaybackBuffer`, `on_drained` callback). sounddevice imported lazily.
+- `core/live_session.py`: `LiveSession` (Gemini Live connection, queued outgoing audio,
+  session resumption, context compression, GoAway resume, backoff reconnect) and
+  `classify_error` (invalid key / quota / region / bad config / transient).
+- `core/voice_loop.py`: `VoiceLoop` owns the voice turn state machine, barge-in, reply
+  timeout, idle disconnect, and friendly notices.
+- `core/personality.py`: compact system prompt (identity, personality preset, rules, time).
+- `tools/`, `features/`, `ui/island_panels/`, `storage/`: empty packages for later milestones.
 
 ## Decisions
 - Non-secret settings in JSON for now; may move to SQLite with the M8 storage work.
-- Model names in `ModelSettings` are placeholders; M1 must verify them against current docs.
 - `--exit-after` exists so tests can smoke-run the real app headless.
+- M1 (verified 2026-10-23 against ai.google.dev and google-genai 2.33): Live model
+  `gemini-3.8-live`, text/vision `gemini-3.8-flash`. Input `audio/pcm;rate=16000`, output 24 kHz.
+- Push-to-talk uses **manual activity detection** (server VAD disabled; we send
+  `activity_start`/`activity_end`). Nothing is sent unless the key is held.
+- The Live connection opens on the first press (audio is queued meanwhile) and closes after
+  `live.idle_disconnect_s` (300 s) idle. The resumption handle is kept, so context carries
+  over for about 2 hours.
+- Barge-in: pressing while it speaks clears playback; audio that arrives while the key is
+  held is dropped as part of the talked-over reply.
+- The audio hot path uses direct `LiveHandler` callbacks, not the event bus; state, notices
+  and captions go through the bus.
+- API key entry is a tray dialog for now; the full onboarding flow is M12.
+- Transcripts are published as `Transcript` events for captions (M4) and never logged.
 
 ## Known issues
 - Tray icon is a placeholder drawn in code; a real icon comes with M13 packaging.
 - "Settings…" tray item is disabled until the settings window exists.
+- Live API calls cannot be exercised in CI (no key). Tests use fakes in `tests/fakes.py`.
+- The first question after startup or an idle disconnect waits for the connection (about 1 s extra).
+- The Space keystroke of Ctrl+Alt+Space still reaches the focused app (not suppressed).
+- Errors are shown as tray balloons only. Spoken errors and the island come in M4.
 
 ## Current milestone
-**M0 (project skeleton)**: built, awaiting owner confirmation on Windows. Next: M1, live voice loop.
+**M1 (live voice loop)**: built, awaiting owner confirmation on Windows. Next: M2, tools and
+function calling. (M0 confirmed 2026-10-23.)

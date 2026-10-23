@@ -3,7 +3,7 @@
 A voice-first AI companion for Windows 10/11 (64-bit). It lives in a floating island at
 the top of the screen, listens when called, talks back, and does things on your PC.
 
-Status: **M0, project skeleton.** It starts, shows a tray icon, logs to a file, and quits.
+Status: **M1, live voice loop.** Hold a hotkey, talk, and hear Gemini answer.
 The full spec is in [`docs/MASTER_PROMPT.md`](docs/MASTER_PROMPT.md).
 
 ## Setup (Windows)
@@ -26,9 +26,14 @@ The full spec is in [`docs/MASTER_PROMPT.md`](docs/MASTER_PROMPT.md).
 python -m hitodama
 ```
 
-A flame icon appears in the system tray (check the `^` overflow area). Right-click it and
-choose **Quit Hitodama** to exit. Running it a second time while it is open exits
-immediately, because only one instance is allowed.
+A flame icon appears in the system tray (check the `^` overflow area).
+
+1. Get a free API key at [Google AI Studio](https://aistudio.google.com/apikey).
+2. Right-click the tray icon, choose **Set Gemini API key…**, and paste it.
+3. **Hold `Ctrl+Alt+Space`**, speak, and let go. The reply plays through your speakers.
+   Press the hotkey again while it's talking to interrupt it.
+
+Right-click the icon and choose **Quit Hitodama** to exit. Only one copy can run at a time.
 
 Options: `--log-level DEBUG`, `--exit-after SECONDS` (quits on its own; for smoke tests).
 

@@ -11,6 +11,7 @@ import asyncio
 from collections import defaultdict
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from typing import Any, TypeVar
 
 from loguru import logger
@@ -63,3 +64,41 @@ class EventBus:
                     getattr(handler, "__qualname__", repr(handler)),
                     type(event).__name__,
                 )
+
+
+class NoticeLevel(StrEnum):
+    INFO = "info"
+    WARNING = "warning"
+    ERROR = "error"
+
+
+@dataclass(frozen=True, slots=True)
+class UserNotice(Event):
+    """Something the user should see (tray balloon now, island in M4)."""
+
+    title: str
+    message: str
+    level: NoticeLevel = NoticeLevel.INFO
+
+
+@dataclass(frozen=True, slots=True)
+class PushToTalkPressed(Event):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class PushToTalkReleased(Event):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class ApiKeyChanged(Event):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class Transcript(Event):
+    """Live caption text. Never log these: they are the user's words."""
+
+    role: str  # "user" or "assistant"
+    text: str

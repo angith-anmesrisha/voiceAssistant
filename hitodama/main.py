@@ -15,11 +15,23 @@ from PySide6.QtWidgets import QApplication
 
 from hitodama import APP_NAME, __version__
 from hitodama.app.config import Settings, load_settings
-from hitodama.app.events import EventBus, QuitRequested
+from hitodama.app.events import (
+    EventBus,
+    NoticeLevel,
+    PushToTalkPressed,
+    PushToTalkReleased,
+    QuitRequested,
+    UserNotice,
+)
 from hitodama.app.logging_setup import configure_logging
-from hitodama.app.secrets import has_api_key
+from hitodama.app.secrets import get_api_key, has_api_key
 from hitodama.app.single_instance import SingleInstance
 from hitodama.app.state import StateMachine
+from hitodama.core.audio_io import Microphone, Speaker
+from hitodama.core.hotkeys import GlobalHotkeys
+from hitodama.core.live_session import LiveHandler, LiveSession
+from hitodama.core.personality import build_system_prompt
+from hitodama.core.voice_loop import VoiceLoop
 from hitodama.ui.tray import Tray
 
 
@@ -49,13 +61,36 @@ async def _run_app(settings: Settings, exit_after: float | None) -> None:
 
     key_set = has_api_key()
     if not key_set:
-        logger.info("No Gemini API key stored yet; onboarding will ask for one (M12)")
+        logger.info("No Gemini API key stored yet; set one from the tray menu")
 
-    tray = Tray(bus, api_key_set=key_set)
+    talk_hotkey = settings.hotkeys.push_to_talk
+    tray = Tray(bus, api_key_set=key_set, talk_hotkey=talk_hotkey.title())
     tray.show()
-    logger.info("{} {} running (state: {})", APP_NAME, __version__, state.state.value)
+
+    voice = VoiceLoop(
+        bus,
+        state,
+        settings,
+        session_factory=lambda handler: _make_live_session(settings, handler),
+        microphone=Microphone(settings.audio.input_sample_rate, device=settings.audio.input_device),
+        speaker_factory=lambda on_drained: Speaker(
+            settings.audio.output_sample_rate, on_drained, device=settings.audio.output_device
+        ),
+    )
 
     loop = asyncio.get_running_loop()
+    hotkeys = GlobalHotkeys(bus, loop)
+    hotkeys.add_hold(talk_hotkey, PushToTalkPressed(), PushToTalkReleased())
+    if not hotkeys.start():
+        await bus.publish(
+            UserNotice(
+                title="Hotkeys unavailable",
+                message="Couldn't watch the keyboard, so push-to-talk won't work.",
+                level=NoticeLevel.ERROR,
+            )
+        )
+    logger.info("{} {} running (state: {})", APP_NAME, __version__, state.state.value)
+
     if exit_after is not None:
         loop.call_later(exit_after, lambda: stop.set())
     with contextlib.suppress(ValueError):  # ValueError: not on the main thread
@@ -64,7 +99,25 @@ async def _run_app(settings: Settings, exit_after: float | None) -> None:
     try:
         await stop.wait()
     finally:
+        hotkeys.stop()
+        await voice.shutdown()
         tray.hide()
+
+
+def _make_live_session(settings: Settings, handler: LiveHandler) -> LiveSession | None:
+    api_key = get_api_key()
+    if not api_key:
+        return None
+    from google import genai
+
+    client = genai.Client(api_key=api_key)
+    return LiveSession(
+        connector=lambda model, config: client.aio.live.connect(model=model, config=config),
+        model=settings.models.live,
+        handler=handler,
+        system_prompt=lambda: build_system_prompt(settings.loadout),
+        voice=settings.loadout.voice,
+    )
 
 
 def run(argv: list[str] | None = None) -> int:

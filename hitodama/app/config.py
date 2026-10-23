@@ -17,10 +17,10 @@ from hitodama.app.paths import settings_file
 
 
 class ModelSettings(BaseModel):
-    # Placeholders until M1 verifies current names against ai.google.dev.
-    live: str = "gemini-live-2.5-flash-preview"
-    text: str = "gemini-2.5-flash"
-    vision: str = "gemini-2.5-flash"
+    # Checked against ai.google.dev/gemini-api/docs/models on 2026-10-23.
+    live: str = "gemini-3.8-live"
+    text: str = "gemini-3.8-flash"
+    vision: str = "gemini-3.8-flash"
 
 
 class HotkeySettings(BaseModel):
@@ -34,6 +34,15 @@ class AudioSettings(BaseModel):
     output_sample_rate: int = 24_000
     input_device: str | None = None
     output_device: str | None = None
+
+
+class LiveSettings(BaseModel):
+    # Close the Live connection after this long without talking (saves quota and CPU).
+    idle_disconnect_s: float = 300.0
+    # Give up waiting for a reply after this long.
+    reply_timeout_s: float = 20.0
+    # Safety net if a key release is missed (e.g. the screen locked mid-hold).
+    max_utterance_s: float = 60.0
 
 
 class LoadoutSettings(BaseModel):
@@ -51,6 +60,7 @@ class Settings(BaseModel):
     models: ModelSettings = Field(default_factory=ModelSettings)
     hotkeys: HotkeySettings = Field(default_factory=HotkeySettings)
     audio: AudioSettings = Field(default_factory=AudioSettings)
+    live: LiveSettings = Field(default_factory=LiveSettings)
     loadout: LoadoutSettings = Field(default_factory=LoadoutSettings)
 
 
