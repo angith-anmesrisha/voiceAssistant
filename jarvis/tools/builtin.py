@@ -11,7 +11,7 @@ from jarvis.tools.apps import AppIndex
 from jarvis.tools.desktop import Desktop, DesktopUnsupportedError
 from jarvis.tools.files import FileAccessError, FileArea, default_area
 from jarvis.tools.registry import Risk, ToolRegistry, ToolResult, ToolSpec
-from jarvis.tools.shortcuts import SHORTCUTS, KeyComboError, catalogue, parse_combo
+from jarvis.tools.shortcuts import SHORTCUTS, KeyComboError, parse_combo
 
 SEARCH_ENGINES = {
     "google": "https://www.google.com/search?q={}",
@@ -230,8 +230,10 @@ def build_registry(
     registry.register(
         ToolSpec(
             "press_shortcut",
-            "Press a named keyboard shortcut in the window the user was using. Known: "
-            + catalogue(),
+            # Names only (they say what they do): the full catalogue cost ~1,200 tokens on
+            # every request, which pushed Groq's free tier over its tokens-per-minute limit.
+            "Press a named keyboard shortcut in the window the user was using "
+            "(win = Windows key). For anything else use press_keys.",
             _schema({"shortcut": {"type": "string", "enum": list(SHORTCUTS)}}, ["shortcut"]),
             press_shortcut,
             lambda a: SHORTCUTS.get(str(a.get("shortcut")), ([], Risk.MEDIUM, ""))[1],
@@ -316,11 +318,8 @@ def build_registry(
 
         return file_op("open it", go)
 
-    path_help = (
-        "A full path, or one starting with desktop, documents, downloads, pictures, music "
-        "or videos (e.g. 'documents/Projects/notes.txt')."
-    )
-    path_arg = {"type": "string", "maxLength": 500, "description": path_help}
+    # How paths are written is explained once in the system prompt, not in every tool.
+    path_arg = {"type": "string", "maxLength": 500}
     file_tools: list[tuple[str, str, dict[str, Any], list[str], Any, Any, Any]] = [
         ("list_folder", "List what is in a folder.", {"path": path_arg}, ["path"],
          list_folder, Risk.LOW, lambda a: f"List {a.get('path')}"),

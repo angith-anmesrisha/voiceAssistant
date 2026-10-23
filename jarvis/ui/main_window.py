@@ -259,6 +259,13 @@ class MainWindow(HudBackdrop):
         bus.subscribe(UserNotice, self._on_notice_event)
         bus.subscribe(ConversationChanged, self._on_conversation_event)
         self.command.submitted.connect(lambda text: self._submit(text, on_submit))
+        self.provider_switch.setToolTip(
+            "Which AI to ask first. If it can't answer, the others are tried in turn, and the "
+            "answer says which one replied."
+        )
+        self.providers.test.clicked.connect(
+            lambda: self._submit("test the AI providers", on_submit)
+        )
         self.mic.clicked.connect(on_mic)
 
         def new_chat() -> None:
@@ -373,10 +380,9 @@ class MainWindow(HudBackdrop):
                 meta += f" · {entry.provider.upper()} · {entry.model}"
                 skipped = self._router.skipped if self._router is not None else []
                 if skipped:
-                    failed = ", ".join(a.provider for a in skipped)
+                    why = "; ".join(f"{a.provider}: {_short(a.error)}" for a in skipped)
                     self.show_notice(
-                        f"{failed} didn't answer ({skipped[-1].error}); {entry.provider} did.",
-                        NoticeLevel.WARNING,
+                        f"{entry.provider} answered because {why}", NoticeLevel.WARNING
                     )
             if entry.mode:
                 meta += f" · {entry.mode.upper()}"
@@ -737,6 +743,11 @@ def _smooth(t: float) -> float:
     """Smoothstep: eases in and out of a transition."""
     t = max(0.0, min(1.0, t))
     return t * t * (3 - 2 * t)
+
+
+def _short(error: str, limit: int = 90) -> str:
+    error = " ".join(error.split())
+    return error if len(error) <= limit else error[: limit - 1] + "…"
 
 
 __all__ = ["MainWindow"]

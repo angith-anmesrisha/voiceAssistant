@@ -80,15 +80,15 @@ async def test_groq_then_gemini_then_local_qwen(monkeypatch: pytest.MonkeyPatch)
     router = rig(handler, monkeypatch, changes)
     result = await router.chat([{"role": "user", "content": "hi"}])
     assert (result.provider, result.model) == ("Ollama", "qwen3.5:latest")
-    assert calls.count("api.groq.com") == 3  # 1 try + 2 retries on a 503
+    # qwen, then the two fallback Groq models; all busy, so the round is tried once more.
+    assert calls.count("api.groq.com") == 6
     assert calls.count("generativelanguage.googleapis.com") == 1  # billing: no retry
     assert [a.provider for a in router.skipped] == ["Groq", "Gemini"]
     assert "FAILED_PRECONDITION" in router.skipped[1].error
     assert "Billing" in router.skipped[1].error  # says what to do about it
     assert changes == [
         "Asking Groq…",
-        "Asking Groq again (2/3)…",
-        "Asking Groq again (3/3)…",
+        "Asking Groq again (2/2)…",
         "Groq didn't answer, asking Gemini…",
         "Gemini didn't answer, asking Ollama…",
     ]
@@ -115,9 +115,11 @@ async def test_gemini_switches_to_a_model_the_key_can_use(
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         sent.append(body)
-        if body["model"] == "gemini-2.5-flash":
-            message = "models/gemini-2.5-flash is not found for API version v1main"
+        if body["model"] == "gemini-3.8-flash":
+            message = "models/gemini-3.8-flash is not found for API version v1main"
             return httpx.Response(404, json=[{"error": {"message": message}}])
+        if body["model"] == "gemini-3.5-flash-lite":
+            return httpx.Response(503, json=[{"error": {"message": "The model is overloaded."}}])
         return reply("Hello.", model=body["model"])
 
     gemini = build_providers(
@@ -125,17 +127,23 @@ async def test_gemini_switches_to_a_model_the_key_can_use(
     )["gemini"]
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     result = await gemini.chat([{"role": "user", "content": "hi"}])
-    assert result.model == "gemini-3.8-flash"
-    assert sent[0]["reasoning_effort"] == "none"  # 2.5 Flash: thinking off
-    assert sent[1]["reasoning_effort"] == "low"  # 3.x can't turn thinking off
-    assert gemini.model_for(Capability.CHAT) == "gemini-3.8-flash"
+    # 3.8 Flash missing for this key, 3.5 Flash-Lite overloaded: 3.6 Flash answers.
+    assert [b["model"] for b in sent] == [
+        "gemini-3.8-flash",
+        "gemini-3.5-flash-lite",
+        "gemini-3.6-flash",
+    ]
+    assert result.model == "gemini-3.6-flash"
+    assert sent[0]["reasoning_effort"] == "low"  # 3.x can't turn thinking off
+    assert sent[0]["max_tokens"] == 2048
+    assert gemini.model_for(Capability.CHAT) == "gemini-3.6-flash"
     await gemini.chat([{"role": "user", "content": "again"}])
-    assert sent[2]["model"] == "gemini-3.8-flash"  # remembered: no failed call first
+    assert sent[3]["model"] == "gemini-3.6-flash"  # remembered: no failed call first
 
 
 async def test_gemini_probe_picks_an_available_model(monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        ids = ["models/gemini-3.8-flash", "models/gemini-3.5-flash-lite"]
+        ids = ["models/gemini-3.5-flash-lite", "models/gemini-3.6-flash"]
         return httpx.Response(200, json={"data": [{"id": i} for i in ids]})
 
     monkeypatch.setenv("GEMINI_API_KEY", "k")
@@ -144,8 +152,8 @@ async def test_gemini_probe_picks_an_available_model(monkeypatch: pytest.MonkeyP
     )["gemini"]
     status = await gemini.probe()
     assert status.state is ProviderState.READY
-    assert gemini.model_for(Capability.CHAT) == "gemini-3.8-flash"
-    assert gemini.model_for(Capability.STT) == "gemini-3.8-flash"
+    assert gemini.model_for(Capability.CHAT) == "gemini-3.5-flash-lite"
+    assert gemini.model_for(Capability.STT) == "gemini-3.5-flash-lite"
 
 
 async def test_thought_signatures_survive_only_where_understood(
@@ -212,7 +220,7 @@ async def test_ui_names_the_provider_actually_used(qapp: QApplication) -> None:
     window.add_entry(ChatEntry(EntryKind.ASSISTANT, "Hi.", "Gemini", "gemini-3.8-flash"))
     window.refresh_providers()
     assert window.header._status_text == "AI ONLINE · GEMINI"
-    assert "Groq didn't answer (timed out); Gemini did." in window.notice.text()
+    assert window.notice.text() == "Gemini answered because Groq: timed out"
     window.quitting = True
     window.close()
 
@@ -221,3 +229,137 @@ def _attempt(provider: str, error: str) -> Any:
     from jarvis.providers.router import Attempt
 
     return Attempt(provider, error)
+
+
+async def test_groq_rate_limit_switches_model_and_says_why(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sent: list[dict[str, Any]] = []
+    limit = (
+        "Request too large for model `qwen/qwen3.8-27b` on tokens per minute (TPM): "
+        "Limit 8000, Requested 9120"
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        sent.append(body)
+        if body["model"] == "qwen/qwen3.8-27b":
+            return httpx.Response(429, json={"error": {"message": limit}})
+        return reply("Done.", model=body["model"])
+
+    monkeypatch.setenv("GROQ_API_KEY", "g")
+    groq = build_providers(
+        ProvidersConfig(), httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    )["groq"]
+    result = await groq.chat([{"role": "user", "content": "hi"}], tools=[{"type": "function"}])
+    assert result.model == "openai/gpt-oss-120b"
+    assert sent[0]["max_tokens"] == 2048 and sent[0]["reasoning_effort"] == "none"
+    assert sent[1]["reasoning_effort"] == "low"  # gpt-oss can't switch reasoning off
+    # The rate-limited model waits a minute before it is tried again.
+    await groq.chat([{"role": "user", "content": "again"}])
+    assert sent[2]["model"] == "openai/gpt-oss-120b"
+
+
+async def test_all_groq_models_limited_names_each(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        model = json.loads(request.content)["model"]
+        return httpx.Response(429, json={"error": {"message": f"Rate limit reached for {model}"}})
+
+    router = rig(handler, monkeypatch)
+    router.set_preferred("groq")
+    groq = router.provider("groq")
+    assert groq is not None
+    with pytest.raises(Exception) as caught:
+        await groq.chat([{"role": "user", "content": "hi"}])
+    text = str(caught.value)
+    assert "qwen/qwen3.8-27b: HTTP 429" in text and "llama-3.3-70b-versatile" in text
+
+
+async def test_cut_off_reply_is_marked(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        message = {"role": "assistant", "content": "Understood. Is"}
+        choice = {"message": message, "finish_reason": "length"}
+        return httpx.Response(200, json={"model": "qwen3.5:latest", "choices": [choice]})
+
+    ollama = build_providers(
+        ProvidersConfig(), httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    )["ollama"]
+    result = await ollama.chat([{"role": "user", "content": "hi"}])
+    assert result.content == "Understood. Is…"
+
+
+async def test_a_timeout_does_not_try_every_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    sent: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(json.loads(request.content)["model"])
+        raise httpx.ReadTimeout("slow")
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    gemini = build_providers(
+        ProvidersConfig(), httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    )["gemini"]
+    with pytest.raises(Exception, match="timed out"):
+        await gemini.chat([{"role": "user", "content": "hi"}])
+    assert sent == ["gemini-3.8-flash"]  # the next provider gets a turn instead
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("test the AI providers", True),
+        ("Jarvis, run diagnostics", True),
+        ("check the models", True),
+        ("test all the AIs", True),
+        ("diagnose yourself", True),
+        ("test my code", False),
+        ("check the weather", False),
+    ],
+)
+def test_diagnose_command(text: str, expected: bool) -> None:
+    from jarvis.agent.commands import diagnose_command
+
+    assert diagnose_command(text) is expected
+
+
+async def test_diagnostics_report_says_whose_side(monkeypatch: pytest.MonkeyPatch) -> None:
+    from jarvis.agent.assistant import diagnosis_report
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        host = request.url.host
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": [{"id": "qwen3.5:latest"}]})
+        if "groq" in host:
+            message = "Rate limit reached for model `qwen/qwen3.8-27b`"
+            return httpx.Response(429, json={"error": {"message": message}})
+        if "googleapis" in host:
+            return httpx.Response(400, json=GEMINI_BILLING)
+        return reply("OK", model="qwen3.5:latest")
+
+    router = rig(handler, monkeypatch)
+    results = await router.diagnose()
+    assert [(r.provider, r.ok, r.blame) for r in results] == [
+        ("Groq", False, "account"),
+        ("Gemini", False, "account"),
+        ("Ollama", True, ""),
+    ]
+    text = diagnosis_report(results)
+    assert "Groq: not working" in text and "Rate limit reached" in text
+    assert "your Gemini account, not JARVIS" in text
+    assert "Ollama: working (qwen3.5:latest" in text
+
+
+def test_whisper_guesses_on_silence_are_dropped() -> None:
+    from jarvis.providers.openai_compat import heard_text
+
+    silence = {
+        "text": "I'm going to go.",
+        "segments": [{"text": "I'm going to go.", "no_speech_prob": 0.82, "avg_logprob": -0.4}],
+    }
+    assert heard_text(silence) == ""
+    speech = {
+        "text": "Open Spotify.",
+        "segments": [{"text": " Open Spotify.", "no_speech_prob": 0.02, "avg_logprob": -0.2}],
+    }
+    assert heard_text(speech) == "Open Spotify."
+    assert heard_text({"text": " plain "}) == "plain"

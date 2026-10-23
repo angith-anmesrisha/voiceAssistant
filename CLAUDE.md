@@ -85,10 +85,24 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   collapsed.
 - Gemini returns HTTP 400 "API key not valid" for a bad key; it is classified as AUTH.
   FAILED_PRECONDITION from Gemini is account/billing side, not ours.
-- Models (round 5, owner's choice): Groq `qwen/qwen3.8-27b` for chat and vision (Preview;
-  tools + images; `reasoning_effort: "none"`), STT `whisper-large-v3-turbo`. Gemini
-  `gemini-2.5-flash` for chat/vision/STT with `reasoning_effort: "none"`; Google only serves
-  2.5 to accounts that used it before, otherwise switch back to a 3.x flash model.
+- Models: Groq `qwen/qwen3.8-27b` (owner's choice; Preview, free tier 8K tokens/min,
+  `reasoning_effort: "none"`), then `openai/gpt-oss-120b` ("low") and
+  `llama-3.3-70b-versatile` (no reasoning field) for chat when qwen is rate-limited; STT
+  `whisper-large-v3-turbo` with `verbose_json`, dropping segments with no_speech_prob ≥ 0.6
+  or avg_logprob ≤ -1 (Whisper invents "I'm going to go." from silence). Gemini
+  `gemini-3.8-flash` ("low"), then 3.5 Flash-Lite, 3.6 Flash, 2.5 Flash ("none" only
+  there): 2.5 was timing out/overloaded and is legacy-limited. Every request sends
+  `max_tokens` (`max_output_tokens`, 2048): without it Groq counted the model's full output
+  limit against 8K TPM and answered 429 every time. Tool text is kept small (no shortcut
+  catalogue, path help once in the prompt): ~2.3K tokens.
+- Model fallback inside a provider: 404/"model not found" → model dropped for the session;
+  429 → model cools down 60 s; 503 → next model now; timeout, auth, billing, bad request →
+  raise (the router moves to the next provider). An error naming several models lists each.
+  Replies cut off at the limit (`finish_reason: length`) end with "…".
+- Diagnostics: "test the AI providers" / "run diagnostics" (or the TEST AI PROVIDERS button)
+  probes each provider and sends "Reply with just the word OK." (no retries, no fallback),
+  then reports each one's model and time, or its exact error and whose side it is on
+  (`Diagnosis.blame`: account, service, network, setup, jarvis).
 - Prompt Guard (owner asked for `meta-llama/llama-prompt-guard-2-86m` on Groq): it is a
   classifier, not a chat model, so it screens text, never answers. `providers.groq.
   guard_model`/`guard_threshold` (0.8). Results of `UNTRUSTED_TOOLS` (clipboard, folder
@@ -96,16 +110,14 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   chunks; flagged tool text is withheld (ACTION "✕ Blocked…", reply marked failed, red),
   flagged titles are dropped. Guard errors fail open (logged). The user's own words are
   never screened.
-- Fallback is Groq → Gemini → Ollama (or the preferred one first). Only QUOTA and 5xx are
-  retried on the same provider (1 + `max_retries`); a timeout, network error, auth, billing
+- Fallback is Groq → Gemini → Ollama (or the preferred one first). Only 5xx is retried on
+  the same provider (1 + `max_retries`, now 1; timeouts 20 s); a timeout, network error, auth, billing
   or bad request moves to the next provider at once (retrying timeouts used to take
   minutes before switching). The router publishes `activity` ("Groq didn't answer, asking
   Gemini…") and `skipped`; the caption, corner orb and a notice show them, and the header
   names the provider tried first or the one that last answered (never a different one).
-- Gemini model fallback: `fallback_models` (3.8 Flash, 3.5 Flash-Lite, 3.6 Flash) are used
-  when the configured model is missing from `/models` at probe time or a call returns 404
-  / "model not found"; the working model is remembered. `reasoning_effort` "none" is sent
-  only to 2.5 Flash, "low" to 3.x. Tool calls keep Gemini's `extra_content` thought
+- Gemini: a configured model missing from `/models` at probe time is swapped for the first
+  listed fallback; the working model is remembered per capability. Tool calls keep Gemini's `extra_content` thought
   signature for Gemini (placeholder `skip_thought_signature_validator` for calls made by
   another provider) and have it stripped for Groq/Ollama. Google's error status
   (FAILED_PRECONDITION etc.) is shown with a plain hint.

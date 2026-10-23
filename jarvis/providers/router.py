@@ -7,6 +7,7 @@ pretends a model was used if it wasn't.
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from typing import Any, TypeVar
@@ -33,6 +34,32 @@ _ERROR_STATE = {
     ErrorKind.AUTH: ProviderState.AUTH_ERROR,
     ErrorKind.NETWORK: ProviderState.OFFLINE,
 }
+
+
+_PING = "Reply with just the word OK."
+
+
+@dataclass(frozen=True, slots=True)
+class Diagnosis:
+    provider: str
+    model: str
+    ok: bool
+    ms: int
+    detail: str  # the reply, or the provider's exact error
+    blame: str  # "" | "account" | "service" | "network" | "setup" | "jarvis"
+
+
+def _blame(error: ProviderError) -> str:
+    """Whose side a failure is on, so the user knows whether to fix a key or tell us."""
+    if error.kind in (ErrorKind.AUTH, ErrorKind.QUOTA) or "FAILED_PRECONDITION" in error.message:
+        return "account"
+    if error.kind in (ErrorKind.NO_KEY, ErrorKind.UNSUPPORTED):
+        return "setup"
+    if error.kind is ErrorKind.UNAVAILABLE:
+        return "service"
+    if error.kind in (ErrorKind.NETWORK, ErrorKind.TIMEOUT):
+        return "network"
+    return "jarvis"  # a request the provider rejected: likely ours to fix
 
 
 @dataclass(frozen=True, slots=True)
@@ -208,6 +235,32 @@ class ProviderRouter:
         self.skipped = failed
         self._set_activity("")
         raise AllProvidersFailedError(capability, attempts)
+
+    async def diagnose(self) -> list[Diagnosis]:
+        """Send a tiny request to every provider (no retries, no fallback) and report."""
+
+        async def check(provider: Provider) -> Diagnosis:
+            status = await provider.probe()
+            self._set_status(provider.name, status)
+            if status.state in (ProviderState.NO_KEY, ProviderState.DISABLED):
+                return Diagnosis(provider.display_name, "", False, 0, status.detail, "setup")
+            if status.state is ProviderState.OFFLINE and provider.name == "ollama":
+                return Diagnosis(provider.display_name, "", False, 0, status.detail, "setup")
+            started = time.perf_counter()
+            try:
+                result = await provider.chat([{"role": "user", "content": _PING}])
+            except ProviderError as exc:
+                ms = int((time.perf_counter() - started) * 1000)
+                model = provider.model_for(Capability.CHAT)
+                return Diagnosis(provider.display_name, model, False, ms, exc.message, _blame(exc))
+            except Exception as exc:  # a bug on our side: say so
+                return Diagnosis(provider.display_name, "", False, 0, type(exc).__name__, "jarvis")
+            ms = int((time.perf_counter() - started) * 1000)
+            self._set_status(provider.name, ProviderStatus(ProviderState.READY, latency_ms=ms))
+            return Diagnosis(provider.display_name, result.model, True, ms, result.content, "")
+
+        providers = [self._providers[name] for name in self._priority]
+        return list(await asyncio.gather(*(check(p) for p in providers)))
 
     async def chat(
         self,

@@ -31,15 +31,20 @@ class ProviderSettings(BaseModel):
     # Sent as the OpenAI "reasoning_effort" field when set (e.g. "none" turns off a
     # local model's thinking, which is slow on an integrated GPU).
     reasoning_effort: str = ""
+    # Longest reply asked for. Keeps replies short for speech, and keeps each request
+    # inside per-minute token limits (they count the requested output too).
+    max_output_tokens: int = 2048
+    # Other models of this provider, tried in order when the one in use is missing for
+    # this account, rate-limited, busy or too slow.
+    fallback_models: list[str] = Field(default_factory=list)
     # Prompt-injection classifier run over outside text (clipboard, screen, files) before
     # it reaches the chat model. Empty = no screening on this provider.
-    # Tried in order when the configured model isn't available to this account.
-    fallback_models: list[str] = Field(default_factory=list)
     guard_model: str = ""
     # Attack probability (0..1) at or above which text is withheld.
     guard_threshold: float = 0.8
-    timeout_s: float = 30.0
-    max_retries: int = 2
+    timeout_s: float = 20.0
+    # Extra tries on the same provider, only for "server busy" (5xx). Other errors move on.
+    max_retries: int = 1
 
 
 def _groq() -> ProviderSettings:
@@ -52,6 +57,9 @@ def _groq() -> ProviderSettings:
         vision_model="qwen/qwen3.8-27b",
         stt_model="whisper-large-v3-turbo",
         reasoning_effort="none",
+        # When qwen is rate-limited (free tier: 8K tokens/min, 1K requests/day per model),
+        # these Groq production models answer instead (console.groq.com/docs/models).
+        fallback_models=["openai/gpt-oss-120b", "llama-3.3-70b-versatile"],
         # The owner asked for Llama Prompt Guard 2 (86M). It is a classifier, not a chat
         # model (console.groq.com/docs/model/meta-llama/llama-prompt-guard-2-86m, 512
         # token input), so it screens untrusted text; qwen still answers.
@@ -67,12 +75,14 @@ def _gemini() -> ProviderSettings:
         # The owner asked for 2.5 models. ai.google.dev/gemini-api/docs/deprecations
         # (2026-10-23): still served, but only to accounts that used 2.5 before; if yours
         # reports the model missing, set these back to "gemini-3.8-flash".
-        chat_model="gemini-2.5-flash",
-        vision_model="gemini-2.5-flash",
-        stt_model="gemini-2.5-flash",
-        # If 2.5 isn't served to this key, these current models (ai.google.dev/gemini-api/
-        # docs/models, 2026-10-23) are tried in order, automatically.
-        fallback_models=["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash"],
+        # Current stable Flash (ai.google.dev/gemini-api/docs/models, 2026-10-23). 2.5 is
+        # only served to accounts that used it before and was timing out/overloaded, so it
+        # is the last fallback now. A model that is busy, slow, rate-limited or missing for
+        # this key is skipped for the next one automatically.
+        chat_model="gemini-3.8-flash",
+        vision_model="gemini-3.8-flash",
+        stt_model="gemini-3.8-flash",
+        fallback_models=["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"],
         # "none" disables thinking on 2.5 Flash; 3.x models get "low" (they can't turn it off).
         reasoning_effort="none",
     )

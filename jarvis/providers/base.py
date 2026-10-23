@@ -58,7 +58,7 @@ class ErrorKind(StrEnum):
 # Worth another try on the same provider. A timeout or a dropped connection moves on to
 # the next provider straight away: waiting for the same one again is what made fallback
 # feel stuck.
-_RETRYABLE = {ErrorKind.QUOTA, ErrorKind.UNAVAILABLE}
+_RETRYABLE = {ErrorKind.UNAVAILABLE}
 
 
 class ProviderError(Exception):

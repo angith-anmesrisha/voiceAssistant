@@ -11,14 +11,14 @@ from typing import Any
 
 from loguru import logger
 
-from jarvis.agent.commands import AUTO, provider_command
+from jarvis.agent.commands import AUTO, diagnose_command, provider_command
 from jarvis.agent.guard import PromptGuard
 from jarvis.agent.prompts import system_prompt, wants_screen
 from jarvis.app.events import ChatEntry, EntryKind, EventBus
 from jarvis.app.state import AppState, StateMachine
 from jarvis.providers.base import Capability, ChatResult, Message, ToolCall
 from jarvis.providers.openai_compat import image_part
-from jarvis.providers.router import AllProvidersFailedError, ProviderRouter
+from jarvis.providers.router import AllProvidersFailedError, Diagnosis, ProviderRouter
 from jarvis.storage.db import HistoryStore
 from jarvis.tools.registry import ArgumentError, Risk, ToolRegistry, ToolResult, validate_args
 
@@ -177,6 +177,26 @@ class Assistant:
         await self._emit(EntryKind.ASSISTANT, reply, mode="settings")
         return Reply(reply, ok=True)
 
+    async def _diagnose(self, conversation: int) -> Reply:
+        """Test every AI with a one-word request and say exactly what each one did."""
+        await self._state.transition(AppState.THINKING)
+        try:
+            results = await self._router.diagnose()
+        finally:
+            if self._state.state is AppState.THINKING:
+                await self._state.transition(AppState.IDLE)
+        reply = diagnosis_report(results)
+        await self._store.add_message(
+            conversation, {"role": "assistant", "content": reply}, mode="diagnostics"
+        )
+        await self._emit(
+            EntryKind.ASSISTANT,
+            reply,
+            mode="diagnostics",
+            failed=not any(r.ok for r in results),
+        )
+        return Reply(reply, ok=True)
+
     async def _context(self) -> list[Message]:
         """Recent user/assistant text turns (tool traffic is not replayed)."""
         stored = await self._store.messages(await self.conversation_id(), limit=200)
@@ -197,6 +217,8 @@ class Assistant:
         shown = text or "What's on my screen?"
         await self._emit(EntryKind.USER, shown)
         await self._store.add_message(conversation, {"role": "user", "content": shown})
+        if diagnose_command(text):
+            return await self._diagnose(conversation)
         choice = provider_command(text)
         if choice is not None:
             return await self._switch_provider(conversation, choice)
@@ -357,6 +379,32 @@ def says_it_cannot(reply: str) -> bool:
 
 class _NoScreenError(Exception):
     pass
+
+
+_BLAME = {
+    "account": "That's a limit or setting on your {p} account, not JARVIS.",
+    "service": "{p}'s servers are busy; this usually clears up by itself.",
+    "network": "No answer in time: check the internet, or {p} is slow right now.",
+    "setup": "{p} isn't set up yet.",
+    "jarvis": "{p} rejected JARVIS's request; that one is for Claude to fix.",
+}
+
+
+def diagnosis_report(results: list[Diagnosis]) -> str:
+    lines = ["I sent each AI a one-word test."]
+    for r in results:
+        if r.ok:
+            seconds = f"{r.ms / 1000:.1f} s"
+            lines.append(f"{r.provider}: working ({r.model}, answered in {seconds}).")
+            continue
+        where = f" with {r.model}" if r.model else ""
+        lines.append(
+            f"{r.provider}: not working{where}. It said: {r.detail}. "
+            + _BLAME.get(r.blame, "").format(p=r.provider)
+        )
+    if not any(r.ok for r in results):
+        lines.append("None of them answered, so I can't reply to requests until one works.")
+    return "\n".join(lines)
 
 
 def _failure_message(exc: AllProvidersFailedError) -> str:

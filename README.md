@@ -37,6 +37,8 @@ More renders (listening, thinking, speaking, executing, confirmations, offline) 
    `ollama pull qwen3.5:latest`. JARVIS uses `qwen3.5:latest` for chat and, since it can see
    images, for screen questions too (thinking is turned off so replies stay quick). If it
    isn't installed, any other installed model that can see images is used for the screen.
+   If local replies stop mid-sentence, give Ollama more room: set the user environment
+   variable `OLLAMA_CONTEXT_LENGTH` to `8192` and restart Ollama.
 
 ## Run
 
@@ -65,12 +67,16 @@ python -m jarvis --hidden   # starts in the tray
   Gemini from now on", "switch to the local model", "go back to automatic". The choice is
   remembered. If the chosen one isn't available, JARVIS says so and uses the next one,
   and every answer is labelled with the provider that really produced it.
-- **Automatic fallback:** Groq, then Gemini, then your local `qwen3.5:latest`. A busy or
-  overloaded service is retried twice; a timeout, a rejected key or a billing problem
-  moves on to the next one at once. While it works, the caption says who it's asking
-  ("Groq didn't answer, asking Gemini…"), and a note says when a backup answered. If
-  Gemini 2.5 isn't available to your key, JARVIS switches to Gemini 3.8 Flash (then 3.5
-  Flash-Lite, 3.6 Flash) by itself.
+- **Automatic fallback:** Groq, then Gemini, then your local `qwen3.5:latest`. Inside
+  Groq, a rate-limited qwen hands over to GPT-OSS 120B, then Llama 3.3 70B; Gemini uses
+  3.8 Flash, then 3.5 Flash-Lite, 3.6 Flash and 2.5 Flash. A timeout, a rejected key or a
+  billing problem moves on to the next service at once. While it works, the caption says
+  who it's asking ("Groq didn't answer, asking Gemini…"), and a note says why a backup
+  answered.
+- **Something not answering?** Say or type "test the AI providers", or press TEST AI
+  PROVIDERS in the details panel. Each AI gets a one-word request, and JARVIS tells you
+  exactly what each one said back and whether the problem is on your account (key, quota,
+  billing), on their servers, your network, or JARVIS.
 - If a command **can't be carried out** (a tool fails, you decline it, JARVIS says it
   can't, or no AI can answer), the whole UI turns red for a few seconds, including the
   corner orb and its caption, then goes back to blue.

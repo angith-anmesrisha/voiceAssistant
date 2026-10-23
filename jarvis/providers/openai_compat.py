@@ -110,6 +110,18 @@ _MODEL_GONE = (
 )
 
 
+_COOL_DOWN_S = 60.0
+
+
+def _combined(provider: str, errors: list[tuple[str, ProviderError]]) -> ProviderError:
+    """One error for a provider whose models all failed, naming each model's reason."""
+    if len(errors) == 1:
+        return errors[0][1]
+    last = errors[-1][1]
+    detail = "; ".join(f"{model}: {exc.message}" for model, exc in errors)
+    return ProviderError(provider, last.kind, detail, last.status)
+
+
 def model_unavailable(error: ProviderError) -> bool:
     """The provider works, but not this model for this account: try another model."""
     if error.kind is not ErrorKind.BAD_REQUEST:
@@ -152,9 +164,10 @@ class OpenAICompatibleProvider(Provider):
         self.display_name = display_name
         self.settings = settings
         self._client = client or httpx.AsyncClient()
-        # configured model -> model that actually works for this account (see fallback_models)
-        self._swapped: dict[str, str] = {}
-        self._dead: set[str] = set()
+        # (capability, configured model) -> the model that works for this account now
+        self._swapped: dict[tuple[Capability, str], str] = {}
+        self._dead: set[str] = set()  # not available to this account at all
+        self._cooling: dict[str, float] = {}  # rate-limited model -> when to try it again
 
     # --- configuration ---
 
@@ -188,25 +201,38 @@ class OpenAICompatibleProvider(Provider):
 
     def model_for(self, capability: Capability) -> str:
         model = self.configured_model(capability)
-        return self._swapped.get(model, model)
+        return self._swapped.get((capability, model), model)
 
-    def _candidates(self, model: str) -> list[str]:
-        """The model to try now, then the configured fallbacks, minus ones that failed."""
-        start = self._swapped.get(model, model)
-        names = [start, model, *self.settings.fallback_models]
-        seen: list[str] = []
+    def fallbacks_for(self, capability: Capability) -> list[str]:
+        """Other models to use when the configured one can't answer (chat only by default:
+        not every fallback can see images)."""
+        return self.settings.fallback_models if capability is Capability.CHAT else []
+
+    def _candidates(self, capability: Capability) -> list[str]:
+        """Models to try, in order: the one in use, the configured one, the fallbacks.
+        Unavailable models are left out; rate-limited ones go last."""
+        names = [
+            self.model_for(capability),
+            self.configured_model(capability),
+            *self.fallbacks_for(capability),
+        ]
+        now = time.monotonic()
+        ready: list[str] = []
+        cooling: list[str] = []
         for name in names:
-            if name and name not in seen and name not in self._dead:
-                seen.append(name)
-        return seen
+            if not name or name in ready or name in cooling or name in self._dead:
+                continue
+            (cooling if self._cooling.get(name, 0.0) > now else ready).append(name)
+        return ready + cooling
 
-    def _use_model(self, configured: str, model: str) -> None:
-        if model != self._swapped.get(configured, configured):
-            logger.warning("{}: using {} instead of {}", self.display_name, model, configured)
+    def _use_model(self, capability: Capability, model: str) -> None:
+        configured = self.configured_model(capability)
+        if model != self.model_for(capability):
+            logger.warning("{}: now using {} for {}", self.display_name, model, capability.value)
         if model == configured:
-            self._swapped.pop(configured, None)
+            self._swapped.pop((capability, configured), None)
         else:
-            self._swapped[configured] = model
+            self._swapped[(capability, configured)] = model
 
     def reasoning_for(self, model: str) -> str:
         return self.settings.reasoning_effort
@@ -303,36 +329,54 @@ class OpenAICompatibleProvider(Provider):
                 self.display_name, ErrorKind.UNSUPPORTED, f"no {capability.value} model set"
             )
         outgoing = self.outgoing(messages)
-        candidates = self._candidates(configured)
+        candidates = self._candidates(capability)
         if not candidates:
             raise ProviderError(
                 self.display_name, ErrorKind.BAD_REQUEST, "none of the configured models works"
             )
-        for index, model in enumerate(candidates):
+        errors: list[tuple[str, ProviderError]] = []
+        data: dict[str, Any] | None = None
+        for model in candidates:
             body: dict[str, Any] = {"model": model, "messages": outgoing}
             if effort := self.reasoning_for(model):
                 body["reasoning_effort"] = effort
+            if self.settings.max_output_tokens:
+                # Also keeps requests inside per-minute token limits, which count the
+                # requested output (Groq's free tier allows 8K tokens a minute).
+                body["max_tokens"] = self.settings.max_output_tokens
             if tools:
                 body["tools"] = tools
             try:
                 data = await self._post("chat/completions", json=body)
             except ProviderError as exc:
-                if model_unavailable(exc) and index + 1 < len(candidates):
-                    self._dead.add(model)
-                    continue  # this account can't use the model: try the next one
-                raise
-            self._use_model(configured, model)
+                errors.append((model, exc))
+                if model_unavailable(exc):
+                    self._dead.add(model)  # this account can't use it: never again
+                elif exc.kind is ErrorKind.QUOTA:
+                    self._cooling[model] = time.monotonic() + _COOL_DOWN_S
+                elif exc.kind is not ErrorKind.UNAVAILABLE:
+                    # Key, billing or a bad request: another model won't help. A timeout
+                    # already cost the user 20 s: let the router try the next provider.
+                    raise _combined(self.display_name, errors) from exc
+                continue  # try the next model on the same provider
+            self._use_model(capability, model)
             break
+        if data is None:
+            raise _combined(self.display_name, errors)
         try:
             message = data["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as exc:
             raise ProviderError(
                 self.display_name, ErrorKind.UNAVAILABLE, "reply had no message"
             ) from exc
+        content = (message.get("content") or "").strip()
+        if data["choices"][0].get("finish_reason") == "length" and content:
+            logger.warning("{} reply was cut off at the output limit", self.display_name)
+            content += "…"
         return ChatResult(
             provider=self.display_name,
             model=str(data.get("model") or model),
-            content=(message.get("content") or "").strip(),
+            content=content,
             tool_calls=parse_tool_calls(message),
             message=clean_assistant_message(message),
         )
@@ -361,9 +405,29 @@ class OpenAICompatibleProvider(Provider):
         data = await self._post(
             "audio/transcriptions",
             files={"file": ("speech.wav", wav, "audio/wav")},
-            data={"model": model, "response_format": "json", "temperature": "0"},
+            data={"model": model, "response_format": "verbose_json", "temperature": "0"},
         )
-        return Transcription(str(data.get("text", "")).strip(), self.display_name, model)
+        return Transcription(heard_text(data), self.display_name, model)
+
+
+# Whisper invents short phrases ("I'm going to go.", "Thank you.") from noise or silence.
+# Segments it rates as probably not speech, or is very unsure about, are dropped.
+_NO_SPEECH_PROB = 0.6
+_MIN_AVG_LOGPROB = -1.0
+
+
+def heard_text(data: dict[str, Any]) -> str:
+    segments = data.get("segments")
+    if not isinstance(segments, list) or not segments:
+        return str(data.get("text", "")).strip()
+    kept = [
+        str(seg.get("text", "")).strip()
+        for seg in segments
+        if isinstance(seg, dict)
+        and float(seg.get("no_speech_prob", 0.0)) < _NO_SPEECH_PROB
+        and float(seg.get("avg_logprob", 0.0)) > _MIN_AVG_LOGPROB
+    ]
+    return " ".join(t for t in kept if t).strip()
 
 
 def audio_part(wav: bytes) -> dict[str, Any]:

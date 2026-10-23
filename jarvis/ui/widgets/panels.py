@@ -99,6 +99,11 @@ class SystemPanel(GlassPanel):
         self.active = body_label("Last answer: —", 8.6, TEXT_DIM)
         self.active.setWordWrap(True)
         self.body.addWidget(self.active)
+        # Sends each AI a one-word request and reports exactly what came back.
+        self.test = ConfirmOverlay._button("TEST AI PROVIDERS", CYAN)
+        self.test.setMinimumSize(0, 32)
+        self.test.setToolTip("Send each AI a tiny request and show exactly what happens")
+        self.body.addWidget(self.test)
 
 
 class NetworkPanel(GlassPanel):
@@ -134,10 +139,10 @@ class SafetyPanel(GlassPanel):
     """Always-visible summary of what JARVIS may do on its own."""
 
     _ROWS = (
-        (CYAN, "LOW", "Read-only and approved apps or sites: runs directly"),
-        (AMBER, "MEDIUM", "Typing, shortcuts, other sites, lock or sleep: asks first"),
-        (DANGER, "HIGH", "Shutdown or restart: you must type CONFIRM"),
-        (TEXT_MUTED, "BLOCKED", "Shell commands, file deletion, system settings"),
+        (CYAN, "LOW", "Apps, sites, search, copy, listing files, new folders: runs directly"),
+        (AMBER, "MEDIUM", "Typing, paste, moving or deleting a file, lock, sleep: asks first"),
+        (DANGER, "HIGH", "Deleting a folder, shutdown or restart: you must type CONFIRM"),
+        (TEXT_MUTED, "BLOCKED", "Shell commands, running programs, system folders and settings"),
     )
 
     def __init__(self, parent: QWidget | None = None):

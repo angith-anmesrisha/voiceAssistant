@@ -43,6 +43,13 @@ _TRANSCRIBE_PROMPT = (
 class GroqProvider(OpenAICompatibleProvider):
     """Primary online provider."""
 
+    def reasoning_for(self, model: str) -> str:
+        if model.startswith("qwen/"):
+            return self.settings.reasoning_effort  # "none": no thinking
+        if model.startswith("openai/gpt-oss"):
+            return "low"  # gpt-oss can't turn reasoning off
+        return ""  # Llama has no reasoning setting
+
 
 class GeminiProvider(OpenAICompatibleProvider):
     """Secondary online provider (Gemini's OpenAI-compatible endpoint).
@@ -50,6 +57,9 @@ class GeminiProvider(OpenAICompatibleProvider):
     If the configured model isn't available to this account (2.5 models are only served to
     accounts that used them before), the next of ``fallback_models`` that is gets used.
     """
+
+    def fallbacks_for(self, capability: Capability) -> list[str]:
+        return self.settings.fallback_models  # every Gemini model hears and sees
 
     def reasoning_for(self, model: str) -> str:
         effort = self.settings.reasoning_effort
@@ -95,9 +105,9 @@ class GeminiProvider(OpenAICompatibleProvider):
                 configured = self.configured_model(capability)
                 if not configured or configured in listed:
                     continue
-                usable = [m for m in self._candidates(configured) if m in listed]
+                usable = [m for m in self._candidates(capability) if m in listed]
                 if usable:
-                    self._use_model(configured, usable[0])
+                    self._use_model(capability, usable[0])
                 else:
                     return ProviderStatus(
                         ProviderState.MODEL_MISSING,

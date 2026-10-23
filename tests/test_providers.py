@@ -69,7 +69,7 @@ async def test_tool_calls_are_parsed(monkeypatch: pytest.MonkeyPatch) -> None:
     [
         (401, ErrorKind.AUTH, False),
         (403, ErrorKind.AUTH, False),
-        (429, ErrorKind.QUOTA, True),
+        (429, ErrorKind.QUOTA, False),  # another model or provider, not a retry,
         (400, ErrorKind.BAD_REQUEST, False),
         (503, ErrorKind.UNAVAILABLE, True),
     ],

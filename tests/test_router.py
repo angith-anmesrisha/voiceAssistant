@@ -85,7 +85,7 @@ async def test_uses_first_provider_and_reports_it() -> None:
 
 
 async def test_retries_transient_errors_then_succeeds() -> None:
-    groq = FakeProvider("groq", [ErrorKind.QUOTA, ErrorKind.UNAVAILABLE])
+    groq = FakeProvider("groq", [ErrorKind.UNAVAILABLE, ErrorKind.UNAVAILABLE])
     result = await make(groq).chat([])
     assert groq.calls == 3
     assert result.provider == "Groq"
