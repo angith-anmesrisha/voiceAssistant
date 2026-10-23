@@ -17,7 +17,7 @@ Output/
 # Secrets and local data (API key lives in Windows Credential Manager, never in files)
 .env
 *.env
-secrets.*
+/secrets.*
 *.sqlite
 *.db
 logs/
