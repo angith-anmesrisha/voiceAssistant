@@ -10,8 +10,11 @@ working rules and safety rules still apply where they don't conflict.
 - Work on a branch and open a PR to `main`. Never commit secrets.
 - Verify model names and API shapes against provider docs before use. Model names live in
   config only.
-- Every PC action is a tool in `jarvis/tools/builtin.py` with a `Risk`. There is no shell,
-  file, or registry tool, and none may be added. Never log audio, API keys, or dictated text.
+- Every PC action is a tool in `jarvis/tools/builtin.py` with a `Risk`. There is no shell or
+  registry tool, and none may be added. File tools (owner-approved in round 5) stay scoped
+  by `tools/files.py`: user folders and non-system drives only, Recycle Bin instead of
+  delete, no overwrite, never open runnable files. Never log audio, API keys, or dictated
+  text (or window titles).
 - Never claim a provider/model answered unless it did; the UI shows the real provider/model.
 
 ## Stack
@@ -39,10 +42,14 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 - `tools/`: `apps.py` (`AppIndex` of installed apps: Start menu .lnk/.url + shell:AppsFolder,
   minus uninstallers/help/links and blocked shells/system editors; fuzzy `best_match`),
   `registry.py` (`Risk`, `ToolSpec`, arg validation), `desktop.py` (`WindowsDesktop`:
-  approved launches with `shell=False`, pynput keys/typing, lock/sleep, delayed shutdown),
-  `builtin.py` (the tool set).
+  approved launches with `shell=False`, pynput keys/typing, clipboard, lock/sleep, delayed
+  shutdown), `files.py` (`FileArea`: allowed roots, blocked system folders, Recycle Bin via
+  SHFileOperationW), `shortcuts.py` (`SHORTCUTS` name → keys/risk/what, `parse_combo`
+  refuses Win+R/Win+X/Ctrl+Alt+Del), `builtin.py` (the tool set).
 - `agent/`: `commands.py` ("use Gemini from now on" → provider switch, no model call),
-  `prompts.py` (one system prompt; `wants_screen` regex), `assistant.py` (one turn:
+  `prompts.py` (one system prompt; `wants_screen` regex; `context` block marked as
+  information), `context.py` (`situation`: active window, other open windows, AI choice),
+  `assistant.py` (keeps the last 8 actions for context; one turn:
   history, screen fast path, otherwise a tool loop with tools + `look_at_screen`,
   confirmations).
 - `voice/`: `audio_io.py` (mic → WAV recorder, `EndOfSpeech` for hands-free), `tts.py`
@@ -76,6 +83,18 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   Typing while recording discards the recording. Identical consecutive error cards are
   collapsed.
 - Gemini returns HTTP 400 "API key not valid" for a bad key; it is classified as AUTH.
+  FAILED_PRECONDITION from Gemini is account/billing side, not ours.
+- Models (round 5, owner's choice): Groq `qwen/qwen3.8-27b` for chat and vision (Preview;
+  tools + images; `reasoning_effort: "none"`), STT `whisper-large-v3-turbo`. Gemini
+  `gemini-2.5-flash` for chat/vision/STT with `reasoning_effort: "none"`; Google only serves
+  2.5 to accounts that used it before, otherwise switch back to a 3.x flash model.
+- Qt 6 sets per-monitor DPI awareness itself; calling SetProcessDpiAwareness first makes
+  Qt log "Access is denied", so we don't.
+- Follow-up conversation: a wake word starts a conversation; after each reply the
+  controller listens again hands-free with `no_speech_s = voice.follow_up_s` (30). Silence
+  for that long, typing, a too-short clip or a mic error ends it (`ConversationChanged`).
+  The window keeps the reply card up and shows "STILL LISTENING" meanwhile. Push-to-talk
+  doesn't start a conversation.
 - Medium risk asks Yes/No; High risk requires typing CONFIRM. Shutdown/restart run with a
   60 s delay and can be cancelled.
 - Screen, web, and file text is treated as information, never instructions (in every prompt).
@@ -106,7 +125,8 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   declined with no later success, or the reply opens with "I can't…"; see
   `says_it_cannot`), or an ACTION starting with "✕"/"Declined" tints the
   window (red wash and edge), the orbs and the reply card red for 6 s or until the next
-  request.
+  request. The corner overlay turns red too (`OrbOverlay.set_alarm`), and is shown for
+  7 s on a failure if the main window isn't in front. Listening doesn't clear it.
 - Animation: one `FrameClock`; layout transitions are critically damped springs
   (`Tween`); orb layers are cached at exact size when still and at bucketed sizes while
   gliding (smooth scaled blits are ~30x slower than plain ones in the raster engine);
@@ -119,6 +139,9 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   tools are untested on real Windows so far.
 - The wake word needs a pause after "Jarvis"; words said in the same breath are lost.
 - No settings window yet; edit `settings.json` in the data dir.
+- File tools, clipboard, the Recycle Bin call and window-title context are untested on
+  real Windows. `press_keys`/`type_text` could still drive an address bar; both ask first
+  and show what they'll do.
 
 ## Current status
 JARVIS rebuild (replaces the Hitodama Gemini Live loop from PR #1): built, awaiting owner

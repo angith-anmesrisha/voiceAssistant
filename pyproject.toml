@@ -52,7 +52,7 @@ packages = ["jarvis", "tests"]
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["qasync", "qasync.*", "sounddevice", "pynput", "pynput.*", "win32event", "win32api", "winerror", "win32com", "win32com.*", "pythoncom", "psutil", "pytestqt.*"]
+module = ["qasync", "qasync.*", "sounddevice", "pynput", "pynput.*", "win32event", "win32api", "win32clipboard", "winerror", "win32com", "win32com.*", "pythoncom", "psutil", "pytestqt.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -87,12 +87,22 @@ class OrbOverlay(QWidget):
         self.caption = _Caption(self)
         self.caption.setFixedWidth(_CAPTION_W)
         self.caption.hide()
+        self.alarm = False
         self.resize(_CAPTION_W + 12 + ORB_SIZE, ORB_SIZE + 40)
 
     def say(self, title: str, body: str = "", *, error: bool = False) -> None:
-        self.caption.set_text(title, body, DANGER if error else CYAN)
+        self.caption.set_text(title, body, DANGER if error or self.alarm else CYAN)
         self.caption.setVisible(bool(title or body))
         self._layout()
+
+    def set_alarm(self, on: bool) -> None:
+        """Red orb and caption: the last command didn't work."""
+        if on == self.alarm:
+            return
+        self.alarm = on
+        self.orb.set_alarm(on)
+        caption = self.caption
+        caption.set_text(caption.title.text(), caption.body.text(), DANGER if on else CYAN)
 
     def place(self) -> None:
         """Bottom-right of the screen with the mouse (or the primary screen)."""

@@ -5,13 +5,14 @@ from __future__ import annotations
 import itertools
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from PySide6.QtWidgets import QApplication
 
 from jarvis.agent.commands import AUTO, provider_command
 from jarvis.app.config import load_settings, save_choice
-from jarvis.app.events import ChatEntry, EntryKind, WakeWordHeard
+from jarvis.app.events import ChatEntry, ConversationChanged, EntryKind, WakeWordHeard
 from jarvis.app.state import AppState
 from jarvis.providers.base import ProviderState, ProviderStatus
 from jarvis.ui import theme
@@ -128,7 +129,67 @@ async def test_wake_word_listens_and_sends_when_you_go_quiet() -> None:
     await settle()
     assert rig.assistant.calls == [("open notepad", True)]
     final: AppState = rig.state.state
+    assert final is AppState.LISTENING  # the conversation goes on without the wake word
+
+
+def speak(rig: Any, chunks: list[bytes]) -> None:
+    for chunk in chunks:
+        if rig.mic.on_chunk is not None:
+            rig.mic.on_chunk(chunk)
+
+
+async def test_follow_up_needs_no_wake_word_until_30s_of_silence() -> None:
+    controller, rig = make_controller()
+    changes: list[ConversationChanged] = []
+
+    async def on_change(event: ConversationChanged) -> None:
+        changes.append(event)
+
+    rig.bus.subscribe(ConversationChanged, on_change)
+    await rig.bus.publish(WakeWordHeard())
+    speak(rig, [QUIET] * 6 + [LOUD] * 30 + [QUIET] * 40)
+    await settle()
+    assert controller.in_conversation and rig.state.state is AppState.LISTENING
+    assert rig.speaker.spoken == ["answer to open notepad"]  # spoke before listening again
+    # A follow-up, no wake word: answered, then listening again.
+    speak(rig, [QUIET] * 6 + [LOUD] * 30 + [QUIET] * 40)
+    await settle()
+    assert len(rig.assistant.calls) == 2
+    assert rig.state.state is AppState.LISTENING
+    # 10 s of quiet is not enough to end it ...
+    speak(rig, [QUIET] * 310)
+    await settle()
+    assert controller.in_conversation and rig.state.state is AppState.LISTENING
+    # ... 30 s is: back to needing the wake word, and nothing was sent.
+    speak(rig, [QUIET] * 650)
+    await settle()
+    assert not controller.in_conversation
+    final: AppState = rig.state.state
     assert final is AppState.IDLE
+    assert len(rig.assistant.calls) == 2
+    assert [c.active for c in changes] == [True, True, True, False]
+    assert [c.listening_again for c in changes] == [False, True, True, False]
+
+
+async def test_typing_ends_the_conversation() -> None:
+    controller, rig = make_controller()
+    await rig.bus.publish(WakeWordHeard())
+    speak(rig, [QUIET] * 6 + [LOUD] * 30 + [QUIET] * 40)
+    await settle()
+    assert controller.in_conversation and controller.listening
+    assert controller.submit("what time is it")
+    await settle()
+    assert not controller.in_conversation and not controller.listening
+    assert rig.state.state is AppState.IDLE
+
+
+async def test_push_to_talk_does_not_start_a_conversation() -> None:
+    controller, rig = make_controller()
+    await controller.start_listening()
+    rig.mic.on_chunk(b"\x10\x00" * 16_000)
+    await controller.stop_listening()
+    await settle()
+    assert not controller.in_conversation and rig.state.state is AppState.IDLE
 
 
 async def test_wake_word_without_speech_is_dropped_quietly() -> None:

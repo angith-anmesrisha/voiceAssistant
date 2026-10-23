@@ -36,12 +36,15 @@ class ProviderSettings(BaseModel):
 
 
 def _groq() -> ProviderSettings:
-    # Model IDs checked against console.groq.com/docs/models on 2026-10-23.
+    # Checked against console.groq.com/docs/model/qwen/qwen3.8-27b on 2026-10-23: tools
+    # and image input; reasoning_effort "none" turns thinking off (replies come faster).
     return ProviderSettings(
         base_url="https://api.groq.com/openai/v1",
         api_key_env="GROQ_API_KEY",
-        chat_model="openai/gpt-oss-120b",
+        chat_model="qwen/qwen3.8-27b",
+        vision_model="qwen/qwen3.8-27b",
         stt_model="whisper-large-v3-turbo",
+        reasoning_effort="none",
     )
 
 
@@ -50,9 +53,13 @@ def _gemini() -> ProviderSettings:
     return ProviderSettings(
         base_url="https://generativelanguage.googleapis.com/v1beta/openai",
         api_key_env="GEMINI_API_KEY",
-        chat_model="gemini-3.8-flash",
-        vision_model="gemini-3.8-flash",
-        stt_model="gemini-3.8-flash",
+        # The owner asked for 2.5 models. ai.google.dev/gemini-api/docs/deprecations
+        # (2026-10-23): still served, but only to accounts that used 2.5 before; if yours
+        # reports the model missing, set these back to "gemini-3.8-flash".
+        chat_model="gemini-2.5-flash",
+        vision_model="gemini-2.5-flash",
+        stt_model="gemini-2.5-flash",
+        reasoning_effort="none",  # "none" disables thinking on 2.5 Flash (OpenAI compat docs)
     )
 
 
@@ -105,6 +112,9 @@ class VoiceSettings(BaseModel):
     wake_word: bool = True
     wake_phrases: list[str] = Field(default_factory=lambda: ["Jarvis", "Hey Jarvis"])
     wake_min_confidence: str = "normal"  # low | normal | high
+    # After answering a wake-word request, keep listening this long for a follow-up
+    # without the wake word. 0 turns it off.
+    follow_up_s: float = 30.0
 
 
 def _default_apps() -> dict[str, str]:

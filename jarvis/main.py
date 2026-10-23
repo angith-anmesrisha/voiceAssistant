@@ -50,6 +50,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     import httpx
 
     from jarvis.agent.assistant import Assistant
+    from jarvis.agent.context import situation
     from jarvis.controller import AppController
     from jarvis.providers.backends import build_providers
     from jarvis.providers.router import ProviderRouter
@@ -116,6 +117,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         history_messages=settings.history_messages,
         max_tool_rounds=settings.tools.max_tool_rounds,
         on_prefer=lambda name: save_choice("providers", "preferred", name or ""),
+        situation=situation(desktop, router),
     )
     speaker = Speaker(settings.voice.tts_voice, settings.voice.tts_rate)
     speaker.start()
@@ -251,12 +253,8 @@ def run(argv: list[str] | None = None) -> int:
             logger.warning("{} is already running; exiting", APP_NAME)
             return 0
 
-        if sys.platform == "win32":
-            import ctypes
-
-            with contextlib.suppress(Exception):  # crisp text on high-DPI screens
-                ctypes.windll.shcore.SetProcessDpiAwareness(2)  # type: ignore[attr-defined]
-
+        # Qt 6 makes the process per-monitor DPI aware (v2) itself; setting it here first
+        # made Qt's own call fail with "Access is denied".
         app = QApplication.instance() or QApplication(sys.argv)
         assert isinstance(app, QApplication)
         app.setApplicationName(APP_NAME)

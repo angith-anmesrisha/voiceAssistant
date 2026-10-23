@@ -151,11 +151,14 @@ class Recorder:
         """For hands-free recordings: whether anyone spoke (True for push-to-talk)."""
         return self._endpoint is None or self._endpoint.heard_speech
 
-    def start(self, on_done: Callable[[], object] | None = None) -> None:
-        """Start recording. With ``on_done``, it is called once the speaker goes quiet."""
+    def start(
+        self, on_done: Callable[[], object] | None = None, *, no_speech_s: float = 6.0
+    ) -> None:
+        """Start recording. With ``on_done``, it is called once the speaker goes quiet
+        (or after ``no_speech_s`` if nobody speaks)."""
         self._pcm.clear()
         self.level = 0.0
-        self._endpoint = EndOfSpeech() if on_done is not None else None
+        self._endpoint = EndOfSpeech(no_speech_s=no_speech_s) if on_done is not None else None
         self._on_done = on_done
         self._mic.start(self._on_chunk)
         self.recording = True

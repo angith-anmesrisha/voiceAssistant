@@ -18,6 +18,7 @@ from jarvis.agent.assistant import Assistant
 from jarvis.app.config import VoiceSettings
 from jarvis.app.events import (
     ChatEntry,
+    ConversationChanged,
     EntryKind,
     EventBus,
     PushToTalkPressed,
@@ -65,6 +66,9 @@ class AppController:
         self._active: asyncio.Task[None] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
         self._max_timer: asyncio.TimerHandle | None = None
+        # A wake-word conversation: after each reply JARVIS listens again for a while,
+        # so follow-ups need no wake word. Silence, typing or a mic problem ends it.
+        self._conversation = False
         bus.subscribe(PushToTalkPressed, self._on_ptt_pressed)
         bus.subscribe(PushToTalkReleased, self._on_ptt_released)
         bus.subscribe(WakeWordHeard, self._on_wake_word)
@@ -81,12 +85,17 @@ class AppController:
     def listening(self) -> bool:
         return self._recorder.recording
 
+    @property
+    def in_conversation(self) -> bool:
+        return self._conversation
+
     # --- typed input ---
 
     def submit(self, text: str) -> bool:
         """Start answering ``text``. Returns False if JARVIS is busy."""
         if self._recorder.recording:
             self._discard_recording()  # typing wins over a recording in progress
+        self._end_conversation()
         if self.busy:
             return False
         self._active = self._spawn(self._answer(text, spoken=False))
@@ -107,9 +116,12 @@ class AppController:
         await self.stop_listening()
 
     async def _on_wake_word(self, _event: WakeWordHeard) -> None:
+        if self._voice.follow_up_s > 0 and not self._conversation:
+            self._conversation = True
+            await self._bus.publish(ConversationChanged(True))
         await self.start_listening(hands_free=True)
 
-    async def start_listening(self, *, hands_free: bool = False) -> None:
+    async def start_listening(self, *, hands_free: bool = False, no_speech_s: float = 6.0) -> None:
         """Start recording. Hands-free recordings stop by themselves when you go quiet."""
         if self._recorder.recording:
             return
@@ -119,8 +131,9 @@ class AppController:
             return
         on_done = (lambda: self._spawn(self._finish_hands_free())) if hands_free else None
         try:
-            self._recorder.start(on_done)
+            self._recorder.start(on_done, no_speech_s=no_speech_s)
         except AudioDeviceError as exc:
+            await self._end_conversation_async()
             await self._bus.publish(ChatEntry(EntryKind.ERROR, f"Microphone problem: {exc}"))
             return
         await self._move_to(AppState.LISTENING)
@@ -134,6 +147,7 @@ class AppController:
             return
         if not self._recorder.heard_speech:
             self._discard_recording()  # woken, but nobody said anything
+            await self._end_conversation_async()  # back to needing the wake word
             return
         await self.stop_listening()
 
@@ -143,9 +157,19 @@ class AppController:
         self._cancel_max_timer()
         wav = self._recorder.stop()
         if self._recorder.duration_s(wav) < _MIN_RECORDING_S:
+            await self._end_conversation_async()
             await self._settle()
             return
         self._active = self._spawn(self._voice_turn(wav, self._active))
+        if self._conversation:
+            self._active.add_done_callback(lambda _t: self._spawn(self._follow_up()))
+
+    async def _follow_up(self) -> None:
+        """After a reply in a conversation, listen again without the wake word."""
+        if not self._conversation or self._recorder.recording or self.busy:
+            return
+        await self._bus.publish(ConversationChanged(True, listening_again=True))
+        await self.start_listening(hands_free=True, no_speech_s=self._voice.follow_up_s)
 
     async def _voice_turn(self, wav: bytes, previous: asyncio.Task[None] | None) -> None:
         if previous is not None and not previous.done():
@@ -222,6 +246,16 @@ class AppController:
                 await task
 
     # --- helpers ---
+
+    def _end_conversation(self) -> None:
+        if self._conversation:
+            self._conversation = False
+            self._spawn(self._bus.publish(ConversationChanged(False)))
+
+    async def _end_conversation_async(self) -> None:
+        if self._conversation:
+            self._conversation = False
+            await self._bus.publish(ConversationChanged(False))
 
     def _discard_recording(self) -> None:
         self._cancel_max_timer()

@@ -7,12 +7,26 @@ class FakeDesktop:
     def __init__(self) -> None:
         self.calls: list[tuple[str, object]] = []
         self.focus_ok = True
+        self.clipboard = ""
 
     def launch(self, target: str) -> None:
         self.calls.append(("launch", target))
 
     def open_installed(self, app: object) -> None:
         self.calls.append(("open_installed", app))
+
+    def open_path(self, path: object) -> None:
+        self.calls.append(("open_path", path))
+
+    def get_clipboard_text(self) -> str:
+        return self.clipboard
+
+    def set_clipboard_text(self, text: str) -> None:
+        self.clipboard = text
+        self.calls.append(("clipboard", text))
+
+    def active_window_title(self) -> str:
+        return "Untitled - Notepad"
 
     def open_url(self, url: str) -> None:
         self.calls.append(("open_url", url))

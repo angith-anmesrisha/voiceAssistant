@@ -265,7 +265,10 @@ class ConfirmOverlay(QWidget):
         width = self.card.width()
         if layout is not None:
             layout.activate()
-            self.card.setFixedHeight(layout.totalHeightForWidth(width))
+            height = layout.totalHeightForWidth(width)
+            if height < 0:  # -1 when the layout has no height-for-width
+                height = layout.totalSizeHint().height()
+            self.card.setFixedHeight(height)
         self.card.move((self.width() - width) // 2, (self.height() - self.card.height()) // 2)
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802

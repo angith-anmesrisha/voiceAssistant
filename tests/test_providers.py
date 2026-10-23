@@ -43,7 +43,8 @@ async def test_groq_chat_sends_openai_request_and_parses_reply(
     result = await groq.chat([{"role": "user", "content": "hi"}])
     assert seen["url"] == "https://api.groq.com/openai/v1/chat/completions"
     assert seen["auth"] == "Bearer gsk_test"
-    assert seen["body"]["model"] == "openai/gpt-oss-120b"
+    assert seen["body"]["model"] == "qwen/qwen3.8-27b"
+    assert seen["body"]["reasoning_effort"] == "none"  # thinking off for quick replies
     assert "tools" not in seen["body"]
     assert result.content == "Hello there."
     assert (result.provider, result.model) == ("Groq", "served-model")

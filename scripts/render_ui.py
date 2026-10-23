@@ -9,6 +9,7 @@ import asyncio
 import sys
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
 import httpx
 import qasync
@@ -40,7 +41,7 @@ def demo_router(online: bool) -> ProviderRouter:
             ollama=ProviderStatus(ProviderState.MODEL_MISSING, "run: ollama pull qwen3.5"),
         )
         router.network = NetworkStatus(True, 24)
-        router.last_used = ("Groq", "openai/gpt-oss-120b")
+        router.last_used = ("Groq", "qwen/qwen3.8-27b")
     else:
         router.statuses.update(
             groq=ProviderStatus(ProviderState.OFFLINE, "unreachable (ConnectError)"),
@@ -61,7 +62,7 @@ CONVERSATION = [
         "I can't see your calendar yet, but it's Friday afternoon: a good time to clear small "
         "tasks and plan next week. Want me to open your mail?",
         "Groq",
-        "openai/gpt-oss-120b",
+        "qwen/qwen3.8-27b",
     ),
     ChatEntry(
         EntryKind.USER,
@@ -72,7 +73,7 @@ CONVERSATION = [
         EntryKind.ASSISTANT,
         "Done. YouTube is open with lo-fi coding music results.",
         "Groq",
-        "openai/gpt-oss-120b",
+        "qwen/qwen3.8-27b",
         "used tools",
     ),
     ChatEntry(
@@ -123,7 +124,7 @@ async def render(out: Path) -> None:
             "Groq. Either make the mock return 200 on the second call, or update the "
             "assertion to expect the fallback.",
             "Gemini",
-            "gemini-3.8-flash",
+            "gemini-2.5-flash",
             "looked at screen",
         )
     )
@@ -136,7 +137,7 @@ async def render(out: Path) -> None:
             EntryKind.ASSISTANT,
             "Done. YouTube is open with lo-fi coding music.",
             "Groq",
-            "openai/gpt-oss-120b",
+            "qwen/qwen3.8-27b",
             "used tools",
         )
     )
@@ -188,7 +189,7 @@ async def render(out: Path) -> None:
             "I couldn't open Spotify: it isn't installed on this PC. Want me to open the "
             "Spotify web player instead?",
             "Gemini",
-            "gemini-3.8-flash",
+            "gemini-2.5-flash",
             "used tools",
         )
     )
@@ -204,6 +205,23 @@ async def render(out: Path) -> None:
     overlay.orb.freeze(5.6)
     for _ in range(3):
         QApplication.processEvents()
+    corner_shot(overlay, out / "14-corner-orb.png")
+
+    # A command that didn't work, seen from another app: the corner turns red too.
+    overlay.orb.set_state(VisualState.IDLE)
+    overlay.set_alarm(True)
+    overlay.say("DIDN'T WORK", "Photoshop isn't installed on this PC.", error=True)
+    overlay.orb.freeze(5.6)
+    overlay.orb._alarm = 1.0
+    corner_shot(overlay, out / "15-corner-failed.png")
+    window.quitting = True
+    window.close()
+
+
+def corner_shot(overlay: Any, path: Path) -> None:
+    """The corner orb drawn on a stand-in desktop."""
+    for _ in range(3):
+        QApplication.processEvents()
     desktop = QImage(1280, 720, QImage.Format.Format_ARGB32_Premultiplied)
     p = QPainter(desktop)
     wallpaper = QLinearGradient(0, 0, 1280, 720)
@@ -216,10 +234,8 @@ async def render(out: Path) -> None:
     image = overlay.grab()
     p.drawPixmap(1280 - image.width() // int(image.devicePixelRatio()) - 22, 672 - 22 - 230, image)
     p.end()
-    desktop.save(str(out / "14-corner-orb.png"))
-    print(out / "14-corner-orb.png")
-    window.quitting = True
-    window.close()
+    desktop.save(str(path))
+    print(path)
 
 
 def main() -> None:

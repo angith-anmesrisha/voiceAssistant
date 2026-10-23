@@ -46,10 +46,12 @@ python -m jarvis --hidden   # starts in the tray
 ```
 
 - **Type** in the command bar and press Enter, or **talk**:
-  - say **"Jarvis"**, wait for the orb, then speak. It sends when you pause. The wake
-    word runs offline with Windows' own speech recognition (it needs an English speech
-    language under Settings > Time & language > Speech), and it is paused while JARVIS
-    is busy, so it never hears itself;
+  - say **"Jarvis"**, wait for the orb, then speak. It sends when you pause. After it
+    answers it **keeps listening**, so just say your next command, no wake word needed.
+    After 30 s of silence (`voice.follow_up_s`) it goes back to waiting for "Jarvis";
+    typing also ends the conversation. The wake word runs offline with Windows' own
+    speech recognition (it needs an English speech language under Settings > Time &
+    language > Speech), and it is paused while JARVIS is busy, so it never hears itself;
   - or hold **Alt+`** (the key left of 1) anywhere in Windows and let go to send;
   - or tap the mic button.
 
@@ -63,15 +65,21 @@ python -m jarvis --hidden   # starts in the tray
   Gemini from now on", "switch to the local model", "go back to automatic". The choice is
   remembered. If the chosen one isn't available, JARVIS says so and uses the next one,
   and every answer is labelled with the provider that really produced it.
-- If a command **can't be carried out** (a tool fails, you decline it, or no AI can
-  answer), the whole UI turns red for a few seconds, then goes back to blue.
+- If a command **can't be carried out** (a tool fails, you decline it, JARVIS says it
+  can't, or no AI can answer), the whole UI turns red for a few seconds, including the
+  corner orb and its caption, then goes back to blue.
+- **Context aware.** Each request includes the window you're working in, your other open
+  windows and what JARVIS did recently, so "close this", "copy it to my desktop" or
+  "undo that" work without spelling everything out.
 - **No modes to pick.** JARVIS works out what you want from what you say:
   - Ask about your screen ("what's this error?", "summarise this page") and it takes a
     screenshot (hiding itself first) and answers about it. Press Enter with an empty box
     to just describe the screen. Needs Gemini or an Ollama model that can see images.
   - Ask a question or for writing or planning, and it just answers.
-  - Ask it to do something, and it uses its tools: open approved apps and sites, search
-    the web, press media and common shortcuts, type dictated text into the window you
+  - Ask it to do something, and it uses its tools: open apps, games and sites, search
+    the web, create, find, copy, move, rename and delete (to the Recycle Bin) files and
+    folders, copy and paste, about 80 named keyboard shortcuts (media, Windows, editing,
+    browser) plus any other key combination, type dictated text into the window you
     were using, lock, sleep, and delayed shutdown or restart. Risky actions still ask
     first.
 - Answers appear in a card in the middle while the orb moves to the corner; close the
@@ -85,10 +93,17 @@ python -m jarvis --hidden   # starts in the tray
 
 | Level | Examples | Behaviour |
 |---|---|---|
-| Low | time, system status, opening installed apps and games, trusted sites, web search, media keys | runs directly |
-| Medium | typing text, other shortcuts, untrusted sites, lock, sleep | asks first |
-| High | shutdown or restart (60 s delay, cancellable) | you must type CONFIRM |
-| Blocked | shell commands, deleting or editing files, registry or system settings | no such tool exists |
+| Low | time, system status, opening installed apps and games, trusted sites, web search, media keys, copy, listing, finding and opening files, creating folders, the clipboard | runs directly |
+| Medium | typing text, paste, undo, other key combinations, copying, moving or renaming files, deleting a file, untrusted sites, lock, sleep | asks first |
+| High | deleting a folder, shutdown or restart (60 s delay, cancellable) | you must type CONFIRM |
+| Blocked | shell commands, running programs or scripts from files, system folders, the registry and system settings, Win+R, Win+X, Ctrl+Alt+Del | no such tool exists, or refused |
+
+File tools only work inside your own folders (your user folder and any drive that isn't
+the Windows drive), never in Windows, Program Files, ProgramData or AppData, and links
+are resolved first so they can't point elsewhere. Nothing is deleted outright: it goes to
+the Recycle Bin, and your main folders (Desktop, Documents, Downloads...) can't be removed.
+Copy and move never overwrite. Opening a file uses its default app and never runs `.exe`,
+scripts, installers or shortcuts.
 
 JARVIS can open anything installed on the PC that the Start menu lists (games such as
 Valorant included), plus the built-in shortcuts in `approved_apps`. It opens them the way
@@ -103,7 +118,8 @@ as instructions.
 `%LOCALAPPDATA%\JARVIS\settings.json` (created when you first save settings; defaults apply
 otherwise). You can change provider priority, model names, timeouts and retries, approved
 apps, trusted sites, the hotkey (`hotkeys.push_to_talk`, default ``alt+` ``), the wake word (`voice.wake_word`,
-`voice.wake_phrases`, `voice.wake_min_confidence`: `low`, `normal` or `high`) and the voice. Conversation history is stored in
+`voice.wake_phrases`, `voice.wake_min_confidence`: `low`, `normal` or `high`), how long it keeps listening for
+follow-ups (`voice.follow_up_s`, 0 to turn off) and the voice. Conversation history is stored in
 `%LOCALAPPDATA%\JARVIS\jarvis.sqlite3`; logs are in `%LOCALAPPDATA%\JARVIS\logs` and never
 contain your messages, audio or keys.
 

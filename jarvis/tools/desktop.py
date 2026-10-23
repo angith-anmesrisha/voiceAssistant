@@ -32,6 +32,10 @@ class DesktopUnsupportedError(RuntimeError):
 class Desktop(Protocol):
     def launch(self, target: str) -> None: ...
     def open_installed(self, app: InstalledApp) -> None: ...
+    def open_path(self, path: Path) -> None: ...
+    def get_clipboard_text(self) -> str: ...
+    def set_clipboard_text(self, text: str) -> None: ...
+    def active_window_title(self) -> str: ...
     def open_url(self, url: str) -> None: ...
     def press(self, keys: list[str]) -> None: ...
     def type_text(self, text: str) -> None: ...
@@ -99,6 +103,16 @@ class WindowsDesktop:
         time.sleep(0.15)
         return ok
 
+    def active_window_title(self) -> str:
+        """Title of the window the user was in before talking to JARVIS."""
+        if sys.platform != "win32" or not self._previous_hwnd:
+            return ""
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined,unused-ignore]
+        length = user32.GetWindowTextLengthW(self._previous_hwnd)
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(self._previous_hwnd, buffer, length + 1)
+        return str(buffer.value)
+
     def window_titles(self) -> list[str]:
         self._require_windows()
         user32 = ctypes.windll.user32  # type: ignore[attr-defined]
@@ -143,6 +157,36 @@ class WindowsDesktop:
             os.startfile("shell:AppsFolder\\" + app.app_id)  # type: ignore[attr-defined]
         else:
             raise ValueError("nothing to open")
+
+    def open_path(self, path: Path) -> None:
+        """A folder in Explorer, or a document in its default app (checked by FileArea)."""
+        self._require_windows()
+        os.startfile(str(path))  # type: ignore[attr-defined]
+
+    # --- clipboard ---
+
+    def get_clipboard_text(self) -> str:
+        self._require_windows()
+        import win32clipboard
+
+        win32clipboard.OpenClipboard()
+        try:
+            if not win32clipboard.IsClipboardFormatAvailable(win32clipboard.CF_UNICODETEXT):
+                return ""
+            return str(win32clipboard.GetClipboardData(win32clipboard.CF_UNICODETEXT))
+        finally:
+            win32clipboard.CloseClipboard()
+
+    def set_clipboard_text(self, text: str) -> None:
+        self._require_windows()
+        import win32clipboard
+
+        win32clipboard.OpenClipboard()
+        try:
+            win32clipboard.EmptyClipboard()
+            win32clipboard.SetClipboardText(text, win32clipboard.CF_UNICODETEXT)
+        finally:
+            win32clipboard.CloseClipboard()
 
     def open_url(self, url: str) -> None:
         if not webbrowser.open(url, new=2):

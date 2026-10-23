@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections import deque
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Any
@@ -75,6 +76,7 @@ class Assistant:
         history_messages: int = 20,
         max_tool_rounds: int = 5,
         on_prefer: Callable[[str | None], None] | None = None,
+        situation: Callable[[], str] | None = None,
     ) -> None:
         self._router = router
         self._store = store
@@ -86,8 +88,23 @@ class Assistant:
         self._history_messages = history_messages
         self._max_tool_rounds = max_tool_rounds
         self._on_prefer = on_prefer
+        self._situation = situation
+        # What JARVIS did lately (this session), so "undo that" or "do it again" make sense.
+        self._recent: deque[str] = deque(maxlen=8)
         self._conversation_id: int | None = None
         self._did: set[str] = set()
+
+    def context(self) -> str:
+        """The situation right now plus recent actions, for the system prompt."""
+        lines: list[str] = []
+        if self._situation is not None:
+            try:
+                lines.append(self._situation())
+            except Exception as exc:
+                logger.debug("Context unavailable: {}", type(exc).__name__)
+        if self._recent:
+            lines.append("Recent actions, oldest first: " + " | ".join(self._recent))
+        return "\n".join(line for line in lines if line)
 
     async def conversation_id(self) -> int:
         if self._conversation_id is None:
@@ -200,14 +217,17 @@ class Assistant:
         if jpeg is None:
             raise _NoScreenError
         messages: list[Message] = [
-            {"role": "system", "content": system_prompt(spoken=spoken, screen=True)},
+            {
+                "role": "system",
+                "content": system_prompt(spoken=spoken, screen=True, context=self.context()),
+            },
             {"role": "user", "content": [{"type": "text", "text": question}, image_part(jpeg)]},
         ]
         return await self._router.chat(messages, vision=True)
 
     async def _converse(self, text: str, spoken: bool) -> ChatResult:
         messages: list[Message] = [
-            {"role": "system", "content": system_prompt(spoken=spoken)},
+            {"role": "system", "content": system_prompt(spoken=spoken, context=self.context())},
             *await self._context(),
         ]
         if not messages[-1:] or messages[-1].get("content") != text:
@@ -265,6 +285,7 @@ class Assistant:
             approved = await self._confirm(ConfirmRequest(spec.name, risk, description))
             if not approved:
                 await self._emit(EntryKind.ACTION, f"Declined: {description}")
+                self._recent.append(f"declined: {description}")
                 self._failed = True
                 return ToolResult(False, "The user declined this action.")
         await self._state.transition(AppState.ACTING)
@@ -276,6 +297,7 @@ class Assistant:
             result = ToolResult(False, f"The tool failed ({type(exc).__name__}).")
         logger.info("Tool {} -> ok={}", spec.name, result.ok)
         self._failed = not result.ok  # a later success (e.g. a retry) clears it
+        self._recent.append(("done: " if result.ok else "failed: ") + result.summary)
         await self._emit(EntryKind.ACTION, ("✓ " if result.ok else "✕ ") + result.summary)
         return result
 

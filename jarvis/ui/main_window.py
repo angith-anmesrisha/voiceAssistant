@@ -28,6 +28,7 @@ from PySide6.QtWidgets import QGraphicsOpacityEffect, QHBoxLayout, QWidget
 from jarvis.agent.assistant import ConfirmRequest
 from jarvis.app.events import (
     ChatEntry,
+    ConversationChanged,
     EntryKind,
     EventBus,
     NoticeLevel,
@@ -73,6 +74,7 @@ from jarvis.ui.widgets.stage import (
     Tween,
 )
 
+_FOLLOW_UP = ("STILL LISTENING", "Ask a follow-up, no wake word needed. Stay quiet to end.")
 _CAPTIONS: dict[VisualState, tuple[str, str]] = {
     VisualState.IDLE: ("STANDING BY", "Say “Jarvis”, hold {hotkey} or tap the mic, then just ask"),
     VisualState.LISTENING: (
@@ -153,6 +155,7 @@ class MainWindow(HudBackdrop):
         self._router: ProviderRouter | None = None
         self._key_fields: Callable[[], list[KeyField]] = list
         self._last_error = ""
+        self._listening_again = False
         self._asked = ""
         self._actions: list[str] = []
         self.quitting = False
@@ -254,6 +257,7 @@ class MainWindow(HudBackdrop):
         bus.subscribe(ChatEntry, self._on_chat_event)
         bus.subscribe(ProvidersChanged, self._on_providers_event)
         bus.subscribe(UserNotice, self._on_notice_event)
+        bus.subscribe(ConversationChanged, self._on_conversation_event)
         self.command.submitted.connect(lambda text: self._submit(text, on_submit))
         self.mic.clicked.connect(on_mic)
 
@@ -276,6 +280,9 @@ class MainWindow(HudBackdrop):
             self.notice.setText("")
         else:
             self.show_notice("JARVIS is busy. Wait for the current request to finish.")
+
+    async def _on_conversation_event(self, event: ConversationChanged) -> None:
+        self._listening_again = event.active and event.listening_again
 
     async def _on_state_event(self, event: StateChanged) -> None:
         self._state = event.current
@@ -311,8 +318,16 @@ class MainWindow(HudBackdrop):
         """Tint the whole UI red for a while: the last command didn't work."""
         self._alarm.target = 1.0
         self.orb.set_alarm(True)
-        self.overlay.orb.set_alarm(True)
+        self.overlay.set_alarm(True)
         self._alarm_timer.start(6000)
+        if not self._in_front():
+            # Show the failure in the corner too, even if the overlay had already gone.
+            if not self.overlay.isVisible():
+                self.overlay.say("DIDN'T WORK", "", error=True)
+                self.overlay.place()
+                self.overlay.show()
+            if self.visual_state() in (VisualState.IDLE, VisualState.OFFLINE):
+                self._overlay_hide.start(7000)
         self._start_animation()
 
     def clear_failure(self) -> None:
@@ -321,7 +336,7 @@ class MainWindow(HudBackdrop):
             return
         self._alarm.target = 0.0
         self.orb.set_alarm(False)
-        self.overlay.orb.set_alarm(False)
+        self.overlay.set_alarm(False)
         self._start_animation()
 
     def add_entry(self, entry: ChatEntry) -> None:
@@ -394,6 +409,11 @@ class MainWindow(HudBackdrop):
         self.orb.set_state(visual)
         title, hint = _CAPTIONS[visual]
         hint = hint.format(hotkey=self._hotkey)
+        again = self._listening_again and visual is VisualState.LISTENING
+        if again:
+            title, hint = _FOLLOW_UP
+        elif visual is not VisualState.LISTENING:
+            self._listening_again = False
         if visual is VisualState.THINKING and self._router is not None:
             ready = [
                 p.display_name for p in self._router.ordered if self._router.statuses[p.name].usable
@@ -405,8 +425,10 @@ class MainWindow(HudBackdrop):
         else:
             color = {VisualState.OFFLINE: STEEL, VisualState.ACTING: ICE}.get(visual, CYAN)
             self.caption.show_state(title, hint, color)
-        if visual is VisualState.LISTENING:
-            self._dock.target = 0.0  # a new request brings the orb back to the centre
+        if visual is VisualState.LISTENING and not again:
+            # A new request brings the orb back to the centre; a follow-up keeps the
+            # last reply on screen until something is said.
+            self._dock.target = 0.0
         self._glow.target = _GLOW.get(visual, 0.0)
         self.glow_color = ELECTRIC if visual is VisualState.ACTING else CYAN
         listening = visual is VisualState.LISTENING
@@ -415,8 +437,6 @@ class MainWindow(HudBackdrop):
         else:
             self._pulse.stop()
         self.mic.set_active(listening, 0.4)
-        if listening:
-            self.clear_failure()
         self._update_overlay(visual, title, hint)
         self._start_animation()
 
@@ -437,7 +457,7 @@ class MainWindow(HudBackdrop):
             overlay.hide()
             return
         if visual is VisualState.LISTENING:
-            overlay.say(title, "Go ahead, I'm listening.")
+            overlay.say(title, hint if self._listening_again else "Go ahead, I'm listening.")
         elif visual is VisualState.THINKING or visual is VisualState.ACTING:
             overlay.say(title, self._asked)
         if not overlay.isVisible():

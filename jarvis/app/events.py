@@ -96,6 +96,14 @@ class WakeWordHeard(Event):
     """Someone said the wake word: listen hands-free until they go quiet."""
 
 
+@dataclass(frozen=True, slots=True)
+class ConversationChanged(Event):
+    """A wake-word conversation started or ended (follow-ups need no wake word)."""
+
+    active: bool
+    listening_again: bool = False  # True while waiting for a follow-up after a reply
+
+
 class EntryKind(StrEnum):
     USER = "user"
     ASSISTANT = "assistant"
