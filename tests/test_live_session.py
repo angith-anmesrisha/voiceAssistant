@@ -74,6 +74,7 @@ def api_error(code: int, message: str) -> errors.APIError:
             LiveErrorKind.TRANSIENT,
         ),
         (errors.APIError(1006, {"message": "Abnormal closure."}), LiveErrorKind.TRANSIENT),
+        (api_error(1007, "Precondition check failed."), LiveErrorKind.ACCOUNT),
         (OSError("Network is unreachable"), LiveErrorKind.TRANSIENT),
         (TimeoutError(), LiveErrorKind.TRANSIENT),
     ],

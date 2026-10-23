@@ -36,6 +36,11 @@ _FATAL_MESSAGES: dict[LiveErrorKind, str] = {
         "or check your quota in Google AI Studio."
     ),
     LiveErrorKind.REGION: "The Gemini API isn't available in your region with this key.",
+    LiveErrorKind.ACCOUNT: (
+        "Gemini says your API key's project isn't set up for this yet (precondition check "
+        "failed). This is usually billing or a free-tier region limit. Check the key's "
+        "project in Google AI Studio."
+    ),
 }
 
 

@@ -29,6 +29,7 @@ class LiveErrorKind(StrEnum):
     INVALID_KEY = "invalid_key"
     QUOTA = "quota"
     REGION = "region"
+    ACCOUNT = "account"  # FAILED_PRECONDITION: billing or other project prerequisite
     BAD_CONFIG = "bad_config"
     TRANSIENT = "transient"
 
@@ -43,6 +44,8 @@ def classify_error(exc: BaseException) -> LiveErrorKind:
         return LiveErrorKind.QUOTA
     if "location is not supported" in text or "not available in your country" in text:
         return LiveErrorKind.REGION
+    if "precondition" in text:
+        return LiveErrorKind.ACCOUNT
     if code in (1007, 1008) or (isinstance(code, int) and 400 <= code < 500 and code != 429):
         if code in (401, 403):
             return LiveErrorKind.INVALID_KEY
