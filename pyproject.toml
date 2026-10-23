@@ -7,19 +7,19 @@ name = "jarvis-assistant"
 version = "0.2.0"
 description = "JARVIS: a voice assistant and safe desktop agent for Windows."
 readme = "README.md"
-requires-python = ">=3.12,<3.13"
+requires-python = ">=3.12"
 license = { text = "Proprietary" }
 dependencies = [
-    "PySide6>=6.7",
+    "PySide6>=6.10",
     "qasync>=0.27",
-    "pydantic>=2.7",
+    "pydantic>=2.12",
     "pydantic-settings>=2.3",
     "loguru>=0.7",
     "httpx>=0.27",
     "psutil>=5.9",
     "sounddevice>=0.5",
     "pynput>=1.8",
-    "pywin32>=306; sys_platform == 'win32'",
+    "pywin32>=311; sys_platform == 'win32'",
 ]
 
 [project.optional-dependencies]

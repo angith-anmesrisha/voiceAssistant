@@ -15,7 +15,7 @@ working rules and safety rules still apply where they don't conflict.
 - Never claim a provider/model answered unless it did; the UI shows the real provider/model.
 
 ## Stack
-Python 3.12, PySide6 + qasync, httpx (OpenAI-compatible endpoints), sounddevice, pynput,
+Python 3.12+ (tested on 3.12, 3.13, 3.14), PySide6 + qasync, httpx (OpenAI-compatible endpoints), sounddevice, pynput,
 pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 
 ## Commands

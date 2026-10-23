@@ -12,11 +12,11 @@ More renders (listening, thinking, speaking, executing, confirmations, offline) 
 
 ## Setup (Windows)
 
-1. Install **Python 3.12 (64-bit)** from python.org (tick "Add python.exe to PATH").
+1. Install **Python 3.12 or newer (64-bit; 3.12, 3.13 and 3.14 are tested)** from python.org (tick "Add python.exe to PATH").
 2. In this folder:
 
    ```powershell
-   py -3.12 -m venv .venv
+   py -m venv .venv
    .\.venv\Scripts\Activate.ps1
    pip install -e ".[dev]"
    ```
