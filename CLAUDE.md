@@ -49,6 +49,7 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 - `agent/`: `commands.py` ("use Gemini from now on" → provider switch, no model call),
   `prompts.py` (one system prompt; `wants_screen` regex; `context` block marked as
   information), `context.py` (`situation`: active window, other open windows, AI choice),
+  `guard.py` (`PromptGuard`: Llama Prompt Guard 2 scores outside text for injections),
   `assistant.py` (keeps the last 8 actions for context; one turn:
   history, screen fast path, otherwise a tool loop with tools + `look_at_screen`,
   confirmations).
@@ -88,6 +89,16 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   tools + images; `reasoning_effort: "none"`), STT `whisper-large-v3-turbo`. Gemini
   `gemini-2.5-flash` for chat/vision/STT with `reasoning_effort: "none"`; Google only serves
   2.5 to accounts that used it before, otherwise switch back to a 3.x flash model.
+- Prompt Guard (owner asked for `meta-llama/llama-prompt-guard-2-86m` on Groq): it is a
+  classifier, not a chat model, so it screens text, never answers. `providers.groq.
+  guard_model`/`guard_threshold` (0.8). Results of `UNTRUSTED_TOOLS` (clipboard, folder
+  listing, find, look_at_screen) and the window-title context are scored in ≤1800-char
+  chunks; flagged tool text is withheld (ACTION "✕ Blocked…", reply marked failed, red),
+  flagged titles are dropped. Guard errors fail open (logged). The user's own words are
+  never screened.
+- Any unexpected exception in a turn becomes an ERROR entry (so the UI goes red), never a
+  silent return to idle. Chat that fails after all retries (1 + `max_retries`) on every
+  provider is an ERROR too.
 - Qt 6 sets per-monitor DPI awareness itself; calling SetProcessDpiAwareness first makes
   Qt log "Access is denied", so we don't.
 - Follow-up conversation: a wake word starts a conversation; after each reply the

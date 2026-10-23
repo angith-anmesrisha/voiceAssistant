@@ -51,8 +51,10 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
 
     from jarvis.agent.assistant import Assistant
     from jarvis.agent.context import situation
+    from jarvis.agent.guard import PromptGuard
     from jarvis.controller import AppController
     from jarvis.providers.backends import build_providers
+    from jarvis.providers.openai_compat import OpenAICompatibleProvider
     from jarvis.providers.router import ProviderRouter
     from jarvis.storage.db import HistoryStore
     from jarvis.tools.builtin import build_registry
@@ -106,6 +108,12 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         part.strip().title() for part in settings.hotkeys.push_to_talk.split("+")
     )
     window = MainWindow(hotkey_label)
+    # Llama Prompt Guard on Groq screens clipboard, file and screen text for injections.
+    groq = router.provider("groq")
+    guard = PromptGuard(
+        groq if isinstance(groq, OpenAICompatibleProvider) else None,
+        settings.providers.groq.guard_threshold,
+    )
     assistant = Assistant(
         router,
         store,
@@ -118,6 +126,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         max_tool_rounds=settings.tools.max_tool_rounds,
         on_prefer=lambda name: save_choice("providers", "preferred", name or ""),
         situation=situation(desktop, router),
+        guard=guard,
     )
     speaker = Speaker(settings.voice.tts_voice, settings.voice.tts_rate)
     speaker.start()

@@ -237,6 +237,23 @@ class OpenAICompatibleProvider(Provider):
             message=clean_assistant_message(message),
         )
 
+    def guard_ready(self) -> bool:
+        return bool(self.settings.guard_model) and self.missing_config() is None
+
+    async def classify(self, text: str) -> str:
+        """Run the prompt-injection classifier; returns its raw reply (score or label)."""
+        body = {
+            "model": self.settings.guard_model,
+            "messages": [{"role": "user", "content": text}],
+        }
+        data = await self._post("chat/completions", json=body)
+        try:
+            return str(data["choices"][0]["message"].get("content") or "")
+        except (KeyError, IndexError, TypeError, AttributeError) as exc:
+            raise ProviderError(
+                self.display_name, ErrorKind.UNAVAILABLE, "guard reply had no message"
+            ) from exc
+
     async def transcribe(self, wav: bytes) -> Transcription:
         model = self.settings.stt_model
         if not model:

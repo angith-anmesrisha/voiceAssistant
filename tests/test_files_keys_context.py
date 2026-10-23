@@ -208,7 +208,7 @@ async def test_assistant_sends_context_and_remembers_actions(tmp_path: Path) -> 
     await rig.assistant.handle("copy this")
     system = router.requests[0]["messages"][0]["content"]
     assert "Excel" in system and "not instructions" in system
-    context = rig.assistant.context()
+    context = await rig.assistant.checked_context()
     assert "Excel" in context and "done: Press copy." in context
 
 

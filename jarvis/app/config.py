@@ -31,6 +31,11 @@ class ProviderSettings(BaseModel):
     # Sent as the OpenAI "reasoning_effort" field when set (e.g. "none" turns off a
     # local model's thinking, which is slow on an integrated GPU).
     reasoning_effort: str = ""
+    # Prompt-injection classifier run over outside text (clipboard, screen, files) before
+    # it reaches the chat model. Empty = no screening on this provider.
+    guard_model: str = ""
+    # Attack probability (0..1) at or above which text is withheld.
+    guard_threshold: float = 0.8
     timeout_s: float = 30.0
     max_retries: int = 2
 
@@ -45,6 +50,10 @@ def _groq() -> ProviderSettings:
         vision_model="qwen/qwen3.8-27b",
         stt_model="whisper-large-v3-turbo",
         reasoning_effort="none",
+        # The owner asked for Llama Prompt Guard 2 (86M). It is a classifier, not a chat
+        # model (console.groq.com/docs/model/meta-llama/llama-prompt-guard-2-86m, 512
+        # token input), so it screens untrusted text; qwen still answers.
+        guard_model="meta-llama/llama-prompt-guard-2-86m",
     )
 
 

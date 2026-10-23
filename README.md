@@ -98,6 +98,11 @@ python -m jarvis --hidden   # starts in the tray
 | High | deleting a folder, shutdown or restart (60 s delay, cancellable) | you must type CONFIRM |
 | Blocked | shell commands, running programs or scripts from files, system folders, the registry and system settings, Win+R, Win+X, Ctrl+Alt+Del | no such tool exists, or refused |
 
+Text that comes from outside (clipboard, folder listings, the screen description,
+window titles) is checked by Meta's **Llama Prompt Guard 2** on Groq before the chat
+model sees it. If it looks like an attempt to give JARVIS orders, it is withheld and the
+UI turns red. (Prompt Guard is a classifier, so it doesn't answer; qwen still does.)
+
 File tools only work inside your own folders (your user folder and any drive that isn't
 the Windows drive), never in Windows, Program Files, ProgramData or AppData, and links
 are resolved first so they can't point elsewhere. Nothing is deleted outright: it goes to
