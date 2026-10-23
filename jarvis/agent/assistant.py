@@ -5,10 +5,11 @@ from __future__ import annotations
 import json
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Any
 
 from loguru import logger
 
-from jarvis.agent.prompts import Mode, system_prompt
+from jarvis.agent.prompts import system_prompt, wants_screen
 from jarvis.app.events import ChatEntry, EntryKind, EventBus
 from jarvis.app.state import AppState, StateMachine
 from jarvis.providers.base import Capability, ChatResult, Message, ToolCall
@@ -24,6 +25,27 @@ class ConfirmRequest:
     risk: Risk
     description: str
 
+
+LOOKED = "looked at screen"
+ACTED = "used tools"
+
+LOOK_AT_SCREEN: dict[str, Any] = {
+    "type": "function",
+    "function": {
+        "name": "look_at_screen",
+        "description": (
+            "Take a screenshot of the user's screen (JARVIS hides itself) and get a "
+            "description of it. Use when the request is about something on screen."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "question": {"type": "string", "description": "What to look for or answer."}
+            },
+            "required": [],
+        },
+    },
+}
 
 ConfirmFn = Callable[[ConfirmRequest], Awaitable[bool]]
 ScreenCaptureFn = Callable[[], Awaitable[bytes | None]]
@@ -61,6 +83,7 @@ class Assistant:
         self._history_messages = history_messages
         self._max_tool_rounds = max_tool_rounds
         self._conversation_id: int | None = None
+        self._did: set[str] = set()
 
     async def conversation_id(self) -> int:
         if self._conversation_id is None:
@@ -83,22 +106,21 @@ class Assistant:
     async def _emit(self, kind: EntryKind, text: str, **meta: str | None) -> None:
         await self._bus.publish(ChatEntry(kind=kind, text=text, **meta))
 
-    async def handle(self, text: str, mode: Mode, *, spoken: bool = False) -> Reply:
+    async def handle(self, text: str, *, spoken: bool = False) -> Reply:
+        """Answer one request. Whether to look, act or just answer is decided here."""
         text = text.strip()
-        if not text and mode is not Mode.ANALYZE:
-            return Reply("", ok=False)
         conversation = await self.conversation_id()
-        shown = text or "Analyze my screen."
-        await self._emit(EntryKind.USER, shown, mode=mode.value)
-        await self._store.add_message(
-            conversation, {"role": "user", "content": shown}, mode=mode.value
-        )
+        shown = text or "What's on my screen?"
+        await self._emit(EntryKind.USER, shown)
+        await self._store.add_message(conversation, {"role": "user", "content": shown})
         await self._state.transition(AppState.THINKING)
+        self._did = set()
         try:
-            if mode is Mode.ANALYZE:
-                result = await self._analyze(shown, spoken)
+            if wants_screen(text):
+                self._did.add(LOOKED)
+                result = await self._look(shown, spoken)
             else:
-                result = await self._converse(shown, mode, spoken)
+                result = await self._converse(shown, spoken)
         except AllProvidersFailedError as exc:
             logger.warning("All providers failed: {}", exc)
             message = _failure_message(exc)
@@ -113,50 +135,48 @@ class Assistant:
                 await self._state.transition(AppState.IDLE)
 
         reply = result.content or "Done."
+        label = " + ".join(sorted(self._did)) or None
         await self._store.add_message(
             conversation,
             {"role": "assistant", "content": reply},
             provider=result.provider,
             model=result.model,
-            mode=mode.value,
+            mode=label,
         )
         await self._emit(
-            EntryKind.ASSISTANT,
-            reply,
-            provider=result.provider,
-            model=result.model,
-            mode=mode.value,
+            EntryKind.ASSISTANT, reply, provider=result.provider, model=result.model, mode=label
         )
         return Reply(reply, ok=True, provider=result.provider, model=result.model)
 
-    async def _analyze(self, question: str, spoken: bool) -> ChatResult:
+    async def _look(self, question: str, spoken: bool) -> ChatResult:
         jpeg = await self._capture_screen()
         if jpeg is None:
             raise _NoScreenError
         messages: list[Message] = [
-            {"role": "system", "content": system_prompt(Mode.ANALYZE, spoken=spoken)},
+            {"role": "system", "content": system_prompt(spoken=spoken, screen=True)},
             {"role": "user", "content": [{"type": "text", "text": question}, image_part(jpeg)]},
         ]
         return await self._router.chat(messages, vision=True)
 
-    async def _converse(self, text: str, mode: Mode, spoken: bool) -> ChatResult:
+    async def _converse(self, text: str, spoken: bool) -> ChatResult:
         messages: list[Message] = [
-            {"role": "system", "content": system_prompt(mode, spoken=spoken)},
+            {"role": "system", "content": system_prompt(spoken=spoken)},
             *await self._context(),
         ]
         if not messages[-1:] or messages[-1].get("content") != text:
             messages.append({"role": "user", "content": text})
-        if mode is not Mode.EXECUTE:
-            return await self._router.chat(messages)
 
-        tools = self._registry.declarations()
+        tools = [*self._registry.declarations(), LOOK_AT_SCREEN]
         for _round in range(self._max_tool_rounds):
             result = await self._router.chat(messages, tools=tools)
             if not result.tool_calls:
                 return result
             messages.append(result.message)
             for call in result.tool_calls:
-                outcome = await self._run_tool(call)
+                if call.name == LOOK_AT_SCREEN["function"]["name"]:
+                    outcome = await self._look_tool(call, spoken)
+                else:
+                    outcome = await self._run_tool(call)
                 messages.append(
                     {
                         "role": "tool",
@@ -171,6 +191,18 @@ class Assistant:
             {"role": "user", "content": "Stop using tools now and tell me what was done."}
         )
         return await self._router.chat(messages)
+
+    async def _look_tool(self, call: ToolCall, spoken: bool) -> ToolResult:
+        """The model asked to see the screen: a vision model describes it as text."""
+        question = str(call.arguments.get("question") or "Describe what is on the screen.")
+        self._did.add(LOOKED)
+        try:
+            seen = await self._look(question, spoken)
+        except _NoScreenError:
+            return ToolResult(False, "The screen couldn't be captured.")
+        except AllProvidersFailedError as exc:
+            return ToolResult(False, _failure_message(exc))
+        return ToolResult(True, seen.content or "Nothing notable on screen.")
 
     async def _run_tool(self, call: ToolCall) -> ToolResult:
         spec = self._registry.get(call.name)
@@ -188,6 +220,7 @@ class Assistant:
                 await self._emit(EntryKind.ACTION, f"Declined: {description}")
                 return ToolResult(False, "The user declined this action.")
         await self._state.transition(AppState.ACTING)
+        self._did.add(ACTED)
         try:
             result = await self._registry.run(spec, args)
         except Exception as exc:

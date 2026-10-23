@@ -15,7 +15,6 @@ from typing import Any, Protocol
 from loguru import logger
 
 from jarvis.agent.assistant import Assistant
-from jarvis.agent.prompts import Mode
 from jarvis.app.config import VoiceSettings
 from jarvis.app.events import (
     ChatEntry,
@@ -60,7 +59,6 @@ class AppController:
         self._speaker = speaker
         self._voice = voice
         self._local_stt = local_stt
-        self.mode = Mode.ASSIST
         # The request being handled. "Busy" means this task is still running, so the
         # flag can never get stuck after an error.
         self._active: asyncio.Task[None] | None = None
@@ -83,13 +81,13 @@ class AppController:
 
     # --- typed input ---
 
-    def submit(self, text: str, mode: Mode | None = None) -> bool:
+    def submit(self, text: str) -> bool:
         """Start answering ``text``. Returns False if JARVIS is busy."""
         if self._recorder.recording:
             self._discard_recording()  # typing wins over a recording in progress
         if self.busy:
             return False
-        self._active = self._spawn(self._answer(text, mode or self.mode, spoken=False))
+        self._active = self._spawn(self._answer(text, spoken=False))
         return True
 
     # --- voice input ---
@@ -147,7 +145,7 @@ class AppController:
             if not heard:
                 await self._bus.publish(ChatEntry(EntryKind.ERROR, "I didn't catch that."))
                 return
-            await self._answer_locked(heard, self.mode, spoken=True)
+            await self._answer_locked(heard, spoken=True)
         finally:
             await self._settle()
 
@@ -183,14 +181,14 @@ class AppController:
 
     # --- answering ---
 
-    async def _answer(self, text: str, mode: Mode, *, spoken: bool) -> None:
+    async def _answer(self, text: str, *, spoken: bool) -> None:
         try:
-            await self._answer_locked(text, mode, spoken=spoken)
+            await self._answer_locked(text, spoken=spoken)
         finally:
             await self._settle()
 
-    async def _answer_locked(self, text: str, mode: Mode, *, spoken: bool) -> None:
-        reply = await self._assistant.handle(text, mode, spoken=spoken)
+    async def _answer_locked(self, text: str, *, spoken: bool) -> None:
+        reply = await self._assistant.handle(text, spoken=spoken)
         if spoken and reply.ok and self._voice.speak_replies and self._speaker.available:
             await self._move_to(AppState.SPEAKING)
             await self._speaker.speak(reply.text)

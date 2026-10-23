@@ -138,16 +138,12 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         window.show_notice(f"API key saved {where}. Checking providers…")
         spawn(router.probe_all())
 
-    def set_mode(mode: Any) -> None:
-        controller.mode = mode
-
     window.bind(
         bus,
         router,
         level=lambda: controller.mic_level,
         on_submit=controller.submit,
         on_mic=controller.toggle_listening,
-        on_mode=set_mode,
         on_new_chat=lambda: spawn(assistant.new_conversation()),
         key_fields=key_fields,
         on_save_keys=save_keys,

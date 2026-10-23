@@ -1,16 +1,22 @@
-"""The JARVIS window: header, status column, orb, command bar and conversation."""
+"""The JARVIS window.
+
+A full-screen HUD in the style of the reference video: a charcoal grid, the orb in the
+middle with a clock under it, and a command bar at the bottom. When JARVIS answers, the
+reply opens as a card in the centre and the orb glides to the bottom-right corner. Status
+details, history and API keys open on demand, so the main view stays clean.
+"""
 
 from __future__ import annotations
 
 import asyncio
+import time
 from collections.abc import Callable
 
-from PySide6.QtCore import QBuffer, QIODevice, Qt, QTimer
-from PySide6.QtGui import QCloseEvent, QGuiApplication, QImage
-from PySide6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtCore import QBuffer, QIODevice, QRect, Qt, QTimer
+from PySide6.QtGui import QCloseEvent, QColor, QGuiApplication, QImage, QMouseEvent, QPainter
+from PySide6.QtWidgets import QHBoxLayout, QWidget
 
 from jarvis.agent.assistant import ConfirmRequest
-from jarvis.agent.prompts import Mode
 from jarvis.app.events import (
     ChatEntry,
     EntryKind,
@@ -23,12 +29,13 @@ from jarvis.app.state import AppState, StateChanged
 from jarvis.providers.base import Capability, ProviderState
 from jarvis.providers.router import ProviderRouter
 from jarvis.ui import theme
-from jarvis.ui.theme import AMBER, CYAN, DANGER, ICE, STEEL
+from jarvis.ui.theme import AMBER, CYAN, DANGER, ELECTRIC, ICE, STEEL
 from jarvis.ui.widgets.chat import ChatView
 from jarvis.ui.widgets.glass import (
     GlassPanel,
     HudButton,
     body_label,
+    icon_assist,
     icon_key,
     icon_mic,
     icon_new_chat,
@@ -37,37 +44,89 @@ from jarvis.ui.widgets.glass import (
 from jarvis.ui.widgets.keys import KeyField, KeysOverlay
 from jarvis.ui.widgets.orb import OrbHud, VisualState
 from jarvis.ui.widgets.panels import (
-    Backdrop,
+    STATE_COLORS,
     CommandBar,
     ConfirmOverlay,
-    Header,
-    ModeSwitch,
     NetworkPanel,
     SafetyPanel,
-    StateCaption,
     SystemPanel,
+)
+from jarvis.ui.widgets.stage import (
+    CenterCaption,
+    CornerText,
+    HudBackdrop,
+    ReplyCard,
+    StatusStrip,
+    TopBar,
+    Tween,
 )
 
 _CAPTIONS: dict[VisualState, tuple[str, str]] = {
-    VisualState.IDLE: ("STANDING BY", "Hold {hotkey} or tap the mic to speak"),
+    VisualState.IDLE: ("STANDING BY", "Hold {hotkey} or tap the mic, then just ask"),
     VisualState.LISTENING: ("LISTENING", "Release the hotkey or tap the mic again to send"),
     VisualState.THINKING: ("THINKING", "Working on it…"),
     VisualState.SPEAKING: ("SPEAKING", "Tap the mic to interrupt"),
     VisualState.ACTING: ("EXECUTING", "Running an approved action"),
     VisualState.OFFLINE: (
         "OFFLINE",
-        "No AI available. Add a Groq or Gemini key with the key button, or start Ollama.",
+        "No AI available. Add a Groq or Gemini key (key icon, top right), or start Ollama.",
     ),
 }
 
-_PLACEHOLDERS = {
-    Mode.ANALYZE: "Ask about your screen, or press Enter to analyze it…",
-    Mode.ASSIST: "Ask JARVIS anything…",
-    Mode.EXECUTE: "Tell JARVIS what to do, e.g. “open notepad and type hello”…",
+_GLOW = {
+    VisualState.LISTENING: 1.0,
+    VisualState.SPEAKING: 0.8,
+    VisualState.THINKING: 0.45,
+    VisualState.ACTING: 0.7,
 }
 
+_PLACEHOLDER = "Ask JARVIS anything, or tell it what to do…"
 
-class MainWindow(Backdrop):
+_DOCK_SIZE = 170
+
+
+class _DetailsOverlay(QWidget):
+    """Providers, network/system and permissions, shown on demand over a dim layer."""
+
+    def __init__(self, parent: QWidget, panels: list[QWidget]):
+        super().__init__(parent)
+        self.hide()
+        self._row = QWidget(self)
+        layout = QHBoxLayout(self._row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(18)
+        for panel in panels:
+            panel.setFixedWidth(330)
+            layout.addWidget(panel, 0, Qt.AlignmentFlag.AlignTop)
+
+    def open(self) -> None:
+        parent = self.parentWidget()
+        if parent is not None:
+            self.setGeometry(parent.rect())
+        self._place()
+        self.raise_()
+        self.show()
+
+    def _place(self) -> None:
+        hint = self._row.sizeHint()
+        x = (self.width() - hint.width()) // 2
+        y = max(80, (self.height() - hint.height()) // 2 - 40)
+        self._row.setGeometry(x, y, hint.width(), hint.height())
+
+    def resizeEvent(self, event: object) -> None:  # noqa: N802
+        self._place()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if not self._row.geometry().contains(event.position().toPoint()):
+            self.hide()
+
+    def paintEvent(self, _event: object) -> None:  # noqa: N802
+        p = QPainter(self)
+        p.fillRect(self.rect(), QColor(4, 6, 9, 185))
+        p.end()
+
+
+class MainWindow(HudBackdrop):
     def __init__(self, hotkey_label: str = "Ctrl+Alt+Space") -> None:
         super().__init__()
         self.setWindowTitle("JARVIS")
@@ -79,69 +138,56 @@ class MainWindow(Backdrop):
         self._router: ProviderRouter | None = None
         self._key_fields: Callable[[], list[KeyField]] = list
         self._last_error = ""
+        self._asked = ""
+        self._actions: list[str] = []
         self.quitting = False
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-        self.header = Header()
-        root.addWidget(self.header)
+        # Eased layout values, advanced by one animation timer.
+        self._dock = Tween(0.0, 6.0)  # 0 = orb centred, 1 = docked bottom-right
+        self._drawer = Tween(0.0, 8.0)  # history drawer
+        self._glow = Tween(0.0, 5.0)  # screen-edge light
+        self._anim = QTimer(self)
+        self._anim.setTimerType(Qt.TimerType.PreciseTimer)
+        self._anim.timeout.connect(self._animate)
+        self._last_anim = time.perf_counter()
 
-        body = QHBoxLayout()
-        body.setContentsMargins(22, 18, 22, 20)
-        body.setSpacing(20)
-        root.addLayout(body, 1)
+        self.header = TopBar(self)
+        self.history_button = HudButton(icon_assist, "Conversation history", 34)
+        self.history_button.setParent(self)
+        self.keys_button = HudButton(icon_key, "API keys: add or change Groq and Gemini keys", 34)
+        self.keys_button.setParent(self)
 
-        # Left: status column.
-        left = QVBoxLayout()
-        left.setSpacing(16)
+        self.orb = OrbHud(lambda: self._level(), self)
+        self.caption = CenterCaption(self)
+        self.card = ReplyCard(self)
+        self.card.hide()
+        self.card.closed.connect(self.close_card)
+
+        self.mic = HudButton(icon_mic, f"Voice: tap to talk (or hold {hotkey_label})", 46)
+        self.send = HudButton(icon_send, "Send (Enter)", 46)
+        self.command = CommandBar(self.mic, self.send, self)
+        self.command.input.setPlaceholderText(_PLACEHOLDER)
+        self.notice = body_label("", 9, theme.TEXT_DIM)
+        self.notice.setParent(self)
+        self.notice.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_strip = StatusStrip(self)
+        self.corner_left = CornerText(Qt.AlignmentFlag.AlignLeft, self)
+        self.corner_right = CornerText(Qt.AlignmentFlag.AlignRight, self)
+
+        # On-demand panels.
         self.providers = SystemPanel()
         self.network = NetworkPanel()
-        left.addWidget(self.providers)
-        left.addWidget(self.network)
         self.safety = SafetyPanel()
-        left.addWidget(self.safety)
-        left.addStretch(1)
-        left_box = QWidget()
-        left_box.setLayout(left)
-        left_box.setFixedWidth(318)
-        body.addWidget(left_box)
+        self.details = _DetailsOverlay(self, [self.providers, self.network, self.safety])
+        self.status_strip.clicked.connect(self.details.open)
 
-        # Centre: orb, caption, modes, command bar.
-        center = QVBoxLayout()
-        center.setSpacing(12)
-        self.orb = OrbHud(lambda: self._level())
-        self.caption = StateCaption()
-        self.modes = ModeSwitch()
-        self.mic = HudButton(icon_mic, f"Voice: tap to talk (or hold {hotkey_label})", 50)
-        self.send = HudButton(icon_send, "Send (Enter)", 50)
-        self.command = CommandBar(self.mic, self.send)
-        self.notice = body_label("", 9, theme.TEXT_DIM)
-        self.notice.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        center.addWidget(self.orb, 1)
-        center.addWidget(self.caption)
-        mode_row = QHBoxLayout()
-        mode_row.addStretch(1)
-        mode_row.addWidget(self.modes, 4)
-        mode_row.addStretch(1)
-        center.addLayout(mode_row)
-        center.addWidget(self.command)
-        center.addWidget(self.notice)
-        body.addLayout(center, 1)
-
-        # Right: conversation.
-        self.conversation = GlassPanel("CONVERSATION")
+        self.conversation = GlassPanel("HISTORY", self)
         self.chat = ChatView()
         self.new_chat = HudButton(icon_new_chat, "New conversation", 30)
         self.conversation.set_corner_button(self.new_chat)
         self.conversation.body.addWidget(self.chat)
-        self.conversation.setFixedWidth(410)
-        body.addWidget(self.conversation)
-
-        self.keys_button = HudButton(
-            icon_key, "API keys: add or change your Groq and Gemini keys", 30
-        )
-        self.providers.set_corner_button(self.keys_button)
+        self.conversation.hide()
+        self.history_button.clicked.connect(self.toggle_history)
         self.keys_button.clicked.connect(self.open_keys)
 
         self.confirm_overlay = ConfirmOverlay(self)
@@ -151,9 +197,8 @@ class MainWindow(Backdrop):
         self._pulse.timeout.connect(self._update_mic_button)
         self._stats = QTimer(self)
         self._stats.timeout.connect(self.refresh_system_stats)
-        self.modes.changed.connect(self._on_mode_changed)
-        self._on_mode_changed(self.modes.mode)
         self._apply_state()
+        self._layout()
 
     # --- wiring ---
 
@@ -162,9 +207,8 @@ class MainWindow(Backdrop):
         bus: EventBus,
         router: ProviderRouter,
         level: Callable[[], float],
-        on_submit: Callable[[str, Mode], bool],
+        on_submit: Callable[[str], bool],
         on_mic: Callable[[], None],
-        on_mode: Callable[[Mode], None],
         on_new_chat: Callable[[], None],
         key_fields: Callable[[], list[KeyField]] = list,
         on_save_keys: Callable[[dict[str, str]], None] | None = None,
@@ -180,11 +224,11 @@ class MainWindow(Backdrop):
         bus.subscribe(UserNotice, self._on_notice_event)
         self.command.submitted.connect(lambda text: self._submit(text, on_submit))
         self.mic.clicked.connect(on_mic)
-        self.modes.changed.connect(on_mode)
 
         def new_chat() -> None:
             self.chat.clear()
             self._last_error = ""
+            self.close_card()
             on_new_chat()
 
         self.new_chat.clicked.connect(new_chat)
@@ -192,11 +236,10 @@ class MainWindow(Backdrop):
         self.refresh_system_stats()
         self.refresh_providers()
 
-    def _submit(self, text: str, on_submit: Callable[[str, Mode], bool]) -> None:
-        mode = self.modes.mode
-        if not text.strip() and mode is not Mode.ANALYZE:
+    def _submit(self, text: str, on_submit: Callable[[str], bool]) -> None:
+        if not text.strip():
             return
-        if on_submit(text, mode):
+        if on_submit(text):
             self.command.input.clear()
             self.notice.setText("")
         else:
@@ -220,7 +263,17 @@ class MainWindow(Backdrop):
 
     def open_keys(self) -> None:
         self.show_and_raise()
+        self.details.hide()
         self.keys_overlay.open(self._key_fields())
+
+    def toggle_history(self) -> None:
+        self._drawer.target = 0.0 if self._drawer.target > 0.5 else 1.0
+        self.conversation.raise_()
+        self._start_animation()
+
+    def close_card(self) -> None:
+        self._dock.target = 0.0
+        self._start_animation()
 
     def add_entry(self, entry: ChatEntry) -> None:
         if entry.kind is EntryKind.ERROR:
@@ -232,14 +285,28 @@ class MainWindow(Backdrop):
             self._last_error = ""
         meta = ""
         if entry.kind is EntryKind.USER:
-            meta = f"YOU · {entry.mode.upper()}" if entry.mode else "YOU"
+            meta = "YOU"
+            self._asked, self._actions = entry.text, []
+            self.close_card()
         elif entry.kind is EntryKind.ASSISTANT:
             meta = "JARVIS"
             if entry.provider:
                 meta += f" · {entry.provider.upper()} · {entry.model}"
+            if entry.mode:
+                meta += f" · {entry.mode.upper()}"
+            self._open_card(meta, entry.text, error=False)
+        elif entry.kind is EntryKind.ACTION:
+            self._actions.append(entry.text)
         elif entry.kind is EntryKind.ERROR:
             meta = "PROBLEM"
+            self._open_card(meta, entry.text, error=True)
         self.chat.add(entry.kind, entry.text, meta)
+
+    def _open_card(self, meta: str, text: str, *, error: bool) -> None:
+        self.card.show_exchange(self._asked, meta, text, self._actions, error=error)
+        self._dock.target = 1.0
+        self._layout()
+        self._start_animation()
 
     def show_notice(self, text: str, level: NoticeLevel = NoticeLevel.INFO) -> None:
         color = {NoticeLevel.ERROR: DANGER, NoticeLevel.WARNING: AMBER}.get(level, theme.TEXT_DIM)
@@ -267,20 +334,29 @@ class MainWindow(Backdrop):
         visual = self.visual_state()
         self.orb.set_state(visual)
         title, hint = _CAPTIONS[visual]
+        hint = hint.format(hotkey=self._hotkey)
         if visual is VisualState.THINKING and self._router is not None:
             ready = [
                 p.display_name for p in self._router.ordered if self._router.statuses[p.name].usable
             ]
             if ready:
                 hint = f"Asking {ready[0]}…"
-        color = {VisualState.OFFLINE: STEEL, VisualState.ACTING: ICE}.get(visual, CYAN)
-        self.caption.set_text(title, hint.format(hotkey=self._hotkey), color)
+        if visual is VisualState.IDLE:
+            self.caption.show_clock(hint)
+        else:
+            color = {VisualState.OFFLINE: STEEL, VisualState.ACTING: ICE}.get(visual, CYAN)
+            self.caption.show_state(title, hint, color)
+        if visual is VisualState.LISTENING:
+            self._dock.target = 0.0  # a new request brings the orb back to the centre
+        self._glow.target = _GLOW.get(visual, 0.0)
+        self.glow_color = ELECTRIC if visual is VisualState.ACTING else CYAN
         listening = visual is VisualState.LISTENING
         if listening:
-            self._pulse.start(80)
+            self._pulse.start(50)
         else:
             self._pulse.stop()
         self.mic.set_active(listening, 0.4)
+        self._start_animation()
 
     def _update_mic_button(self) -> None:
         self.mic.set_active(True, min(1.0, 0.3 + self._level() * 1.4))
@@ -290,11 +366,13 @@ class MainWindow(Backdrop):
         if router is None:
             return
         last = router.last_used
+        strip: list[tuple[str, QColor]] = []
         for provider in router.ordered:
+            status = router.statuses[provider.name]
+            strip.append((provider.display_name.upper(), STATE_COLORS[status.state]))
             row = self.providers.rows.get(provider.name)
             if row is None:
                 continue
-            status = router.statuses[provider.name]
             active = last is not None and last[0] == provider.display_name
             model = provider.model_for(Capability.CHAT)
             vision = provider.model_for(Capability.VISION)
@@ -305,25 +383,33 @@ class MainWindow(Backdrop):
             self.providers.active.setText(f"Last answer from {last[0]} · {last[1]}")
         net = router.network
         self.network.set_network(net.online, net.latency_ms)
+        strip.append(("ONLINE" if net.online else "OFFLINE", CYAN if net.online else DANGER))
+        self.status_strip.set_items(strip)
         usable = [p for p in router.ordered if router.statuses[p.name].usable]
         ready = [p for p in usable if router.statuses[p.name].state is ProviderState.READY]
         if ready:
             first = ready[0]
             where = "LOCAL AI" if first.name == "ollama" else "AI ONLINE"
             self.header.set_status(f"{where} · {first.display_name.upper()}", CYAN)
+            model = first.model_for(Capability.CHAT)
+            self.corner_left.set_text(f"{first.display_name.upper()}  ·  {model}")
         elif usable:
             self.header.set_status("CHECKING", STEEL)
         else:
             self.header.set_status("NO AI AVAILABLE", DANGER)
+            self.corner_left.set_text("NO AI AVAILABLE")
 
     def refresh_system_stats(self) -> None:
         try:
             import psutil
         except ImportError:
             return
-        self.network.cpu.set_value(psutil.cpu_percent(interval=None))
-        self.network.ram.set_value(psutil.virtual_memory().percent)
+        cpu = psutil.cpu_percent(interval=None)
+        ram = psutil.virtual_memory().percent
+        self.network.cpu.set_value(cpu)
+        self.network.ram.set_value(ram)
         battery = psutil.sensors_battery() if hasattr(psutil, "sensors_battery") else None
+        parts = [f"CPU {cpu:.0f}%", f"MEM {ram:.0f}%"]
         if battery is None:
             self.network.battery.set_value(None, "AC")
         else:
@@ -332,10 +418,85 @@ class MainWindow(Backdrop):
                 label="CHARGING" if battery.power_plugged else "BATTERY",
                 higher_is_better=True,
             )
+            parts.append(
+                f"BAT {battery.percent:.0f}%" + (" CHARGING" if battery.power_plugged else "")
+            )
+        self.corner_right.set_text("  ·  ".join(parts))
 
-    def _on_mode_changed(self, mode: object) -> None:
-        if isinstance(mode, Mode):
-            self.command.input.setPlaceholderText(_PLACEHOLDERS[mode])
+    # --- animation and layout ---
+
+    def _start_animation(self) -> None:
+        if not self._anim.isActive():
+            self._last_anim = time.perf_counter()
+            self._anim.start(16)
+
+    def _animate(self) -> None:
+        now = time.perf_counter()
+        dt = min(0.1, now - self._last_anim)
+        self._last_anim = now
+        glow_before = self.glow
+        moving = [t.step(dt) for t in (self._dock, self._drawer, self._glow)]
+        self.glow = self._glow.value
+        self._layout()
+        if abs(self.glow - glow_before) > 0.002:
+            self.update()  # the edge light lives on the backdrop
+        if not any(moving):
+            self._anim.stop()
+
+    def settle_animations(self) -> None:
+        """Jump every transition to its end (used for renders and tests)."""
+        for tween in (self._dock, self._drawer, self._glow):
+            tween.settle()
+        self.glow = self._glow.value
+        self._layout()
+        self.update()
+
+    def _layout(self) -> None:
+        w, h = self.width(), self.height()
+        self.header.setGeometry(0, 0, w, 64)
+        self.keys_button.move(w - 58, 18)
+        self.history_button.move(w - 100, 18)
+
+        bar_w = min(720, int(w * 0.5))
+        bar_h = self.command.sizeHint().height()
+        bar_y = h - 64 - bar_h
+        self.command.setGeometry((w - bar_w) // 2, bar_y, bar_w, bar_h)
+        self.notice.setGeometry((w - bar_w) // 2, bar_y - 26, bar_w, 22)
+        self.status_strip.setGeometry((w - 520) // 2, h - 54, 520, 26)
+        self.corner_left.setGeometry(28, h - 40, 420, 20)
+        self.corner_right.setGeometry(w - 448, h - 40, 420, 20)
+
+        # Orb: centred (with the caption underneath) or docked bottom-right.
+        d = _smooth(self._dock.value)
+        free_h = bar_y - 26 - 72
+        size = int(min(w * 0.4, free_h - 110, 520))
+        cx0, cy0 = w / 2, 72 + (free_h - 110) / 2
+        dock_cx, dock_cy = w - 40 - _DOCK_SIZE / 2, bar_y - 20 - _DOCK_SIZE / 2
+        s = size + (_DOCK_SIZE - size) * d
+        cx = cx0 + (dock_cx - cx0) * d
+        cy = cy0 + (dock_cy - cy0) * d
+        self.orb.setGeometry(QRect(int(cx - s / 2), int(cy - s / 2), int(s), int(s)))
+        self.caption.setGeometry(int(cx0 - 300), int(cy0 + size / 2 - 6), 600, 96)
+        self.caption.setVisible(d < 0.3)
+
+        # Reply card rises into place as the orb leaves the centre.
+        card_w = min(860, w - 2 * (_DOCK_SIZE + 60))
+        room = bar_y - 46 - 92
+        card_h = max(160, min(room, self.card.fit_height(card_w)))
+        offset = int((1 - d) * 40)
+        card_y = 92 + (room - card_h) // 2
+        self.card.setGeometry((w - card_w) // 2, card_y + offset, card_w, card_h)
+        self.card.setVisible(d > 0.4)
+
+        # History drawer slides in from the right.
+        dw = 400
+        x = int(w - (dw + 24) * _smooth(self._drawer.value))
+        self.conversation.setGeometry(x, 72, dw, bar_y - 14 - 72)
+        self.conversation.setVisible(self._drawer.value > 0.01)
+
+        for overlay in (self.details, self.confirm_overlay, self.keys_overlay):
+            if overlay.isVisible():
+                overlay.setGeometry(self.rect())
 
     # --- confirmations and screen capture ---
 
@@ -377,8 +538,10 @@ class MainWindow(Backdrop):
 
     def resizeEvent(self, event: object) -> None:  # noqa: N802
         super().resizeEvent(event)  # type: ignore[arg-type]
+        self._layout()
         self.confirm_overlay.setGeometry(self.rect())
         self.keys_overlay.setGeometry(self.rect())
+        self.details.setGeometry(self.rect())
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         if self.quitting:
@@ -386,6 +549,12 @@ class MainWindow(Backdrop):
             return
         event.ignore()
         self.hide()  # keep running in the tray
+
+
+def _smooth(t: float) -> float:
+    """Smoothstep: eases in and out of a transition."""
+    t = max(0.0, min(1.0, t))
+    return t * t * (3 - 2 * t)
 
 
 __all__ = ["MainWindow"]

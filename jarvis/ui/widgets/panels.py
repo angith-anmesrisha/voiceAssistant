@@ -3,19 +3,13 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
 
-from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import (
     QColor,
     QFont,
-    QLinearGradient,
-    QMouseEvent,
     QPainter,
     QPaintEvent,
-    QPen,
-    QPixmap,
-    QRadialGradient,
     QResizeEvent,
 )
 from PySide6.QtWidgets import (
@@ -23,28 +17,21 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLineEdit,
     QPushButton,
-    QSizePolicy,
     QWidget,
 )
 
-from jarvis.agent.prompts import Mode
 from jarvis.providers.base import ProviderState, ProviderStatus
 from jarvis.tools.registry import Risk
 from jarvis.ui import theme
-from jarvis.ui.theme import AMBER, CYAN, DANGER, ELECTRIC, ICE, STEEL, TEXT_DIM, TEXT_MUTED, rgba
+from jarvis.ui.theme import AMBER, CYAN, DANGER, ICE, STEEL, TEXT_DIM, TEXT_MUTED, rgba
 from jarvis.ui.widgets.glass import (
     GlassPanel,
     HudButton,
-    IconPainter,
     RingGauge,
     StatusDot,
     body_label,
     hud_label,
-    icon_analyze,
-    icon_assist,
-    icon_execute,
 )
-from jarvis.ui.widgets.orb import paint_reactor_logo
 
 STATE_COLORS: dict[ProviderState, QColor] = {
     ProviderState.READY: CYAN,
@@ -56,133 +43,6 @@ STATE_COLORS: dict[ProviderState, QColor] = {
     ProviderState.ERROR: AMBER,
     ProviderState.DISABLED: TEXT_MUTED,
 }
-
-
-class Backdrop(QWidget):
-    """Cinematic background: deep vignette, faint grid, soft blue bloom. Cached per size."""
-
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent)
-        self._cache: QPixmap | None = None
-
-    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
-        self._cache = None
-        super().resizeEvent(event)
-
-    def _render(self) -> QPixmap:
-        w, h = max(1, self.width()), max(1, self.height())
-        pm = QPixmap(w, h)
-        pm.fill(theme.BG_DEEP)
-        p = QPainter(pm)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        base = QLinearGradient(0, 0, 0, h)
-        base.setColorAt(0.0, QColor(9, 14, 22))
-        base.setColorAt(1.0, QColor(3, 5, 9))
-        p.fillRect(0, 0, w, h, base)
-        bloom = QRadialGradient(QPointF(w * 0.5, h * 0.48), max(w, h) * 0.55)
-        bloom.setColorAt(0.0, rgba(ELECTRIC, 34))
-        bloom.setColorAt(0.5, rgba(theme.DEEP_BLUE, 12))
-        bloom.setColorAt(1.0, rgba(theme.DEEP_BLUE, 0))
-        p.fillRect(0, 0, w, h, bloom)
-        p.setPen(QPen(rgba(CYAN, 9), 1))
-        step = 36
-        for x in range(0, w, step):
-            p.drawLine(x, 0, x, h)
-        for y in range(0, h, step):
-            p.drawLine(0, y, w, y)
-        p.setPen(QPen(rgba(CYAN, 22), 1))
-        for x in range(0, w, step * 4):
-            for y in range(0, h, step * 4):
-                p.drawLine(x - 3, y, x + 3, y)
-                p.drawLine(x, y - 3, x, y + 3)
-        vignette = QRadialGradient(QPointF(w / 2, h / 2), max(w, h) * 0.75)
-        vignette.setColorAt(0.6, QColor(0, 0, 0, 0))
-        vignette.setColorAt(1.0, QColor(0, 0, 0, 170))
-        p.fillRect(0, 0, w, h, vignette)
-        p.end()
-        return pm
-
-    def paintEvent(self, _event: QPaintEvent) -> None:  # noqa: N802
-        if self._cache is None or self._cache.size() != self.size():
-            self._cache = self._render()
-        p = QPainter(self)
-        p.drawPixmap(0, 0, self._cache)
-        p.end()
-
-
-class Header(QWidget):
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent)
-        self.setFixedHeight(64)
-        self._status_text = "CHECKING"
-        self._status_color = STEEL
-        self._clock = QTimer(self)
-        self._clock.timeout.connect(self.update)
-        self._clock.start(15_000)
-        self._fixed_now: datetime | None = None
-
-    def set_status(self, text: str, color: QColor) -> None:
-        self._status_text, self._status_color = text, color
-        self.update()
-
-    def freeze_clock(self, now: datetime) -> None:
-        self._fixed_now = now
-        self._clock.stop()
-        self.update()
-
-    def paintEvent(self, _event: QPaintEvent) -> None:  # noqa: N802
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w, h = self.width(), self.height()
-        paint_reactor_logo(p, QRectF(24, 14, 36, 36))
-        p.setFont(theme.font(theme.TITLE_FAMILY, 19, QFont.Weight.Bold, spacing=6))
-        p.setPen(ICE)
-        title_rect = QRectF(74, 0, 260, h)
-        p.drawText(title_rect, Qt.AlignmentFlag.AlignVCenter, "JARVIS")
-        title_w = p.fontMetrics().horizontalAdvance("JARVIS")
-        p.setFont(theme.font(theme.LABEL_FAMILY, 13.5, QFont.Weight.Medium, spacing=1.2))
-        p.setPen(TEXT_DIM)
-        p.drawText(
-            QRectF(74 + title_w + 14, 0, 460, h),
-            Qt.AlignmentFlag.AlignVCenter,
-            "—  Your personal AI assistant",
-        )
-        # Right side: status pill and clock.
-        now = self._fixed_now or datetime.now()
-        p.setFont(theme.font(theme.TITLE_FAMILY, 13, QFont.Weight.DemiBold, spacing=2))
-        p.setPen(ICE)
-        clock = now.strftime("%H:%M")
-        p.drawText(
-            QRectF(w - 120, 8, 96, 26),
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-            clock,
-        )
-        p.setFont(theme.label_font(9))
-        p.setPen(TEXT_DIM)
-        p.drawText(
-            QRectF(w - 220, 32, 196, 18),
-            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
-            now.strftime("%a %d %b %Y").upper(),
-        )
-        p.setFont(theme.label_font(9.5))
-        text_w = p.fontMetrics().horizontalAdvance(self._status_text) + 34
-        pill = QRectF(w - 150 - text_w, 18, text_w, 28)
-        p.setPen(QPen(rgba(self._status_color, 160), 1))
-        p.setBrush(rgba(self._status_color, 28))
-        p.drawRoundedRect(pill, 14, 14)
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(self._status_color)
-        p.drawEllipse(QPointF(pill.left() + 14, pill.center().y()), 3.5, 3.5)
-        p.setPen(rgba(self._status_color, 255) if self._status_color != STEEL else TEXT_DIM)
-        p.drawText(pill.adjusted(24, 0, -8, 0), Qt.AlignmentFlag.AlignVCenter, self._status_text)
-        # Thin separator with a bright centre.
-        line = QLinearGradient(0, 0, w, 0)
-        line.setColorAt(0.0, rgba(CYAN, 0))
-        line.setColorAt(0.5, rgba(CYAN, 110))
-        line.setColorAt(1.0, rgba(CYAN, 0))
-        p.setPen(QPen(line, 1))
-        p.drawLine(QPointF(0, h - 1), QPointF(w, h - 1))
-        p.end()
 
 
 class ProviderRow(QWidget):
@@ -293,90 +153,6 @@ class SafetyPanel(GlassPanel):
             row.addWidget(badge, 0, Qt.AlignmentFlag.AlignTop)
             row.addWidget(detail, 1)
             self.body.addLayout(row)
-
-
-class ModeSwitch(QWidget):
-    """Analyze / Assist / Execute segmented control."""
-
-    changed = Signal(object)
-
-    _ITEMS: tuple[tuple[Mode, str, IconPainter, str], ...] = (
-        (Mode.ANALYZE, "ANALYZE", icon_analyze, "Look at your screen and answer about it"),
-        (Mode.ASSIST, "ASSIST", icon_assist, "Chat, explain, write and plan"),
-        (Mode.EXECUTE, "EXECUTE", icon_execute, "Act on your PC with approved tools"),
-    )
-
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent)
-        self.mode = Mode.ASSIST
-        self._hover: int | None = None
-        self.setFixedHeight(44)
-        self.setMinimumWidth(420)
-        self.setMouseTracking(True)
-        self.setCursor(Qt.CursorShape.PointingHandCursor)
-
-    def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(460, 44)
-
-    def set_mode(self, mode: Mode) -> None:
-        if mode != self.mode:
-            self.mode = mode
-            self.update()
-            self.changed.emit(mode)
-
-    def _segment(self, i: int) -> QRectF:
-        w = self.width() / 3
-        return QRectF(i * w, 0, w, self.height()).adjusted(3, 3, -3, -3)
-
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        i = int(event.position().x() // (self.width() / 3))
-        if i != self._hover:
-            self._hover = i
-            self.setToolTip(self._ITEMS[min(i, 2)][3])
-            self.update()
-
-    def leaveEvent(self, _event: object) -> None:  # noqa: N802
-        self._hover = None
-        self.update()
-
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        i = min(2, int(event.position().x() // (self.width() / 3)))
-        self.set_mode(self._ITEMS[i][0])
-
-    def paintEvent(self, _event: QPaintEvent) -> None:  # noqa: N802
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        outer = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        p.setPen(QPen(rgba(CYAN, 70), 1))
-        p.setBrush(rgba(theme.BG_DEEP, 150))
-        p.drawRoundedRect(outer, 22, 22)
-        for i, (mode, label, icon, _tip) in enumerate(self._ITEMS):
-            seg = self._segment(i)
-            active = mode is self.mode
-            if active:
-                fill = QLinearGradient(seg.topLeft(), seg.bottomLeft())
-                fill.setColorAt(0, rgba(ELECTRIC, 120))
-                fill.setColorAt(1, rgba(theme.DEEP_BLUE, 90))
-                p.setBrush(fill)
-                p.setPen(QPen(rgba(CYAN, 200), 1))
-                p.drawRoundedRect(seg, 19, 19)
-            elif self._hover == i:
-                p.setBrush(rgba(CYAN, 20))
-                p.setPen(Qt.PenStyle.NoPen)
-                p.drawRoundedRect(seg, 19, 19)
-            color = ICE if active else TEXT_DIM
-            p.setFont(theme.label_font(10.5, QFont.Weight.Bold))
-            text_w = p.fontMetrics().horizontalAdvance(label)
-            total = 18 + 8 + text_w
-            x0 = seg.center().x() - total / 2
-            icon(p, QRectF(x0, seg.center().y() - 9, 18, 18), color)
-            p.setPen(color)
-            p.drawText(
-                QRectF(x0 + 26, seg.top(), text_w + 4, seg.height()),
-                Qt.AlignmentFlag.AlignVCenter,
-                label,
-            )
-        p.end()
 
 
 class CommandBar(GlassPanel):
@@ -505,47 +281,10 @@ class ConfirmOverlay(QWidget):
         p.end()
 
 
-class StateCaption(QWidget):
-    """Big state word under the orb, with a hint line."""
-
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent)
-        self.setFixedHeight(62)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self._title = "IDLE"
-        self._hint = ""
-        self._color = CYAN
-
-    def set_text(self, title: str, hint: str, color: QColor = CYAN) -> None:
-        self._title, self._hint, self._color = title, hint, color
-        self.update()
-
-    def paintEvent(self, _event: QPaintEvent) -> None:  # noqa: N802
-        p = QPainter(self)
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        w = self.width()
-        p.setFont(theme.font(theme.TITLE_FAMILY, 15, QFont.Weight.DemiBold, spacing=7))
-        p.setPen(rgba(self._color, 240))
-        p.drawText(QRectF(0, 0, w, 30), Qt.AlignmentFlag.AlignCenter, self._title)
-        tw = p.fontMetrics().horizontalAdvance(self._title) + len(self._title) * 7
-        p.setPen(QPen(rgba(self._color, 120), 1))
-        for sign in (-1, 1):
-            x = w / 2 + sign * (tw / 2 + 16)
-            p.drawLine(QPointF(x, 15), QPointF(x + sign * 46, 15))
-        p.setFont(theme.font(theme.BODY_FAMILY, 9.6))
-        p.setPen(TEXT_DIM)
-        p.drawText(QRectF(0, 34, w, 22), Qt.AlignmentFlag.AlignCenter, self._hint)
-        p.end()
-
-
 __all__ = [
-    "Backdrop",
     "CommandBar",
     "ConfirmOverlay",
-    "Header",
-    "ModeSwitch",
     "NetworkPanel",
     "SafetyPanel",
-    "StateCaption",
     "SystemPanel",
 ]

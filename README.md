@@ -26,7 +26,7 @@ More renders (listening, thinking, speaking, executing, confirmations, offline) 
 
    ```powershell
    setx GROQ_API_KEY "gsk_..."      # https://console.groq.com/keys  (primary, voice)
-   setx GEMINI_API_KEY "AIza..."    # https://aistudio.google.com/apikey  (backup, Analyze)
+   setx GEMINI_API_KEY "AIza..."    # https://aistudio.google.com/apikey  (backup, reads the screen)
    ```
 
    Either way the keys are stored only as your Windows user environment variables, never
@@ -34,8 +34,9 @@ More renders (listening, thinking, speaking, executing, confirmations, offline) 
    or both.
 
 4. Optional, for offline use: install [Ollama](https://ollama.com) and run
-   `ollama pull llama3.2` (chat). For Analyze offline, JARVIS uses any installed model
-   that can see images, preferring `qwen3.5:4b`.
+   `ollama pull qwen3.5`. JARVIS uses `qwen3.5:latest` for chat and, since it can see
+   images, for screen questions too (thinking is turned off so replies stay quick). If it
+   isn't installed, any other installed model that can see images is used for the screen.
 
 ## Run
 
@@ -48,14 +49,19 @@ python -m jarvis --hidden   # starts in the tray
   **Ctrl+Alt+Space** anywhere in Windows and release to send. Spoken questions get spoken
   answers (Windows' built-in voice); tap the mic to interrupt. Speech is turned into text
   by Groq (or Gemini); with neither, Windows' offline speech recognition is used.
-- **Modes**
-  - **Analyze** looks at your screen (JARVIS hides itself for the screenshot) and answers
-    about it. Press Enter with an empty box to just analyze. Needs Gemini or an Ollama
-    model that can see images.
-  - **Assist** is chat: answers, writing, planning. It never touches your PC.
-  - **Execute** lets JARVIS use its tools: open approved apps and sites, search the web,
-    press media and common shortcuts, type dictated text into the window you were using,
-    lock, sleep, and delayed shutdown or restart.
+- **No modes to pick.** JARVIS works out what you want from what you say:
+  - Ask about your screen ("what's this error?", "summarise this page") and it takes a
+    screenshot (hiding itself first) and answers about it. Press Enter with an empty box
+    to just describe the screen. Needs Gemini or an Ollama model that can see images.
+  - Ask a question or for writing or planning, and it just answers.
+  - Ask it to do something, and it uses its tools: open approved apps and sites, search
+    the web, press media and common shortcuts, type dictated text into the window you
+    were using, lock, sleep, and delayed shutdown or restart. Risky actions still ask
+    first.
+- Answers appear in a card in the middle while the orb moves to the corner; close the
+  card (or start a new question) and the orb returns. The chat button at the top right
+  opens the full history; click the status dots at the bottom for providers, network and
+  safety details.
 - Each answer is labelled with the provider and model that actually produced it.
 - Closing the window keeps JARVIS in the tray. Quit from the tray icon.
 

@@ -14,7 +14,6 @@ import httpx
 import qasync
 from PySide6.QtWidgets import QApplication
 
-from jarvis.agent.prompts import Mode
 from jarvis.app.config import Settings
 from jarvis.app.events import ChatEntry, EntryKind
 from jarvis.app.state import AppState
@@ -36,7 +35,7 @@ def demo_router(online: bool) -> ProviderRouter:
         router.statuses.update(
             groq=ProviderStatus(ProviderState.READY, latency_ms=86),
             gemini=ProviderStatus(ProviderState.READY, latency_ms=142),
-            ollama=ProviderStatus(ProviderState.MODEL_MISSING, "run: ollama pull llama3.2"),
+            ollama=ProviderStatus(ProviderState.MODEL_MISSING, "run: ollama pull qwen3.5"),
         )
         router.network = NetworkStatus(True, 24)
         router.last_used = ("Groq", "openai/gpt-oss-120b")
@@ -51,43 +50,54 @@ def demo_router(online: bool) -> ProviderRouter:
 
 
 CONVERSATION = [
-    ChatEntry(EntryKind.USER, "What's on my calendar vibe today? Keep it short.", mode="assist"),
+    ChatEntry(
+        EntryKind.USER,
+        "What's on my calendar vibe today? Keep it short.",
+    ),
     ChatEntry(
         EntryKind.ASSISTANT,
         "I can't see your calendar yet, but it's Friday afternoon: a good time to clear small "
         "tasks and plan next week. Want me to open your mail?",
         "Groq",
         "openai/gpt-oss-120b",
-        "assist",
     ),
-    ChatEntry(EntryKind.USER, "Open YouTube and search lo-fi coding music", mode="execute"),
+    ChatEntry(
+        EntryKind.USER,
+        "Open YouTube and search lo-fi coding music",
+    ),
     ChatEntry(EntryKind.ACTION, "✓ Search youtube for lo-fi coding music."),
     ChatEntry(
         EntryKind.ASSISTANT,
         "Done. YouTube is open with lo-fi coding music results.",
         "Groq",
         "openai/gpt-oss-120b",
-        "execute",
+        "used tools",
     ),
-    ChatEntry(EntryKind.USER, "Type a quick thank-you note into Notepad", mode="execute"),
+    ChatEntry(
+        EntryKind.USER,
+        "Type a quick thank-you note into Notepad",
+    ),
 ]
 
 
 async def render(out: Path) -> None:
     window = MainWindow()
     window.resize(*SIZE)
-    window.header.freeze_clock(datetime(2026, 10, 23, 18, 42))
+    window.caption.freeze_clock(datetime(2026, 10, 23, 18, 42))
     window._router = demo_router(True)
     window.refresh_providers()
     window.network.cpu.set_value(23)
     window.network.ram.set_value(61)
     window.network.battery.set_value(84, label="CHARGING", higher_is_better=True)
+    window.corner_right.set_text("CPU 23%  ·  MEM 61%  ·  BAT 84% CHARGING")
     for entry in CONVERSATION:
         window.add_entry(entry)
+    window.close_card()
     window.show()
 
     async def shot(name: str, state: AppState, t: float, level: float = 0.0) -> None:
         window.set_app_state(state)
+        window.settle_animations()
         window.orb.freeze(t, level)
         for _ in range(5):
             QApplication.processEvents()
@@ -97,60 +107,59 @@ async def render(out: Path) -> None:
         print(path)
 
     await shot("01-idle", AppState.IDLE, 2.0)
-    window.command.input.setText("Summarize the error on my screen")
-    window.modes.set_mode(Mode.ANALYZE)
+    window.command.input.setText("What's this error on my screen?")
     await shot("02-listening", AppState.LISTENING, 3.3, 0.75)
     window.command.input.clear()
-    window.modes.set_mode(Mode.ASSIST)
     await shot("03-thinking", AppState.THINKING, 4.1)
-    await shot("04-speaking", AppState.SPEAKING, 5.6)
-    window.modes.set_mode(Mode.EXECUTE)
+
+    window.add_entry(ChatEntry(EntryKind.USER, "What's this error on my screen?"))
+    window.add_entry(
+        ChatEntry(
+            EntryKind.ASSISTANT,
+            "VS Code shows a failing test in test_router.py: the mock returns HTTP 500, so "
+            "the router retries twice and then falls back to Gemini, but the test expects "
+            "Groq. Either make the mock return 200 on the second call, or update the "
+            "assertion to expect the fallback.",
+            "Gemini",
+            "gemini-3.8-flash",
+            "looked at screen",
+        )
+    )
+    await shot("04-reply", AppState.SPEAKING, 5.6)
+    window.add_entry(ChatEntry(EntryKind.USER, "Open YouTube and play lo-fi coding music"))
     await shot("05-executing", AppState.ACTING, 6.2)
+    window.add_entry(ChatEntry(EntryKind.ACTION, "✓ Search youtube for lo-fi coding music."))
+    window.add_entry(
+        ChatEntry(
+            EntryKind.ASSISTANT,
+            "Done. YouTube is open with lo-fi coding music.",
+            "Groq",
+            "openai/gpt-oss-120b",
+            "used tools",
+        )
+    )
+    await shot("06-action-done", AppState.IDLE, 6.8)
+    window.close_card()
 
     future = window.confirm_overlay.ask(
         "Type 34 characters into your last window: “Thanks for today, see you Monday!”",
         Risk.MEDIUM,
     )
-    await shot("06-confirm-medium", AppState.THINKING, 7.0)
+    await shot("07-confirm-medium", AppState.THINKING, 7.0)
     window.confirm_overlay.ask(
         "Shutdown the PC in 60 seconds. Unsaved work in open apps may be lost.", Risk.HIGH
     )
-    await shot("07-confirm-high", AppState.THINKING, 7.4)
+    await shot("08-confirm-high", AppState.THINKING, 7.4)
     window.confirm_overlay.hide()
     del future
 
-    window._router = demo_router(False)
-    window.refresh_providers()
-    window.modes.set_mode(Mode.ASSIST)
-    window.chat.clear()
-    window.add_entry(
-        ChatEntry(
-            EntryKind.ERROR,
-            "I couldn't reach any AI provider. Groq: unreachable. Gemini: unreachable. "
-            "Ollama: Ollama isn't running.",
-        )
-    )
-    await shot("08-offline", AppState.IDLE, 8.0)
+    window.details.open()
+    await shot("09-status", AppState.IDLE, 7.8)
+    window.details.hide()
+    window.toggle_history()
+    await shot("10-history", AppState.IDLE, 8.2)
+    window.toggle_history()
 
-    # Your setup before keys are added: only local Ollama, with a vision model found.
-    local = demo_router(True)
-    ollama = next(p for p in local.ordered if p.name == "ollama")
-    ollama._vision_model = "qwen3.5:4b"  # type: ignore[attr-defined]
-    no_key = "no API key: add one with the key button under AI PROVIDERS"
-    local.statuses.update(
-        groq=ProviderStatus(ProviderState.NO_KEY, no_key),
-        gemini=ProviderStatus(ProviderState.NO_KEY, no_key),
-        ollama=ProviderStatus(ProviderState.READY, latency_ms=292),
-    )
-    local.last_used = ("Ollama", "llama3.2")
-    window._router = local
-    window.refresh_providers()
-    window.chat.clear()
-    window.add_entry(ChatEntry(EntryKind.USER, "Hello JARVIS", mode="assist"))
-    window.add_entry(
-        ChatEntry(EntryKind.ASSISTANT, "Hello! How can I help?", "Ollama", "llama3.2", "assist")
-    )
-    await shot("09-local-only", AppState.IDLE, 9.0)
     from jarvis.ui.widgets.keys import KeyField
 
     window._key_fields = lambda: [
@@ -158,7 +167,12 @@ async def render(out: Path) -> None:
         KeyField("Gemini", "GEMINI_API_KEY", "https://aistudio.google.com/apikey", False),
     ]
     window.open_keys()
-    await shot("10-api-keys", AppState.IDLE, 9.5)
+    await shot("11-api-keys", AppState.IDLE, 9.5)
+    window.keys_overlay.hide()
+
+    window._router = demo_router(False)
+    window.refresh_providers()
+    await shot("12-offline", AppState.IDLE, 8.0)
     window.quitting = True
     window.close()
 

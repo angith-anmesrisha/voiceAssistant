@@ -35,7 +35,7 @@ class KeysOverlay(QWidget):
         self.card.setFixedWidth(560)
         intro = body_label(
             "Groq is the main online brain and also turns your voice into text. "
-            "Gemini is the backup and powers Analyze. Paste a key to add or replace it.",
+            "Gemini is the backup and reads the screen. Paste a key to add or replace it.",
             10,
         )
         intro.setWordWrap(True)

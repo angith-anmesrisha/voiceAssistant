@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
-from PySide6.QtGui import QColor, QPainter, QPaintEvent, QPen
+from PySide6.QtGui import QColor, QPainter, QPaintEvent, QPen, QResizeEvent
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QScrollArea, QVBoxLayout, QWidget
 
 from jarvis.app.events import EntryKind
@@ -22,6 +22,7 @@ class _Bubble(QFrame):
         layout.setSpacing(4)
         if meta:
             header = QLabel(meta)
+            header.setWordWrap(True)
             header.setFont(theme.label_font(8.8))
             color = {EntryKind.USER: TEXT_DIM, EntryKind.ERROR: DANGER}.get(kind, CYAN)
             header.setStyleSheet(f"color: {theme.css(rgba(color, 220))}; background: transparent;")
@@ -85,12 +86,18 @@ class ChatView(QScrollArea):
         self.setWidget(container)
         self.viewport().setStyleSheet("background: transparent;")
         self._empty = QLabel(
-            "Conversation history appears here.\nAsk anything, or switch to Execute to act."
+            "Conversation history appears here.\nAsk a question or tell JARVIS what to do."
         )
         self._empty.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._empty.setFont(theme.font(theme.BODY_FAMILY, 9.5))
         self._empty.setStyleSheet(f"color: {theme.css(theme.TEXT_MUTED)}; background: transparent;")
         self._list.insertWidget(0, self._empty)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
+        # Pin the list to the viewport so bubbles wrap instead of running off the edge.
+        super().resizeEvent(event)
+        if (inner := self.widget()) is not None:
+            inner.setFixedWidth(self.viewport().width())
 
     def entry_count(self) -> int:
         return self._list.count() - 2  # minus the empty-state label and the stretch

@@ -39,13 +39,17 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 - `tools/`: `registry.py` (`Risk`, `ToolSpec`, arg validation), `desktop.py` (`WindowsDesktop`:
   approved launches with `shell=False`, pynput keys/typing, lock/sleep, delayed shutdown),
   `builtin.py` (the tool set).
-- `agent/`: `prompts.py` (Analyze/Assist/Execute prompts), `assistant.py` (one turn: history,
-  screenshot for Analyze, tool loop for Execute, confirmations).
+- `agent/`: `prompts.py` (one system prompt; `wants_screen` regex), `assistant.py` (one turn:
+  history, screen fast path, otherwise a tool loop with tools + `look_at_screen`,
+  confirmations).
 - `voice/`: `audio_io.py` (mic → WAV recorder), `tts.py` (SAPI on its own thread),
   `hotkeys.py` (global push-to-talk), `local_stt.py` (offline SAPI dictation fallback).
 - `controller.py`: glues UI, voice, and assistant; owns busy/listening.
-- `ui/`: `theme.py`, `main_window.py`, `tray.py`, `icons.py`, `widgets/` (orb HUD, glass
-  panels, chat, side panels, command bar, confirm overlay).
+- `ui/`: `theme.py`, `main_window.py` (HUD stage, tweens, layout), `tray.py`, `icons.py`,
+  `widgets/`: `orb.py` (particle globe when idle, morphs into the glowing ring), `stage.py`
+  (backdrop, top bar, clock/state caption, reply card, status strip, `Tween`), `panels.py`
+  (provider/network/safety panels in the details overlay, command bar, confirm overlay),
+  `chat.py` (history drawer), `keys.py` (API key overlay), `glass.py`.
 - `assets/fonts/`: Orbitron, Rajdhani, Inter (OFL).
 
 ## Decisions
@@ -54,8 +58,12 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   STT goes through chat with an `input_audio` part; Ollama has no STT.
 - Keys come only from environment variables (`GROQ_API_KEY`, `GEMINI_API_KEY`). The key
   button in AI PROVIDERS saves them to the user environment (same as `setx`).
-- Ollama: chat model `llama3.2`; for Analyze, the configured `vision_model` (`qwen3.5:4b`)
-  or else any installed model whose `/api/show` capabilities include `vision`.
+- Ollama: chat and vision model `qwen3.5` (= `qwen3.5:latest`) with `reasoning_effort:
+  "none"` so it doesn't think; if the vision model is missing, any installed model whose
+  `/api/show` capabilities include `vision`.
+- No modes. Screen questions (regex `wants_screen`) go straight to vision; everything else
+  goes to the agent with all tools plus `look_at_screen`, so the model decides. The reply
+  label says what happened ("looked at screen", "used tools").
 - Speech-to-text: Groq Whisper, then Gemini, then Windows SAPI dictation (offline, weaker).
 - The controller's "busy" is the running request task, so it can't get stuck after errors.
   Typing while recording discards the recording. Identical consecutive error cards are
@@ -64,8 +72,11 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 - Medium risk asks Yes/No; High risk requires typing CONFIRM. Shutdown/restart run with a
   60 s delay and can be cancelled.
 - Screen, web, and file text is treated as information, never instructions (in every prompt).
-- The orb animates on a QTimer with QPainter only (no blur effects); it slows when calm and
-  stops when hidden, for Iris Xe.
+- UI follows the owner's reference video: charcoal grid HUD, particle globe + clock when
+  idle, cyan ring + screen-edge glow when active, reply card in the centre with the orb
+  docked bottom-right. QPainter only (no blur effects), static layers cached as pixmaps,
+  time-based easing; 60 fps when active, 30 when calm or if a frame takes >10 ms; stops
+  when hidden, for Iris Xe.
 - Closing the window hides to the tray; Quit is in the tray menu.
 
 ## Known issues

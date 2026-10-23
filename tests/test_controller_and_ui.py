@@ -8,7 +8,6 @@ import pytest
 from PySide6.QtWidgets import QApplication
 
 from jarvis.agent.assistant import Reply
-from jarvis.agent.prompts import Mode
 from jarvis.app.config import VoiceSettings
 from jarvis.app.events import ChatEntry, EntryKind, EventBus, PushToTalkPressed, PushToTalkReleased
 from jarvis.app.state import AppState, StateMachine
@@ -42,11 +41,11 @@ class FakeMic:
 
 class FakeAssistant:
     def __init__(self, state: StateMachine) -> None:
-        self.calls: list[tuple[str, Mode, bool]] = []
+        self.calls: list[tuple[str, bool]] = []
         self.state = state
 
-    async def handle(self, text: str, mode: Mode, *, spoken: bool = False) -> Reply:
-        self.calls.append((text, mode, spoken))
+    async def handle(self, text: str, *, spoken: bool = False) -> Reply:
+        self.calls.append((text, spoken))
         await self.state.transition(AppState.THINKING)
         await asyncio.sleep(0)
         await self.state.transition(AppState.IDLE)
@@ -128,11 +127,10 @@ async def settle() -> None:
 
 async def test_typed_request_is_answered_in_text_only() -> None:
     controller, rig = make_controller()
-    controller.mode = Mode.EXECUTE
     assert controller.submit("open notepad")
     assert not controller.submit("second")  # busy
     await settle()
-    assert rig.assistant.calls == [("open notepad", Mode.EXECUTE, False)]
+    assert rig.assistant.calls == [("open notepad", False)]
     assert rig.speaker.spoken == []
     assert not controller.busy
 
@@ -144,7 +142,7 @@ async def test_push_to_talk_transcribes_answers_and_speaks() -> None:
     rig.mic.on_chunk(b"\x10\x00" * 16_000)  # one second of audio
     await rig.bus.publish(PushToTalkReleased())
     await settle()
-    assert rig.assistant.calls == [("open notepad", Mode.ASSIST, True)]
+    assert rig.assistant.calls == [("open notepad", True)]
     assert rig.speaker.spoken == ["answer to open notepad"]
     final: AppState = rig.state.state
     assert final is AppState.IDLE
@@ -166,13 +164,13 @@ async def test_failed_transcription_reports_once_and_frees_jarvis() -> None:
     assert rig.state.state is AppState.IDLE
     assert controller.submit("analyse")  # typing works straight after the failure
     await settle()
-    assert rig.assistant.calls == [("analyse", Mode.ASSIST, False)]
+    assert rig.assistant.calls == [("analyse", False)]
 
 
 async def test_offline_speech_recognition_is_the_fallback() -> None:
     controller, rig = make_controller(FakeRouter(fail=True), FakeLocalStt("what time is it"))
     await speak_one_second(controller, rig)
-    assert rig.assistant.calls == [("what time is it", Mode.ASSIST, True)]
+    assert rig.assistant.calls == [("what time is it", True)]
     assert not [e for e in rig.entries if e.kind is EntryKind.ERROR]
 
 
@@ -190,7 +188,7 @@ async def test_typing_while_listening_discards_the_recording() -> None:
     assert controller.submit("hello")
     await settle()
     assert not controller.listening
-    assert rig.assistant.calls == [("hello", Mode.ASSIST, False)]
+    assert rig.assistant.calls == [("hello", False)]
     assert rig.state.state is AppState.IDLE
 
 

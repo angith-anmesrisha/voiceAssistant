@@ -126,10 +126,12 @@ async def test_ollama_probe_reports_missing_model(monkeypatch: pytest.MonkeyPatc
 
     status = await make(handler, monkeypatch)["ollama"].probe()
     assert status.state is ProviderState.MODEL_MISSING
-    assert "ollama pull llama3.2" in status.detail
+    assert "ollama pull qwen3.5" in status.detail
 
     def with_model(request: httpx.Request) -> httpx.Response:
-        return httpx.Response(200, json={"data": [{"id": "llama3.2:latest"}]})
+        if request.url.path == "/api/show":
+            return httpx.Response(200, json={"capabilities": ["completion", "vision"]})
+        return httpx.Response(200, json={"data": [{"id": "qwen3.5:latest"}]})
 
     assert (await make(with_model, monkeypatch)["ollama"].probe()).state is ProviderState.READY
 
@@ -190,22 +192,22 @@ async def test_ollama_picks_an_installed_model_that_can_see(
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/models":
-            names = ["llama3.2:latest", "qwen3.5:latest", "qwen3.5:0.8b"]
+            names = ["qwen3.5:latest", "llama3.2:latest", "gemma3:4b", "gemma3:1b"]
             return httpx.Response(200, json={"data": [{"id": n} for n in names]})
         assert str(request.url) == "http://localhost:11434/api/show"
         model = json.loads(request.content)["model"]
         shown.append(model)
-        caps = ["completion", "vision"] if model.startswith("qwen3.5") else ["completion"]
+        caps = ["completion", "vision"] if model.startswith("gemma3") else ["completion"]
         return httpx.Response(200, json={"capabilities": caps})
 
     ollama = make(handler, monkeypatch)["ollama"]
     assert (await ollama.probe()).state is ProviderState.READY
-    # The preferred qwen3.5:4b isn't installed, so the smallest model with vision wins.
-    assert ollama.model_for(Capability.VISION) == "qwen3.5:0.8b"
+    # The preferred qwen3.5 can't see here, so the smallest model with vision wins.
+    assert ollama.model_for(Capability.VISION) == "gemma3:1b"
     assert Capability.VISION in ollama.capabilities()
     assert Capability.STT not in ollama.capabilities()
     await ollama.probe()
-    assert shown.count("qwen3.5:0.8b") == 1  # capabilities are cached
+    assert shown.count("gemma3:1b") == 1  # capabilities are cached
 
 
 async def test_ollama_without_a_vision_model_cannot_analyze(
@@ -213,7 +215,7 @@ async def test_ollama_without_a_vision_model_cannot_analyze(
 ) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/models":
-            return httpx.Response(200, json={"data": [{"id": "llama3.2:latest"}]})
+            return httpx.Response(200, json={"data": [{"id": "qwen3.5:latest"}]})
         return httpx.Response(200, json={"capabilities": ["completion", "tools"]})
 
     ollama = make(handler, monkeypatch)["ollama"]
@@ -230,3 +232,15 @@ def test_keys_come_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None
     if sys.platform != "win32":  # on Windows this would write the real user environment
         assert keys.save_key("GEMINI_API_KEY", "abc") is False  # this session only
         assert keys.get_key("GEMINI_API_KEY") == "abc"
+
+
+async def test_ollama_uses_qwen_without_reasoning(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: dict[str, Any] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return chat_reply("Hi.")
+
+    await make(handler, monkeypatch)["ollama"].chat([{"role": "user", "content": "hi"}])
+    assert seen["model"] == "qwen3.5"
+    assert seen["reasoning_effort"] == "none"

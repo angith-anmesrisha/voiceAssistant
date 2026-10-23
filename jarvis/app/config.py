@@ -28,6 +28,9 @@ class ProviderSettings(BaseModel):
     vision_model: str = ""
     # Empty means this provider is not used for speech-to-text.
     stt_model: str = ""
+    # Sent as the OpenAI "reasoning_effort" field when set (e.g. "none" turns off a
+    # local model's thinking, which is slow on an integrated GPU).
+    reasoning_effort: str = ""
     timeout_s: float = 30.0
     max_retries: int = 2
 
@@ -56,10 +59,12 @@ def _gemini() -> ProviderSettings:
 def _ollama() -> ProviderSettings:
     return ProviderSettings(
         base_url="http://localhost:11434/v1",
-        chat_model="llama3.2",
-        # Preferred model for Analyze. If it isn't installed or can't see images, any
-        # installed model with vision is used instead (see OllamaProvider).
-        vision_model="qwen3.5:4b",
+        # Qwen 3.5 handles chat, tools and images. Reasoning is off for speed on an iGPU.
+        chat_model="qwen3.5",
+        # Preferred model for looking at the screen. If it isn't installed or can't see
+        # images, any installed model with vision is used instead (see OllamaProvider).
+        vision_model="qwen3.5",
+        reasoning_effort="none",
         timeout_s=120.0,  # local models on an iGPU can be slow
         max_retries=1,
     )

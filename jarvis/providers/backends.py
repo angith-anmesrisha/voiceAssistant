@@ -60,7 +60,7 @@ class GeminiProvider(OpenAICompatibleProvider):
 class OllamaProvider(OpenAICompatibleProvider):
     """Offline provider running on this PC.
 
-    The chat model must be installed. For Analyze, the configured vision model is used
+    The chat model must be installed. For screen questions, the configured vision model is used
     if it can see images; otherwise any installed model that can (per Ollama's
     ``/api/show`` capabilities) is picked, so no extra download is needed.
     """
@@ -147,9 +147,8 @@ def _size_hint(name: str) -> float:
 
 
 def _has_model(names: set[str], model: str) -> bool:
-    return (
-        model in names or f"{model}:latest" in names or any(n.split(":")[0] == model for n in names)
-    )
+    # Exact tags only: "qwen3.5" means qwen3.5:latest, not qwen3.5:4b.
+    return model in names or f"{model}:latest" in names
 
 
 def build_providers(config: ProvidersConfig, client: httpx.AsyncClient) -> dict[str, Provider]:

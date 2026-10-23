@@ -218,6 +218,8 @@ class OpenAICompatibleProvider(Provider):
                 self.display_name, ErrorKind.UNSUPPORTED, f"no {capability.value} model set"
             )
         body: dict[str, Any] = {"model": model, "messages": messages}
+        if self.settings.reasoning_effort:
+            body["reasoning_effort"] = self.settings.reasoning_effort
         if tools:
             body["tools"] = tools
         data = await self._post("chat/completions", json=body)
