@@ -293,6 +293,12 @@ class MainWindow(HudBackdrop):
 
     async def _on_providers_event(self, _event: ProvidersChanged) -> None:
         self.refresh_providers()
+        router = self._router
+        if self.visual_state() is VisualState.THINKING and router is not None and router.activity:
+            title, _hint = _CAPTIONS[VisualState.THINKING]
+            self.caption.show_state(title, router.activity, CYAN)
+            if self.overlay.isVisible():
+                self.overlay.say(title, router.activity)
         self._apply_state()
 
     async def _on_notice_event(self, event: UserNotice) -> None:
@@ -365,6 +371,13 @@ class MainWindow(HudBackdrop):
             meta = "JARVIS"
             if entry.provider:
                 meta += f" · {entry.provider.upper()} · {entry.model}"
+                skipped = self._router.skipped if self._router is not None else []
+                if skipped:
+                    failed = ", ".join(a.provider for a in skipped)
+                    self.show_notice(
+                        f"{failed} didn't answer ({skipped[-1].error}); {entry.provider} did.",
+                        NoticeLevel.WARNING,
+                    )
             if entry.mode:
                 meta += f" · {entry.mode.upper()}"
             # Red if something in this request just failed.
@@ -415,11 +428,9 @@ class MainWindow(HudBackdrop):
         elif visual is not VisualState.LISTENING:
             self._listening_again = False
         if visual is VisualState.THINKING and self._router is not None:
-            ready = [
-                p.display_name for p in self._router.ordered if self._router.statuses[p.name].usable
-            ]
-            if ready:
-                hint = f"Asking {ready[0]}…"
+            # What the router is really doing (it updates on every attempt and fallback).
+            first = self._router.first_usable()
+            hint = self._router.activity or (f"Asking {first.display_name}…" if first else hint)
         if visual is VisualState.IDLE:
             self.caption.show_clock(hint)
         else:
@@ -516,12 +527,16 @@ class MainWindow(HudBackdrop):
         strip.append(("ONLINE" if net.online else "OFFLINE", CYAN if net.online else DANGER))
         self.status_strip.set_items(strip)
         usable = [p for p in router.ordered if router.statuses[p.name].usable]
-        ready = [p for p in usable if router.statuses[p.name].state is ProviderState.READY]
-        if ready:
-            first = ready[0]
+        # The header names the provider that will be asked first (the same order the router
+        # uses), or, once something answered, the one that really did.
+        answered = router.provider_named(last[0]) if last is not None else None
+        first = answered or (usable[0] if usable else None)
+        if first is not None and (
+            answered or router.statuses[first.name].state is ProviderState.READY
+        ):
             where = "LOCAL AI" if first.name == "ollama" else "AI ONLINE"
             self.header.set_status(f"{where} · {first.display_name.upper()}", CYAN)
-            model = first.model_for(Capability.CHAT)
+            model = last[1] if answered and last else first.model_for(Capability.CHAT)
             self.corner_left.set_text(f"{first.display_name.upper()}  ·  {model}")
         elif usable:
             self.header.set_status("CHECKING", STEEL)

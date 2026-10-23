@@ -33,6 +33,8 @@ class ProviderSettings(BaseModel):
     reasoning_effort: str = ""
     # Prompt-injection classifier run over outside text (clipboard, screen, files) before
     # it reaches the chat model. Empty = no screening on this provider.
+    # Tried in order when the configured model isn't available to this account.
+    fallback_models: list[str] = Field(default_factory=list)
     guard_model: str = ""
     # Attack probability (0..1) at or above which text is withheld.
     guard_threshold: float = 0.8
@@ -68,7 +70,11 @@ def _gemini() -> ProviderSettings:
         chat_model="gemini-2.5-flash",
         vision_model="gemini-2.5-flash",
         stt_model="gemini-2.5-flash",
-        reasoning_effort="none",  # "none" disables thinking on 2.5 Flash (OpenAI compat docs)
+        # If 2.5 isn't served to this key, these current models (ai.google.dev/gemini-api/
+        # docs/models, 2026-10-23) are tried in order, automatically.
+        fallback_models=["gemini-3.8-flash", "gemini-3.5-flash-lite", "gemini-3.6-flash"],
+        # "none" disables thinking on 2.5 Flash; 3.x models get "low" (they can't turn it off).
+        reasoning_effort="none",
     )
 
 
@@ -76,12 +82,14 @@ def _ollama() -> ProviderSettings:
     return ProviderSettings(
         base_url="http://localhost:11434/v1",
         # Qwen 3.5 handles chat, tools and images. Reasoning is off for speed on an iGPU.
-        chat_model="qwen3.5",
+        chat_model="qwen3.5:latest",
         # Preferred model for looking at the screen. If it isn't installed or can't see
         # images, any installed model with vision is used instead (see OllamaProvider).
-        vision_model="qwen3.5",
+        vision_model="qwen3.5:latest",
         reasoning_effort="none",
-        timeout_s=120.0,  # local models on an iGPU can be slow
+        # Local models on an iGPU are slow, the first request also loads the model, and the
+        # tool list makes for a long prompt. A timeout isn't retried.
+        timeout_s=240.0,
         max_retries=1,
     )
 

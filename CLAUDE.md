@@ -73,7 +73,7 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   STT goes through chat with an `input_audio` part; Ollama has no STT.
 - Keys come only from environment variables (`GROQ_API_KEY`, `GEMINI_API_KEY`). The key
   button in AI PROVIDERS saves them to the user environment (same as `setx`).
-- Ollama: chat and vision model `qwen3.5` (= `qwen3.5:latest`) with `reasoning_effort:
+- Ollama: chat and vision model `qwen3.5:latest` (timeout 240 s) with `reasoning_effort:
   "none"` so it doesn't think; if the vision model is missing, any installed model whose
   `/api/show` capabilities include `vision`.
 - No modes. Screen questions (regex `wants_screen`) go straight to vision; everything else
@@ -96,6 +96,19 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   chunks; flagged tool text is withheld (ACTION "✕ Blocked…", reply marked failed, red),
   flagged titles are dropped. Guard errors fail open (logged). The user's own words are
   never screened.
+- Fallback is Groq → Gemini → Ollama (or the preferred one first). Only QUOTA and 5xx are
+  retried on the same provider (1 + `max_retries`); a timeout, network error, auth, billing
+  or bad request moves to the next provider at once (retrying timeouts used to take
+  minutes before switching). The router publishes `activity` ("Groq didn't answer, asking
+  Gemini…") and `skipped`; the caption, corner orb and a notice show them, and the header
+  names the provider tried first or the one that last answered (never a different one).
+- Gemini model fallback: `fallback_models` (3.8 Flash, 3.5 Flash-Lite, 3.6 Flash) are used
+  when the configured model is missing from `/models` at probe time or a call returns 404
+  / "model not found"; the working model is remembered. `reasoning_effort` "none" is sent
+  only to 2.5 Flash, "low" to 3.x. Tool calls keep Gemini's `extra_content` thought
+  signature for Gemini (placeholder `skip_thought_signature_validator` for calls made by
+  another provider) and have it stripped for Groq/Ollama. Google's error status
+  (FAILED_PRECONDITION etc.) is shown with a plain hint.
 - Any unexpected exception in a turn becomes an ERROR entry (so the UI goes red), never a
   silent return to idle. Chat that fails after all retries (1 + `max_retries`) on every
   provider is an ERROR too.

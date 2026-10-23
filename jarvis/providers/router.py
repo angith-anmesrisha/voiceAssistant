@@ -76,6 +76,10 @@ class ProviderRouter:
         self.last_used: tuple[str, str] | None = None  # (provider, model)
         # Chosen by the user ("use Gemini from now on"): tried first, others still back it up.
         self.preferred: str | None = None
+        # What the router is doing right now ("Asking Gemini…"), for the UI, and the
+        # providers that failed before the last answer (so a fallback is visible).
+        self.activity = ""
+        self.skipped: list[Attempt] = []
 
     @property
     def ordered(self) -> list[Provider]:
@@ -100,8 +104,24 @@ class ProviderRouter:
             if self._on_change is not None:
                 self._on_change()
 
+    def provider_named(self, display_name: str) -> Provider | None:
+        return next((p for p in self.ordered if p.display_name == display_name), None)
+
+    def first_usable(self) -> Provider | None:
+        """The provider a chat request would try first."""
+        return next((p for p in self.ordered if self.statuses[p.name].usable), None)
+
     def any_usable(self) -> bool:
         return any(self.statuses[p.name].usable for p in self.ordered)
+
+    def _notify(self) -> None:
+        if self._on_change is not None:
+            self._on_change()
+
+    def _set_activity(self, text: str) -> None:
+        if text != self.activity:
+            self.activity = text
+            self._notify()
 
     def _set_status(self, name: str, status: ProviderStatus) -> None:
         if self.statuses.get(name) != status:
@@ -132,6 +152,7 @@ class ProviderRouter:
         self, capability: Capability, call: Callable[[Provider], Awaitable[T]]
     ) -> tuple[T, Provider]:
         attempts: list[Attempt] = []
+        failed: list[Attempt] = []  # tried and failed (not just skipped as unusable)
         for provider in self.ordered:
             if capability not in provider.capabilities():
                 continue
@@ -142,6 +163,16 @@ class ProviderRouter:
             max_attempts = 1 + max(0, self._retries.get(provider.name, 0))
             last_error: ProviderError | None = None
             for attempt in range(max_attempts):
+                if failed and attempt == 0:
+                    self._set_activity(
+                        f"{failed[-1].provider} didn't answer, asking {provider.display_name}…"
+                    )
+                elif attempt:
+                    self._set_activity(
+                        f"Asking {provider.display_name} again ({attempt + 1}/{max_attempts})…"
+                    )
+                else:
+                    self._set_activity(f"Asking {provider.display_name}…")
                 try:
                     result = await call(provider)
                 except ProviderError as exc:
@@ -161,9 +192,12 @@ class ProviderRouter:
                 self._set_status(
                     provider.name, ProviderStatus(ProviderState.READY, latency_ms=status.latency_ms)
                 )
+                self.skipped = failed
+                self._set_activity("")
                 return result, provider
             assert last_error is not None
             attempts.append(Attempt(provider.display_name, last_error.message))
+            failed.append(Attempt(provider.display_name, last_error.message))
             state = _ERROR_STATE.get(last_error.kind)
             if state is not None:
                 self._set_status(provider.name, ProviderStatus(state, last_error.message))
@@ -171,6 +205,8 @@ class ProviderRouter:
                 self._set_status(
                     provider.name, ProviderStatus(ProviderState.ERROR, last_error.message)
                 )
+        self.skipped = failed
+        self._set_activity("")
         raise AllProvidersFailedError(capability, attempts)
 
     async def chat(

@@ -55,15 +55,19 @@ class ErrorKind(StrEnum):
     UNSUPPORTED = "unsupported"
 
 
-_RETRYABLE = {ErrorKind.QUOTA, ErrorKind.UNAVAILABLE, ErrorKind.TIMEOUT, ErrorKind.NETWORK}
+# Worth another try on the same provider. A timeout or a dropped connection moves on to
+# the next provider straight away: waiting for the same one again is what made fallback
+# feel stuck.
+_RETRYABLE = {ErrorKind.QUOTA, ErrorKind.UNAVAILABLE}
 
 
 class ProviderError(Exception):
-    def __init__(self, provider: str, kind: ErrorKind, message: str) -> None:
+    def __init__(self, provider: str, kind: ErrorKind, message: str, status: int = 0) -> None:
         super().__init__(f"{provider}: {message}")
         self.provider = provider
         self.kind = kind
         self.message = message
+        self.status = status  # HTTP status, 0 if there was no response
 
     @property
     def retryable(self) -> bool:

@@ -9,6 +9,7 @@ import uuid
 from typing import Any
 
 import httpx
+from loguru import logger
 
 from jarvis.app.config import ProviderSettings
 from jarvis.app.keys import get_key
@@ -38,7 +39,11 @@ def _error_message(response: httpx.Response) -> str:
     if isinstance(body, dict):
         error = body.get("error", body)
         if isinstance(error, dict):
-            return str(error.get("message") or error)[:300]
+            message = str(error.get("message") or error)
+            status = error.get("status")  # Google's code, e.g. FAILED_PRECONDITION
+            if isinstance(status, str) and status and status not in message:
+                message = f"{status}: {message}"
+            return message[:300]
         return str(error)[:300]
     return str(body)[:300]
 
@@ -55,11 +60,17 @@ def _kind_for_status(status: int, message: str = "") -> ErrorKind:
 
 
 def clean_assistant_message(message: dict[str, Any]) -> Message:
-    """Keep only fields every provider accepts when the message is sent back."""
+    """Keep only the fields needed when the message is sent back.
+
+    ``extra_content`` (Gemini's thought signature on a tool call) is kept here and
+    removed again by :meth:`OpenAICompatibleProvider.outgoing` for providers that don't
+    know it.
+    """
     cleaned: Message = {"role": "assistant", "content": message.get("content") or ""}
     if message.get("tool_calls"):
-        cleaned["tool_calls"] = [
-            {
+        calls = []
+        for call in message["tool_calls"]:
+            kept: dict[str, Any] = {
                 "id": call.get("id"),
                 "type": "function",
                 "function": {
@@ -67,9 +78,44 @@ def clean_assistant_message(message: dict[str, Any]) -> Message:
                     "arguments": call["function"].get("arguments") or "{}",
                 },
             }
-            for call in message["tool_calls"]
-        ]
+            if isinstance(call.get("extra_content"), dict):
+                kept["extra_content"] = call["extra_content"]
+            calls.append(kept)
+        cleaned["tool_calls"] = calls
     return cleaned
+
+
+def strip_extra_content(messages: list[Message]) -> list[Message]:
+    out: list[Message] = []
+    for message in messages:
+        calls = message.get("tool_calls") if isinstance(message, dict) else None
+        if calls and any("extra_content" in c for c in calls):
+            message = {
+                **message,
+                "tool_calls": [{k: v for k, v in c.items() if k != "extra_content"} for c in calls],
+            }
+        out.append(message)
+    return out
+
+
+_MODEL_GONE = (
+    "not found",
+    "not supported",
+    "does not exist",
+    "no longer available",
+    "not available",
+    "decommissioned",
+    "is not enabled",
+    "model_not_found",
+)
+
+
+def model_unavailable(error: ProviderError) -> bool:
+    """The provider works, but not this model for this account: try another model."""
+    if error.kind is not ErrorKind.BAD_REQUEST:
+        return False
+    text = error.message.lower()
+    return error.status == 404 or ("model" in text and any(w in text for w in _MODEL_GONE))
 
 
 def parse_tool_calls(message: dict[str, Any]) -> list[ToolCall]:
@@ -106,6 +152,9 @@ class OpenAICompatibleProvider(Provider):
         self.display_name = display_name
         self.settings = settings
         self._client = client or httpx.AsyncClient()
+        # configured model -> model that actually works for this account (see fallback_models)
+        self._swapped: dict[str, str] = {}
+        self._dead: set[str] = set()
 
     # --- configuration ---
 
@@ -130,12 +179,45 @@ class OpenAICompatibleProvider(Provider):
             caps.add(Capability.STT)
         return caps
 
-    def model_for(self, capability: Capability) -> str:
+    def configured_model(self, capability: Capability) -> str:
         if capability is Capability.VISION:
             return self.settings.vision_model
         if capability is Capability.STT:
             return self.settings.stt_model
         return self.settings.chat_model
+
+    def model_for(self, capability: Capability) -> str:
+        model = self.configured_model(capability)
+        return self._swapped.get(model, model)
+
+    def _candidates(self, model: str) -> list[str]:
+        """The model to try now, then the configured fallbacks, minus ones that failed."""
+        start = self._swapped.get(model, model)
+        names = [start, model, *self.settings.fallback_models]
+        seen: list[str] = []
+        for name in names:
+            if name and name not in seen and name not in self._dead:
+                seen.append(name)
+        return seen
+
+    def _use_model(self, configured: str, model: str) -> None:
+        if model != self._swapped.get(configured, configured):
+            logger.warning("{}: using {} instead of {}", self.display_name, model, configured)
+        if model == configured:
+            self._swapped.pop(configured, None)
+        else:
+            self._swapped[configured] = model
+
+    def reasoning_for(self, model: str) -> str:
+        return self.settings.reasoning_effort
+
+    def outgoing(self, messages: list[Message]) -> list[Message]:
+        """Messages as this provider accepts them."""
+        return strip_extra_content(messages)
+
+    def explain(self, error: ProviderError) -> ProviderError:
+        """Hook for providers to make an error message clearer."""
+        return error
 
     def _headers(self) -> dict[str, str]:
         key = self._api_key()
@@ -164,10 +246,13 @@ class OpenAICompatibleProvider(Provider):
             ) from exc
         if response.status_code >= 400:
             message = _error_message(response)
-            raise ProviderError(
-                self.display_name,
-                _kind_for_status(response.status_code, message),
-                f"HTTP {response.status_code}: {message}",
+            raise self.explain(
+                ProviderError(
+                    self.display_name,
+                    _kind_for_status(response.status_code, message),
+                    f"HTTP {response.status_code}: {message}",
+                    status=response.status_code,
+                )
             )
         try:
             data = response.json()
@@ -212,17 +297,32 @@ class OpenAICompatibleProvider(Provider):
         vision: bool = False,
     ) -> ChatResult:
         capability = Capability.VISION if vision else Capability.CHAT
-        model = self.model_for(capability)
-        if not model:
+        configured = self.configured_model(capability)
+        if not configured:
             raise ProviderError(
                 self.display_name, ErrorKind.UNSUPPORTED, f"no {capability.value} model set"
             )
-        body: dict[str, Any] = {"model": model, "messages": messages}
-        if self.settings.reasoning_effort:
-            body["reasoning_effort"] = self.settings.reasoning_effort
-        if tools:
-            body["tools"] = tools
-        data = await self._post("chat/completions", json=body)
+        outgoing = self.outgoing(messages)
+        candidates = self._candidates(configured)
+        if not candidates:
+            raise ProviderError(
+                self.display_name, ErrorKind.BAD_REQUEST, "none of the configured models works"
+            )
+        for index, model in enumerate(candidates):
+            body: dict[str, Any] = {"model": model, "messages": outgoing}
+            if effort := self.reasoning_for(model):
+                body["reasoning_effort"] = effort
+            if tools:
+                body["tools"] = tools
+            try:
+                data = await self._post("chat/completions", json=body)
+            except ProviderError as exc:
+                if model_unavailable(exc) and index + 1 < len(candidates):
+                    self._dead.add(model)
+                    continue  # this account can't use the model: try the next one
+                raise
+            self._use_model(configured, model)
+            break
         try:
             message = data["choices"][0]["message"]
         except (KeyError, IndexError, TypeError) as exc:

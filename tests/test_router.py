@@ -85,20 +85,28 @@ async def test_uses_first_provider_and_reports_it() -> None:
 
 
 async def test_retries_transient_errors_then_succeeds() -> None:
-    groq = FakeProvider("groq", [ErrorKind.TIMEOUT, ErrorKind.UNAVAILABLE])
+    groq = FakeProvider("groq", [ErrorKind.QUOTA, ErrorKind.UNAVAILABLE])
     result = await make(groq).chat([])
     assert groq.calls == 3
     assert result.provider == "Groq"
 
 
 async def test_retries_are_bounded_then_falls_back() -> None:
-    groq = FakeProvider("groq", [ErrorKind.TIMEOUT] * 10)
+    groq = FakeProvider("groq", [ErrorKind.UNAVAILABLE] * 10)
     gemini = FakeProvider("gemini")
     router = make(groq, gemini, retries=2)
     result = await router.chat([])
     assert groq.calls == 3  # 1 try + 2 retries
     assert result.provider == "Gemini"  # never pretends it was Groq
     assert router.statuses["groq"].state is ProviderState.ERROR
+
+
+async def test_a_timeout_moves_on_at_once() -> None:
+    groq = FakeProvider("groq", [ErrorKind.TIMEOUT] * 10)
+    gemini = FakeProvider("gemini")
+    router = make(groq, gemini, retries=2)
+    result = await router.chat([])
+    assert groq.calls == 1 and result.provider == "Gemini"
 
 
 async def test_auth_error_is_not_retried_and_marks_provider() -> None:

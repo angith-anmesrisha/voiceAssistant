@@ -363,7 +363,7 @@ def _failure_message(exc: AllProvidersFailedError) -> str:
     if exc.capability is Capability.VISION and not exc.attempts:
         return (
             "I can't analyze the screen yet: that needs a model that can see images. Add a "
-            "Gemini key, or install one in Ollama (for example: ollama pull qwen3.5:4b)."
+            "Gemini key, or install one in Ollama (for example: ollama pull qwen3.5:latest)."
         )
     if not exc.attempts:
         return (

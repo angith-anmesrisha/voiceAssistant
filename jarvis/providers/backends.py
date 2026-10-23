@@ -10,6 +10,7 @@ from jarvis.app.config import ProvidersConfig
 from jarvis.providers.base import (
     Capability,
     ErrorKind,
+    Message,
     Provider,
     ProviderError,
     ProviderState,
@@ -17,6 +18,21 @@ from jarvis.providers.base import (
     Transcription,
 )
 from jarvis.providers.openai_compat import OpenAICompatibleProvider, audio_part
+
+# Gemini 3 wants the thought signature it attached to each tool call sent back with the
+# history. Tool calls made by another provider (after a fallback) have none; Google
+# documents this placeholder for history it didn't produce.
+_NO_SIGNATURE = {"google": {"thought_signature": "skip_thought_signature_validator"}}
+
+_GEMINI_HINTS = {
+    "FAILED_PRECONDITION": (
+        "Google says a prerequisite isn't met for this key's project (usually billing, or "
+        "the free tier not being available for the account or region). Fix it in Google "
+        "AI Studio > Billing; JARVIS can't change it"
+    ),
+    "PERMISSION_DENIED": "this key isn't allowed to use the Gemini API (check the key's project)",
+    "RESOURCE_EXHAUSTED": "the key's Gemini quota is used up for now",
+}
 
 _TRANSCRIBE_PROMPT = (
     "Transcribe this audio exactly as spoken, in the language spoken. "
@@ -29,11 +45,70 @@ class GroqProvider(OpenAICompatibleProvider):
 
 
 class GeminiProvider(OpenAICompatibleProvider):
-    """Secondary online provider (Gemini's OpenAI-compatible endpoint)."""
+    """Secondary online provider (Gemini's OpenAI-compatible endpoint).
+
+    If the configured model isn't available to this account (2.5 models are only served to
+    accounts that used them before), the next of ``fallback_models`` that is gets used.
+    """
+
+    def reasoning_for(self, model: str) -> str:
+        effort = self.settings.reasoning_effort
+        # "none" (no thinking) only exists for 2.5 Flash models; 3.x can't turn it off.
+        if effort == "none" and not (model.startswith("gemini-2.5") and "pro" not in model):
+            return "low"
+        return effort
+
+    def outgoing(self, messages: list[Message]) -> list[Message]:
+        out: list[Message] = []
+        for message in messages:
+            calls = message.get("tool_calls") if isinstance(message, dict) else None
+            if calls and any("extra_content" not in c for c in calls):
+                message = {
+                    **message,
+                    "tool_calls": [
+                        c if "extra_content" in c else {**c, "extra_content": _NO_SIGNATURE}
+                        for c in calls
+                    ],
+                }
+            out.append(message)
+        return out
+
+    def explain(self, error: ProviderError) -> ProviderError:
+        for code, hint in _GEMINI_HINTS.items():
+            if code in error.message:
+                return ProviderError(
+                    error.provider, error.kind, f"{error.message} ({hint})", error.status
+                )
+        return error
+
+    def _check_models(self, response: httpx.Response, latency: int) -> ProviderStatus:
+        """Switch to a fallback model up front if the configured one isn't listed."""
+        try:
+            listed = {
+                str(item.get("id", "")).removeprefix("models/")
+                for item in response.json().get("data", [])
+            }
+        except (ValueError, AttributeError):
+            listed = set()
+        if listed:
+            for capability in (Capability.CHAT, Capability.VISION, Capability.STT):
+                configured = self.configured_model(capability)
+                if not configured or configured in listed:
+                    continue
+                usable = [m for m in self._candidates(configured) if m in listed]
+                if usable:
+                    self._use_model(configured, usable[0])
+                else:
+                    return ProviderStatus(
+                        ProviderState.MODEL_MISSING,
+                        f"{configured} isn't available to this key",
+                        latency_ms=latency,
+                    )
+        return ProviderStatus(ProviderState.READY, latency_ms=latency)
 
     async def transcribe(self, wav: bytes) -> Transcription:
         # The compatibility layer has no /audio/transcriptions; send the audio to chat.
-        model = self.settings.stt_model
+        model = self.model_for(Capability.STT)
         if not model:
             raise ProviderError(self.display_name, ErrorKind.UNSUPPORTED, "no speech-to-text")
         data = await self._post(

@@ -34,7 +34,7 @@ More renders (listening, thinking, speaking, executing, confirmations, offline) 
    or both.
 
 4. Optional, for offline use: install [Ollama](https://ollama.com) and run
-   `ollama pull qwen3.5`. JARVIS uses `qwen3.5:latest` for chat and, since it can see
+   `ollama pull qwen3.5:latest`. JARVIS uses `qwen3.5:latest` for chat and, since it can see
    images, for screen questions too (thinking is turned off so replies stay quick). If it
    isn't installed, any other installed model that can see images is used for the screen.
 
@@ -65,6 +65,12 @@ python -m jarvis --hidden   # starts in the tray
   Gemini from now on", "switch to the local model", "go back to automatic". The choice is
   remembered. If the chosen one isn't available, JARVIS says so and uses the next one,
   and every answer is labelled with the provider that really produced it.
+- **Automatic fallback:** Groq, then Gemini, then your local `qwen3.5:latest`. A busy or
+  overloaded service is retried twice; a timeout, a rejected key or a billing problem
+  moves on to the next one at once. While it works, the caption says who it's asking
+  ("Groq didn't answer, asking Gemini…"), and a note says when a backup answered. If
+  Gemini 2.5 isn't available to your key, JARVIS switches to Gemini 3.8 Flash (then 3.5
+  Flash-Lite, 3.6 Flash) by itself.
 - If a command **can't be carried out** (a tool fails, you decline it, JARVIS says it
   can't, or no AI can answer), the whole UI turns red for a few seconds, including the
   corner orb and its caption, then goes back to blue.

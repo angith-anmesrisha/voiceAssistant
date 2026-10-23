@@ -243,5 +243,5 @@ async def test_ollama_uses_qwen_without_reasoning(monkeypatch: pytest.MonkeyPatc
         return chat_reply("Hi.")
 
     await make(handler, monkeypatch)["ollama"].chat([{"role": "user", "content": "hi"}])
-    assert seen["model"] == "qwen3.5"
+    assert seen["model"] == "qwen3.5:latest"
     assert seen["reasoning_effort"] == "none"

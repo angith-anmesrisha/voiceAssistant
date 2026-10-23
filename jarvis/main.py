@@ -85,6 +85,14 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
 
     client = httpx.AsyncClient()
     config = settings.providers
+    # Which models are really configured (settings.json can override the defaults).
+    logger.info(
+        "Models: Groq {} · Gemini {} (then {}) · Ollama {}",
+        config.groq.chat_model,
+        config.gemini.chat_model,
+        ", ".join(config.gemini.fallback_models) or "none",
+        config.ollama.chat_model,
+    )
     router = ProviderRouter(
         build_providers(config, client),
         config.priority,
