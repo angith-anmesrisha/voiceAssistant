@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+
+# Build / packaging
+build/
+dist/
+*.spec.bak
+Output/
+
+# Secrets and local data (API key lives in Windows Credential Manager, never in files)
+.env
+*.env
+secrets.*
+*.sqlite
+*.db
+logs/
+*.wav
+*.pcm
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
