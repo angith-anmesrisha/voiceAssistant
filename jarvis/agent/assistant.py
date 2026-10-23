@@ -11,7 +11,7 @@ from loguru import logger
 from jarvis.agent.prompts import Mode, system_prompt
 from jarvis.app.events import ChatEntry, EntryKind, EventBus
 from jarvis.app.state import AppState, StateMachine
-from jarvis.providers.base import ChatResult, Message, ToolCall
+from jarvis.providers.base import Capability, ChatResult, Message, ToolCall
 from jarvis.providers.openai_compat import image_part
 from jarvis.providers.router import AllProvidersFailedError, ProviderRouter
 from jarvis.storage.db import HistoryStore
@@ -101,7 +101,7 @@ class Assistant:
                 result = await self._converse(shown, mode, spoken)
         except AllProvidersFailedError as exc:
             logger.warning("All providers failed: {}", exc)
-            message = f"I couldn't reach any AI provider. {_failure_detail(exc)}"
+            message = _failure_message(exc)
             await self._emit(EntryKind.ERROR, message)
             return Reply(message, ok=False)
         except _NoScreenError:
@@ -202,7 +202,16 @@ class _NoScreenError(Exception):
     pass
 
 
-def _failure_detail(exc: AllProvidersFailedError) -> str:
+def _failure_message(exc: AllProvidersFailedError) -> str:
+    if exc.capability is Capability.VISION and not exc.attempts:
+        return (
+            "I can't analyze the screen yet: that needs a model that can see images. Add a "
+            "Gemini key, or install one in Ollama (for example: ollama pull qwen3.5:4b)."
+        )
     if not exc.attempts:
-        return "None is set up for this. Add GROQ_API_KEY or GEMINI_API_KEY, or start Ollama."
-    return " ".join(f"{a.provider}: {a.error}." for a in exc.attempts)
+        return (
+            "I couldn't reach any AI provider. None is set up: add a Groq or Gemini key "
+            "(key button), or start Ollama."
+        )
+    detail = " ".join(f"{a.provider}: {a.error}." for a in exc.attempts)
+    return f"I couldn't reach any AI provider. {detail}"

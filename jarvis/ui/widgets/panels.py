@@ -219,6 +219,8 @@ class ProviderRow(QWidget):
             f"color: {theme.css(ICE if active else color)}; background: transparent;"
         )
         shown = status.detail if status.detail and not status.usable else model
+        if status.state is ProviderState.NO_KEY:
+            shown = "use the key button above"
         self.detail.setText(f"{self._role}  ·  {shown}")
 
 
@@ -228,8 +230,8 @@ class SystemPanel(GlassPanel):
         self.rows: dict[str, ProviderRow] = {}
         for key, name, role in (
             ("groq", "Groq", "PRIMARY"),
-            ("gemini", "Gemini", "SECONDARY"),
-            ("ollama", "Ollama", "OFFLINE"),
+            ("gemini", "Gemini", "BACKUP"),
+            ("ollama", "Ollama", "LOCAL"),
         ):
             row = ProviderRow(name, role)
             self.rows[key] = row

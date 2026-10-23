@@ -81,7 +81,7 @@ async def render(out: Path) -> None:
     window.refresh_providers()
     window.network.cpu.set_value(23)
     window.network.ram.set_value(61)
-    window.network.battery.set_value(84, "84%+", higher_is_better=True)
+    window.network.battery.set_value(84, label="CHARGING", higher_is_better=True)
     for entry in CONVERSATION:
         window.add_entry(entry)
     window.show()
@@ -131,6 +131,34 @@ async def render(out: Path) -> None:
         )
     )
     await shot("08-offline", AppState.IDLE, 8.0)
+
+    # Your setup before keys are added: only local Ollama, with a vision model found.
+    local = demo_router(True)
+    ollama = next(p for p in local.ordered if p.name == "ollama")
+    ollama._vision_model = "qwen3.5:4b"  # type: ignore[attr-defined]
+    no_key = "no API key: add one with the key button under AI PROVIDERS"
+    local.statuses.update(
+        groq=ProviderStatus(ProviderState.NO_KEY, no_key),
+        gemini=ProviderStatus(ProviderState.NO_KEY, no_key),
+        ollama=ProviderStatus(ProviderState.READY, latency_ms=292),
+    )
+    local.last_used = ("Ollama", "llama3.2")
+    window._router = local
+    window.refresh_providers()
+    window.chat.clear()
+    window.add_entry(ChatEntry(EntryKind.USER, "Hello JARVIS", mode="assist"))
+    window.add_entry(
+        ChatEntry(EntryKind.ASSISTANT, "Hello! How can I help?", "Ollama", "llama3.2", "assist")
+    )
+    await shot("09-local-only", AppState.IDLE, 9.0)
+    from jarvis.ui.widgets.keys import KeyField
+
+    window._key_fields = lambda: [
+        KeyField("Groq", "GROQ_API_KEY", "https://console.groq.com/keys", False),
+        KeyField("Gemini", "GEMINI_API_KEY", "https://aistudio.google.com/apikey", False),
+    ]
+    window.open_keys()
+    await shot("10-api-keys", AppState.IDLE, 9.5)
     window.quitting = True
     window.close()
 

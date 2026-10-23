@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from typing import Any
 
 import httpx
@@ -8,7 +9,7 @@ import pytest
 
 from jarvis.app.config import ProvidersConfig
 from jarvis.providers.backends import build_providers
-from jarvis.providers.base import ErrorKind, ProviderError, ProviderState
+from jarvis.providers.base import Capability, ErrorKind, ProviderError, ProviderState
 
 
 def make(handler: Any, monkeypatch: pytest.MonkeyPatch, **env: str) -> dict[str, Any]:
@@ -109,7 +110,7 @@ async def test_missing_key_never_calls_the_api(monkeypatch: pytest.MonkeyPatch) 
         return chat_reply("x")
 
     providers = make(handler, monkeypatch)
-    assert providers["groq"].missing_config() == "set the GROQ_API_KEY environment variable"
+    assert providers["groq"].missing_config().startswith("no API key")
     assert (await providers["groq"].probe()).state is ProviderState.NO_KEY
     with pytest.raises(ProviderError) as info:
         await providers["gemini"].chat([])
@@ -180,3 +181,52 @@ async def test_gemini_bad_key_400_is_an_auth_error(monkeypatch: pytest.MonkeyPat
     with pytest.raises(ProviderError) as info:
         await gemini.chat([])
     assert info.value.kind is ErrorKind.AUTH
+
+
+async def test_ollama_picks_an_installed_model_that_can_see(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    shown: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/models":
+            names = ["llama3.2:latest", "qwen3.5:latest", "qwen3.5:0.8b"]
+            return httpx.Response(200, json={"data": [{"id": n} for n in names]})
+        assert str(request.url) == "http://localhost:11434/api/show"
+        model = json.loads(request.content)["model"]
+        shown.append(model)
+        caps = ["completion", "vision"] if model.startswith("qwen3.5") else ["completion"]
+        return httpx.Response(200, json={"capabilities": caps})
+
+    ollama = make(handler, monkeypatch)["ollama"]
+    assert (await ollama.probe()).state is ProviderState.READY
+    # The preferred qwen3.5:4b isn't installed, so the smallest model with vision wins.
+    assert ollama.model_for(Capability.VISION) == "qwen3.5:0.8b"
+    assert Capability.VISION in ollama.capabilities()
+    assert Capability.STT not in ollama.capabilities()
+    await ollama.probe()
+    assert shown.count("qwen3.5:0.8b") == 1  # capabilities are cached
+
+
+async def test_ollama_without_a_vision_model_cannot_analyze(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"data": [{"id": "llama3.2:latest"}]})
+        return httpx.Response(200, json={"capabilities": ["completion", "tools"]})
+
+    ollama = make(handler, monkeypatch)["ollama"]
+    assert (await ollama.probe()).state is ProviderState.READY
+    assert Capability.VISION not in ollama.capabilities()
+
+
+def test_keys_come_from_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
+    from jarvis.app import keys
+
+    assert keys.get_key("GROQ_API_KEY") is None
+    monkeypatch.setenv("GROQ_API_KEY", "  gsk_test  ")
+    assert keys.get_key("GROQ_API_KEY") == "gsk_test"
+    if sys.platform != "win32":  # on Windows this would write the real user environment
+        assert keys.save_key("GEMINI_API_KEY", "abc") is False  # this session only
+        assert keys.get_key("GEMINI_API_KEY") == "abc"

@@ -57,6 +57,9 @@ def _ollama() -> ProviderSettings:
     return ProviderSettings(
         base_url="http://localhost:11434/v1",
         chat_model="llama3.2",
+        # Preferred model for Analyze. If it isn't installed or can't see images, any
+        # installed model with vision is used instead (see OllamaProvider).
+        vision_model="qwen3.5:4b",
         timeout_s=120.0,  # local models on an iGPU can be slow
         max_retries=1,
     )

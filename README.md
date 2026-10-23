@@ -21,17 +21,21 @@ More renders (listening, thinking, speaking, executing, confirmations, offline) 
    pip install -e ".[dev]"
    ```
 
-3. Add API keys as **environment variables** (they are never written to files):
+3. Add API keys. The easiest way: start JARVIS and click the **key button** at the top
+   of the AI PROVIDERS panel, then paste your keys. Or from a terminal:
 
    ```powershell
-   setx GROQ_API_KEY "gsk_..."      # https://console.groq.com/keys  (primary)
-   setx GEMINI_API_KEY "AIza..."    # https://aistudio.google.com/apikey  (backup, screen analysis)
+   setx GROQ_API_KEY "gsk_..."      # https://console.groq.com/keys  (primary, voice)
+   setx GEMINI_API_KEY "AIza..."    # https://aistudio.google.com/apikey  (backup, Analyze)
    ```
 
-   Close and reopen the terminal after `setx`. You can use either key, or both.
+   Either way the keys are stored only as your Windows user environment variables, never
+   in JARVIS files or logs, and JARVIS picks them up without a restart. Use either key,
+   or both.
 
 4. Optional, for offline use: install [Ollama](https://ollama.com) and run
-   `ollama pull llama3.2`.
+   `ollama pull llama3.2` (chat). For Analyze offline, JARVIS uses any installed model
+   that can see images, preferring `qwen3.5:4b`.
 
 ## Run
 
@@ -42,11 +46,12 @@ python -m jarvis --hidden   # starts in the tray
 
 - **Type** in the command bar and press Enter, or **talk**: tap the mic button, or hold
   **Ctrl+Alt+Space** anywhere in Windows and release to send. Spoken questions get spoken
-  answers (Windows' built-in voice); tap the mic to interrupt.
+  answers (Windows' built-in voice); tap the mic to interrupt. Speech is turned into text
+  by Groq (or Gemini); with neither, Windows' offline speech recognition is used.
 - **Modes**
   - **Analyze** looks at your screen (JARVIS hides itself for the screenshot) and answers
-    about it. Press Enter with an empty box to just analyze. Needs Gemini (or an Ollama
-    vision model set in settings).
+    about it. Press Enter with an empty box to just analyze. Needs Gemini or an Ollama
+    model that can see images.
   - **Assist** is chat: answers, writing, planning. It never touches your PC.
   - **Execute** lets JARVIS use its tools: open approved apps and sites, search the web,
     press media and common shortcuts, type dictated text into the window you were using,

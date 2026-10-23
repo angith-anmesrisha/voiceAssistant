@@ -10,7 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from collections.abc import Coroutine
-from typing import Any
+from typing import Any, Protocol
 
 from loguru import logger
 
@@ -23,13 +23,21 @@ from jarvis.app.events import (
     EventBus,
     PushToTalkPressed,
     PushToTalkReleased,
+    UserNotice,
 )
-from jarvis.app.state import AppState, StateMachine
+from jarvis.app.state import AppState, InvalidTransitionError, StateMachine
 from jarvis.providers.router import AllProvidersFailedError, ProviderRouter
 from jarvis.voice.audio_io import AudioDeviceError, Recorder
+from jarvis.voice.local_stt import DISPLAY_NAME as LOCAL_STT_NAME
 from jarvis.voice.tts import Speaker
 
 _MIN_RECORDING_S = 0.4
+
+
+class LocalTranscriber(Protocol):
+    available: bool
+
+    async def transcribe(self, wav: bytes) -> str: ...
 
 
 class AppController:
@@ -42,6 +50,7 @@ class AppController:
         recorder: Recorder,
         speaker: Speaker,
         voice: VoiceSettings,
+        local_stt: LocalTranscriber | None = None,
     ) -> None:
         self._bus = bus
         self._state = state
@@ -50,8 +59,11 @@ class AppController:
         self._recorder = recorder
         self._speaker = speaker
         self._voice = voice
+        self._local_stt = local_stt
         self.mode = Mode.ASSIST
-        self._busy = False
+        # The request being handled. "Busy" means this task is still running, so the
+        # flag can never get stuck after an error.
+        self._active: asyncio.Task[None] | None = None
         self._tasks: set[asyncio.Task[Any]] = set()
         self._max_timer: asyncio.TimerHandle | None = None
         bus.subscribe(PushToTalkPressed, self._on_ptt_pressed)
@@ -59,7 +71,7 @@ class AppController:
 
     @property
     def busy(self) -> bool:
-        return self._busy
+        return self._active is not None and not self._active.done()
 
     @property
     def mic_level(self) -> float:
@@ -73,10 +85,11 @@ class AppController:
 
     def submit(self, text: str, mode: Mode | None = None) -> bool:
         """Start answering ``text``. Returns False if JARVIS is busy."""
-        if self._busy or self._recorder.recording:
+        if self._recorder.recording:
+            self._discard_recording()  # typing wins over a recording in progress
+        if self.busy:
             return False
-        self._busy = True  # set now, so a second click before the task starts is refused
-        self._spawn(self._answer(text, mode or self.mode, spoken=False))
+        self._active = self._spawn(self._answer(text, mode or self.mode, spoken=False))
         return True
 
     # --- voice input ---
@@ -98,14 +111,14 @@ class AppController:
             return
         if self._speaker.speaking or self._state.state is AppState.SPEAKING:
             self._speaker.stop()  # barge-in
-        elif self._busy:
+        elif self.busy:
             return
         try:
             self._recorder.start()
         except AudioDeviceError as exc:
             await self._bus.publish(ChatEntry(EntryKind.ERROR, f"Microphone problem: {exc}"))
             return
-        await self._state.transition(AppState.LISTENING)
+        await self._move_to(AppState.LISTENING)
         loop = asyncio.get_running_loop()
         self._max_timer = loop.call_later(
             self._voice.max_recording_s, lambda: self._spawn(self.stop_listening())
@@ -114,37 +127,59 @@ class AppController:
     async def stop_listening(self) -> None:
         if not self._recorder.recording:
             return
-        if self._max_timer is not None:
-            self._max_timer.cancel()
-            self._max_timer = None
+        self._cancel_max_timer()
         wav = self._recorder.stop()
         if self._recorder.duration_s(wav) < _MIN_RECORDING_S:
-            await self._state.transition(AppState.IDLE)
+            await self._settle()
             return
-        await self._state.transition(AppState.THINKING)
-        self._busy = True
+        self._active = self._spawn(self._voice_turn(wav, self._active))
+
+    async def _voice_turn(self, wav: bytes, previous: asyncio.Task[None] | None) -> None:
+        if previous is not None and not previous.done():
+            # Barge-in: let the interrupted reply wind down first.
+            with contextlib.suppress(Exception, asyncio.CancelledError):
+                await asyncio.wait_for(asyncio.shield(previous), timeout=10)
         try:
-            try:
-                heard = await self._router.transcribe(wav)
-            except AllProvidersFailedError as exc:
-                logger.warning("Speech-to-text failed: {}", exc)
-                detail = " ".join(f"{a.provider}: {a.error}." for a in exc.attempts)
-                await self._bus.publish(
-                    ChatEntry(
-                        EntryKind.ERROR,
-                        "Voice input needs Groq or Gemini, and neither answered. "
-                        + (detail or "Set GROQ_API_KEY or GEMINI_API_KEY, or type instead."),
-                    )
-                )
+            await self._move_to(AppState.THINKING)
+            heard = await self._transcribe(wav)
+            if heard is None:
                 return
-            if not heard.text:
+            if not heard:
                 await self._bus.publish(ChatEntry(EntryKind.ERROR, "I didn't catch that."))
                 return
-            await self._answer_locked(heard.text, self.mode, spoken=True)
+            await self._answer_locked(heard, self.mode, spoken=True)
         finally:
-            self._busy = False
-            if self._state.state is not AppState.LISTENING:
-                await self._state.transition(AppState.IDLE)
+            await self._settle()
+
+    async def _transcribe(self, wav: bytes) -> str | None:
+        """Speech to text: online providers first, then Windows speech. None on failure."""
+        try:
+            return (await self._router.transcribe(wav)).text
+        except AllProvidersFailedError as exc:
+            online_error = " ".join(f"{a.provider}: {a.error}." for a in exc.attempts)
+        local = self._local_stt
+        if local is not None and local.available:
+            try:
+                text = await local.transcribe(wav)
+            except Exception as exc:
+                logger.warning("Offline speech-to-text failed: {}", type(exc).__name__)
+                online_error += f" {LOCAL_STT_NAME}: {exc}."
+            else:
+                await self._bus.publish(
+                    UserNotice(
+                        "Voice", f"Heard with {LOCAL_STT_NAME}; add a Groq key for better accuracy."
+                    )
+                )
+                return text
+        logger.warning("Speech-to-text failed on every provider")
+        await self._bus.publish(
+            ChatEntry(
+                EntryKind.ERROR,
+                "I couldn't turn your speech into text. "
+                + (online_error.strip() or "Add a Groq or Gemini key, or type instead."),
+            )
+        )
+        return None
 
     # --- answering ---
 
@@ -152,14 +187,12 @@ class AppController:
         try:
             await self._answer_locked(text, mode, spoken=spoken)
         finally:
-            self._busy = False
-            if self._state.state not in (AppState.IDLE, AppState.LISTENING):
-                await self._state.transition(AppState.IDLE)
+            await self._settle()
 
     async def _answer_locked(self, text: str, mode: Mode, *, spoken: bool) -> None:
         reply = await self._assistant.handle(text, mode, spoken=spoken)
         if spoken and reply.ok and self._voice.speak_replies and self._speaker.available:
-            await self._state.transition(AppState.SPEAKING)
+            await self._move_to(AppState.SPEAKING)
             await self._speaker.speak(reply.text)
 
     def stop_speaking(self) -> None:
@@ -175,7 +208,38 @@ class AppController:
             with contextlib.suppress(asyncio.CancelledError, Exception):
                 await task
 
-    def _spawn(self, coro: Coroutine[Any, Any, None]) -> None:
+    # --- helpers ---
+
+    def _discard_recording(self) -> None:
+        self._cancel_max_timer()
+        self._recorder.stop()
+        self._spawn(self._settle())
+
+    def _cancel_max_timer(self) -> None:
+        if self._max_timer is not None:
+            self._max_timer.cancel()
+            self._max_timer = None
+
+    async def _move_to(self, target: AppState) -> None:
+        try:
+            await self._state.transition(target)
+        except InvalidTransitionError as exc:
+            logger.warning("Ignored state change: {}", exc)
+
+    async def _settle(self) -> None:
+        """Back to IDLE after a request, unless a new recording has started."""
+        if self._recorder.recording:
+            return
+        await self._move_to(AppState.IDLE)
+
+    def _spawn(self, coro: Coroutine[Any, Any, None]) -> asyncio.Task[None]:
         task = asyncio.ensure_future(coro)
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
+        task.add_done_callback(_log_failure)
+        return task
+
+
+def _log_failure(task: asyncio.Task[None]) -> None:
+    if not task.cancelled() and (exc := task.exception()) is not None:
+        logger.opt(exception=exc).error("Request failed")

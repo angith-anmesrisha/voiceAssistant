@@ -5,7 +5,16 @@ from __future__ import annotations
 from collections.abc import Callable
 
 from PySide6.QtCore import QPointF, QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QEnterEvent, QFont, QMouseEvent, QPainter, QPaintEvent, QPen
+from PySide6.QtGui import (
+    QColor,
+    QEnterEvent,
+    QFont,
+    QMouseEvent,
+    QPainter,
+    QPaintEvent,
+    QPen,
+    QResizeEvent,
+)
 from PySide6.QtWidgets import QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from jarvis.ui import theme
@@ -22,6 +31,22 @@ class GlassPanel(QWidget):
         self.body.setContentsMargins(18, 14 if not title else 40, 18, 16)
         self.body.setSpacing(10)
         self._title = title
+        self._corner: QWidget | None = None
+
+    def set_corner_button(self, button: QWidget) -> None:
+        """Pin a small button over the title bar's right end."""
+        button.setParent(self)
+        self._corner = button
+        self._place_corner()
+        button.show()
+
+    def _place_corner(self) -> None:
+        if self._corner is not None:
+            self._corner.move(self.width() - self._corner.width() - 16, 6)
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
+        self._place_corner()
+        super().resizeEvent(event)
 
     def paintEvent(self, _event: QPaintEvent) -> None:  # noqa: N802
         p = QPainter(self)
@@ -54,9 +79,16 @@ class RingGauge(QWidget):
         self.setFixedSize(QSize(78, 92))
 
     def set_value(
-        self, value: float | None, caption: str | None = None, *, higher_is_better: bool = False
+        self,
+        value: float | None,
+        caption: str | None = None,
+        *,
+        higher_is_better: bool = False,
+        label: str | None = None,
     ) -> None:
         self._value = value
+        if label is not None:
+            self._label = label
         self._higher_is_better = higher_is_better
         self._caption = (
             caption if caption is not None else (f"{value:.0f}%" if value is not None else "—")
@@ -287,3 +319,14 @@ def icon_new_chat(p: QPainter, r: QRectF, color: QColor) -> None:
     w = r.width() * 0.3
     p.drawLine(QPointF(c.x() - w, c.y()), QPointF(c.x() + w, c.y()))
     p.drawLine(QPointF(c.x(), c.y() - w), QPointF(c.x(), c.y() + w))
+
+
+def icon_key(p: QPainter, r: QRectF, color: QColor) -> None:
+    p.setPen(QPen(color, 1.6, c=Qt.PenCapStyle.RoundCap, j=Qt.PenJoinStyle.RoundJoin))
+    p.setBrush(Qt.BrushStyle.NoBrush)
+    w = r.width()
+    x, y = r.left(), r.top()
+    p.drawEllipse(QPointF(x + w * 0.3, y + w * 0.5), w * 0.17, w * 0.17)
+    p.drawLine(QPointF(x + w * 0.47, y + w * 0.5), QPointF(x + w * 0.9, y + w * 0.5))
+    p.drawLine(QPointF(x + w * 0.76, y + w * 0.5), QPointF(x + w * 0.76, y + w * 0.66))
+    p.drawLine(QPointF(x + w * 0.88, y + w * 0.5), QPointF(x + w * 0.88, y + w * 0.62))

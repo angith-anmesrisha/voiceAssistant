@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import base64
 import json
-import os
 import time
 import uuid
 from typing import Any
@@ -12,6 +11,7 @@ from typing import Any
 import httpx
 
 from jarvis.app.config import ProviderSettings
+from jarvis.app.keys import get_key
 from jarvis.providers.base import (
     Capability,
     ChatResult,
@@ -113,14 +113,13 @@ class OpenAICompatibleProvider(Provider):
         env = self.settings.api_key_env
         if not env:
             return None
-        value = os.environ.get(env, "").strip()
-        return value or None
+        return get_key(env)
 
     def missing_config(self) -> str | None:
         if not self.settings.enabled:
             return "disabled in settings"
         if self.settings.api_key_env and not self._api_key():
-            return f"set the {self.settings.api_key_env} environment variable"
+            return "no API key: add one with the key button under AI PROVIDERS"
         return None
 
     def capabilities(self) -> set[Capability]:

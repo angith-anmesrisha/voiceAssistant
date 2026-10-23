@@ -92,6 +92,9 @@ class ChatView(QScrollArea):
         self._empty.setStyleSheet(f"color: {theme.css(theme.TEXT_MUTED)}; background: transparent;")
         self._list.insertWidget(0, self._empty)
 
+    def entry_count(self) -> int:
+        return self._list.count() - 2  # minus the empty-state label and the stretch
+
     def clear(self) -> None:
         while self._list.count() > 2:
             item = self._list.takeAt(1)

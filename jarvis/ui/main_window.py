@@ -29,10 +29,12 @@ from jarvis.ui.widgets.glass import (
     GlassPanel,
     HudButton,
     body_label,
+    icon_key,
     icon_mic,
     icon_new_chat,
     icon_send,
 )
+from jarvis.ui.widgets.keys import KeyField, KeysOverlay
 from jarvis.ui.widgets.orb import OrbHud, VisualState
 from jarvis.ui.widgets.panels import (
     Backdrop,
@@ -54,7 +56,7 @@ _CAPTIONS: dict[VisualState, tuple[str, str]] = {
     VisualState.ACTING: ("EXECUTING", "Running an approved action"),
     VisualState.OFFLINE: (
         "OFFLINE",
-        "No AI provider reachable. Set GROQ_API_KEY or GEMINI_API_KEY, or start Ollama.",
+        "No AI available. Add a Groq or Gemini key with the key button, or start Ollama.",
     ),
 }
 
@@ -75,6 +77,8 @@ class MainWindow(Backdrop):
         self._level: Callable[[], float] = lambda: 0.0
         self._state = AppState.IDLE
         self._router: ProviderRouter | None = None
+        self._key_fields: Callable[[], list[KeyField]] = list
+        self._last_error = ""
         self.quitting = False
 
         root = QVBoxLayout(self)
@@ -129,12 +133,19 @@ class MainWindow(Backdrop):
         self.conversation = GlassPanel("CONVERSATION")
         self.chat = ChatView()
         self.new_chat = HudButton(icon_new_chat, "New conversation", 30)
-        self.new_chat.setParent(self.conversation)
+        self.conversation.set_corner_button(self.new_chat)
         self.conversation.body.addWidget(self.chat)
         self.conversation.setFixedWidth(410)
         body.addWidget(self.conversation)
 
+        self.keys_button = HudButton(
+            icon_key, "API keys: add or change your Groq and Gemini keys", 30
+        )
+        self.providers.set_corner_button(self.keys_button)
+        self.keys_button.clicked.connect(self.open_keys)
+
         self.confirm_overlay = ConfirmOverlay(self)
+        self.keys_overlay = KeysOverlay(self, on_save=lambda _values: None)
 
         self._pulse = QTimer(self)
         self._pulse.timeout.connect(self._update_mic_button)
@@ -155,8 +166,13 @@ class MainWindow(Backdrop):
         on_mic: Callable[[], None],
         on_mode: Callable[[Mode], None],
         on_new_chat: Callable[[], None],
+        key_fields: Callable[[], list[KeyField]] = list,
+        on_save_keys: Callable[[dict[str, str]], None] | None = None,
     ) -> None:
         self._router = router
+        self._key_fields = key_fields
+        if on_save_keys is not None:
+            self.keys_overlay._on_save = on_save_keys
         self._level = level
         bus.subscribe(StateChanged, self._on_state_event)
         bus.subscribe(ChatEntry, self._on_chat_event)
@@ -168,6 +184,7 @@ class MainWindow(Backdrop):
 
         def new_chat() -> None:
             self.chat.clear()
+            self._last_error = ""
             on_new_chat()
 
         self.new_chat.clicked.connect(new_chat)
@@ -201,7 +218,18 @@ class MainWindow(Backdrop):
 
     # --- display ---
 
+    def open_keys(self) -> None:
+        self.show_and_raise()
+        self.keys_overlay.open(self._key_fields())
+
     def add_entry(self, entry: ChatEntry) -> None:
+        if entry.kind is EntryKind.ERROR:
+            if entry.text == self._last_error:
+                self.show_notice("Same problem again; see the conversation.", NoticeLevel.WARNING)
+                return  # don't stack identical error cards
+            self._last_error = entry.text
+        elif entry.kind is EntryKind.USER:
+            self._last_error = ""
         meta = ""
         if entry.kind is EntryKind.USER:
             meta = f"YOU · {entry.mode.upper()}" if entry.mode else "YOU"
@@ -269,6 +297,9 @@ class MainWindow(Backdrop):
             status = router.statuses[provider.name]
             active = last is not None and last[0] == provider.display_name
             model = provider.model_for(Capability.CHAT)
+            vision = provider.model_for(Capability.VISION)
+            if vision and vision != model:
+                model = f"{model} · sees with {vision}"
             row.set_status(status, model, active)
         if last is not None:
             self.providers.active.setText(f"Last answer from {last[0]} · {last[1]}")
@@ -277,11 +308,13 @@ class MainWindow(Backdrop):
         usable = [p for p in router.ordered if router.statuses[p.name].usable]
         ready = [p for p in usable if router.statuses[p.name].state is ProviderState.READY]
         if ready:
-            self.header.set_status(f"ONLINE · {ready[0].display_name.upper()}", CYAN)
+            first = ready[0]
+            where = "LOCAL AI" if first.name == "ollama" else "AI ONLINE"
+            self.header.set_status(f"{where} · {first.display_name.upper()}", CYAN)
         elif usable:
             self.header.set_status("CHECKING", STEEL)
         else:
-            self.header.set_status("OFFLINE", DANGER)
+            self.header.set_status("NO AI AVAILABLE", DANGER)
 
     def refresh_system_stats(self) -> None:
         try:
@@ -294,8 +327,11 @@ class MainWindow(Backdrop):
         if battery is None:
             self.network.battery.set_value(None, "AC")
         else:
-            caption = f"{battery.percent:.0f}%" + ("+" if battery.power_plugged else "")
-            self.network.battery.set_value(battery.percent, caption, higher_is_better=True)
+            self.network.battery.set_value(
+                battery.percent,
+                label="CHARGING" if battery.power_plugged else "BATTERY",
+                higher_is_better=True,
+            )
 
     def _on_mode_changed(self, mode: object) -> None:
         if isinstance(mode, Mode):
@@ -342,7 +378,7 @@ class MainWindow(Backdrop):
     def resizeEvent(self, event: object) -> None:  # noqa: N802
         super().resizeEvent(event)  # type: ignore[arg-type]
         self.confirm_overlay.setGeometry(self.rect())
-        self.new_chat.move(self.conversation.width() - 46, 6)
+        self.keys_overlay.setGeometry(self.rect())
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         if self.quitting:

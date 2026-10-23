@@ -33,6 +33,8 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   `openai_compat.py` (shared chat/transcribe/probe), `backends.py` (Groq, Gemini, Ollama),
   `network.py` (TCP reachability), `router.py` (priority, capability routing, bounded
   retries with backoff, fallback, `AllProvidersFailedError`).
+- `app/keys.py`: API keys from the process env, then (Windows) the user env in
+  `HKCU\Environment`; saving from the UI writes there too, like `setx`.
 - `storage/db.py`: `HistoryStore` (SQLite conversations + messages, via `asyncio.to_thread`).
 - `tools/`: `registry.py` (`Risk`, `ToolSpec`, arg validation), `desktop.py` (`WindowsDesktop`:
   approved launches with `shell=False`, pynput keys/typing, lock/sleep, delayed shutdown),
@@ -40,7 +42,7 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 - `agent/`: `prompts.py` (Analyze/Assist/Execute prompts), `assistant.py` (one turn: history,
   screenshot for Analyze, tool loop for Execute, confirmations).
 - `voice/`: `audio_io.py` (mic → WAV recorder), `tts.py` (SAPI on its own thread),
-  `hotkeys.py` (global push-to-talk).
+  `hotkeys.py` (global push-to-talk), `local_stt.py` (offline SAPI dictation fallback).
 - `controller.py`: glues UI, voice, and assistant; owns busy/listening.
 - `ui/`: `theme.py`, `main_window.py`, `tray.py`, `icons.py`, `widgets/` (orb HUD, glass
   panels, chat, side panels, command bar, confirm overlay).
@@ -50,7 +52,14 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 - All three providers use their OpenAI-compatible chat-completions endpoints, so history and
   tool calls move between providers unchanged. Groq STT uses `/audio/transcriptions`; Gemini
   STT goes through chat with an `input_audio` part; Ollama has no STT.
-- Keys come only from environment variables (`GROQ_API_KEY`, `GEMINI_API_KEY`).
+- Keys come only from environment variables (`GROQ_API_KEY`, `GEMINI_API_KEY`). The key
+  button in AI PROVIDERS saves them to the user environment (same as `setx`).
+- Ollama: chat model `llama3.2`; for Analyze, the configured `vision_model` (`qwen3.5:4b`)
+  or else any installed model whose `/api/show` capabilities include `vision`.
+- Speech-to-text: Groq Whisper, then Gemini, then Windows SAPI dictation (offline, weaker).
+- The controller's "busy" is the running request task, so it can't get stuck after errors.
+  Typing while recording discards the recording. Identical consecutive error cards are
+  collapsed.
 - Gemini returns HTTP 400 "API key not valid" for a bad key; it is classified as AUTH.
 - Medium risk asks Yes/No; High risk requires typing CONFIRM. Shutdown/restart run with a
   60 s delay and can be cancelled.
@@ -61,7 +70,8 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 
 ## Known issues
 - Groq and Ollama calls aren't exercised from CI; tests use `httpx.MockTransport` and fakes.
-- SAPI TTS, global hotkeys, and the desktop tools are untested on real Windows so far.
+- SAPI TTS and dictation, global hotkeys, the key dialog's registry write, and the desktop
+  tools are untested on real Windows so far.
 - The Space keystroke of Ctrl+Alt+Space still reaches the focused app.
 - No settings window yet; edit `settings.json` in the data dir.
 

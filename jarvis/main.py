@@ -59,6 +59,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     from jarvis.ui.tray import Tray
     from jarvis.voice.audio_io import Microphone, Recorder
     from jarvis.voice.hotkeys import GlobalHotkeys
+    from jarvis.voice.local_stt import WindowsDictation
     from jarvis.voice.tts import Speaker
 
     bus = EventBus()
@@ -111,7 +112,31 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         Microphone(settings.voice.input_sample_rate, device=settings.voice.input_device),
         settings.voice.input_sample_rate,
     )
-    controller = AppController(bus, state, assistant, router, recorder, speaker, settings.voice)
+    controller = AppController(
+        bus, state, assistant, router, recorder, speaker, settings.voice, WindowsDictation()
+    )
+
+    from jarvis.app import keys
+    from jarvis.ui.widgets.keys import KeyField
+
+    key_links = {
+        "groq": "https://console.groq.com/keys",
+        "gemini": "https://aistudio.google.com/apikey",
+    }
+
+    def key_fields() -> list[KeyField]:
+        fields = []
+        for name, url in key_links.items():
+            env = config.get(name).api_key_env
+            if env:
+                fields.append(KeyField(name.title(), env, url, keys.get_key(env) is not None))
+        return fields
+
+    def save_keys(values: dict[str, str]) -> None:
+        persisted = all([keys.save_key(env, value) for env, value in values.items()])
+        where = "for this and future sessions" if persisted else "for this session only"
+        window.show_notice(f"API key saved {where}. Checking providers…")
+        spawn(router.probe_all())
 
     def set_mode(mode: Any) -> None:
         controller.mode = mode
@@ -124,6 +149,8 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         on_mic=controller.toggle_listening,
         on_mode=set_mode,
         on_new_chat=lambda: spawn(assistant.new_conversation()),
+        key_fields=key_fields,
+        on_save_keys=save_keys,
     )
 
     # Restore the last conversation into the panel.

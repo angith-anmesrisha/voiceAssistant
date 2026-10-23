@@ -13,7 +13,8 @@ from jarvis.app.config import VoiceSettings
 from jarvis.app.events import ChatEntry, EntryKind, EventBus, PushToTalkPressed, PushToTalkReleased
 from jarvis.app.state import AppState, StateMachine
 from jarvis.controller import AppController
-from jarvis.providers.base import Transcription
+from jarvis.providers.base import Capability, Transcription
+from jarvis.providers.router import AllProvidersFailedError, Attempt
 from jarvis.tools.registry import Risk
 from jarvis.voice.audio_io import Recorder
 
@@ -53,11 +54,25 @@ class FakeAssistant:
 
 
 class FakeRouter:
-    def __init__(self, text: str = "open notepad") -> None:
+    def __init__(self, text: str = "open notepad", fail: bool = False) -> None:
         self.text = text
+        self.fail = fail
 
     async def transcribe(self, wav: bytes) -> Transcription:
+        if self.fail:
+            raise AllProvidersFailedError(Capability.STT, [Attempt("Groq", "no API key")])
         return Transcription(self.text, "Groq", "whisper")
+
+
+class FakeLocalStt:
+    def __init__(self, text: str | None) -> None:
+        self.text = text
+        self.available = True
+
+    async def transcribe(self, wav: bytes) -> str:
+        if self.text is None:
+            raise RuntimeError("no recognizer installed")
+        return self.text
 
 
 class FakeSpeaker:
@@ -77,7 +92,9 @@ class FakeSpeaker:
         pass
 
 
-def make_controller() -> tuple[AppController, Any]:
+def make_controller(
+    router: FakeRouter | None = None, local_stt: FakeLocalStt | None = None
+) -> tuple[AppController, Any]:
     bus = EventBus()
     state = StateMachine(bus)
     mic = FakeMic()
@@ -89,11 +106,18 @@ def make_controller() -> tuple[AppController, Any]:
         bus,
         state,
         rig.assistant,
-        FakeRouter(),  # type: ignore[arg-type]
+        router or FakeRouter(),  # type: ignore[arg-type]
         Recorder(mic, 16_000),
         rig.speaker,
         VoiceSettings(),
+        local_stt,
     )
+    rig.entries = []
+
+    async def record(entry: ChatEntry) -> None:
+        rig.entries.append(entry)
+
+    bus.subscribe(ChatEntry, record)
     return controller, rig
 
 
@@ -124,6 +148,50 @@ async def test_push_to_talk_transcribes_answers_and_speaks() -> None:
     assert rig.speaker.spoken == ["answer to open notepad"]
     final: AppState = rig.state.state
     assert final is AppState.IDLE
+
+
+async def speak_one_second(controller: AppController, rig: Any) -> None:
+    await controller.start_listening()
+    rig.mic.on_chunk(b"\x10\x00" * 16_000)
+    await controller.stop_listening()
+    await settle()
+
+
+async def test_failed_transcription_reports_once_and_frees_jarvis() -> None:
+    controller, rig = make_controller(FakeRouter(fail=True))
+    await speak_one_second(controller, rig)
+    errors = [e for e in rig.entries if e.kind is EntryKind.ERROR]
+    assert len(errors) == 1 and "Groq: no API key" in errors[0].text
+    assert not controller.busy
+    assert rig.state.state is AppState.IDLE
+    assert controller.submit("analyse")  # typing works straight after the failure
+    await settle()
+    assert rig.assistant.calls == [("analyse", Mode.ASSIST, False)]
+
+
+async def test_offline_speech_recognition_is_the_fallback() -> None:
+    controller, rig = make_controller(FakeRouter(fail=True), FakeLocalStt("what time is it"))
+    await speak_one_second(controller, rig)
+    assert rig.assistant.calls == [("what time is it", Mode.ASSIST, True)]
+    assert not [e for e in rig.entries if e.kind is EntryKind.ERROR]
+
+
+async def test_offline_recognizer_failure_is_reported() -> None:
+    controller, rig = make_controller(FakeRouter(fail=True), FakeLocalStt(None))
+    await speak_one_second(controller, rig)
+    errors = [e for e in rig.entries if e.kind is EntryKind.ERROR]
+    assert len(errors) == 1 and "no recognizer installed" in errors[0].text
+    assert not controller.busy
+
+
+async def test_typing_while_listening_discards_the_recording() -> None:
+    controller, rig = make_controller()
+    await controller.start_listening()
+    assert controller.submit("hello")
+    await settle()
+    assert not controller.listening
+    assert rig.assistant.calls == [("hello", Mode.ASSIST, False)]
+    assert rig.state.state is AppState.IDLE
 
 
 async def test_tap_too_short_is_ignored() -> None:
@@ -184,5 +252,42 @@ async def test_confirm_overlay_requires_typing_for_high_risk(qapp: QApplication)
     assert overlay.allow.isEnabled()
     overlay.cancel.click()
     assert await asyncio.wait_for(future, 1) is False
+    window.quitting = True
+    window.close()
+
+
+async def test_identical_errors_are_not_stacked(qapp: QApplication) -> None:
+    from jarvis.ui.main_window import MainWindow
+
+    window = MainWindow()
+    window.add_entry(ChatEntry(EntryKind.ERROR, "Voice failed"))
+    window.add_entry(ChatEntry(EntryKind.ERROR, "Voice failed"))
+    assert window.chat.entry_count() == 1
+    assert "Same problem" in window.notice.text()
+    window.add_entry(ChatEntry(EntryKind.USER, "again", mode="assist"))
+    window.add_entry(ChatEntry(EntryKind.ERROR, "Voice failed"))  # after a new request: shown
+    assert window.chat.entry_count() == 3
+    window.quitting = True
+    window.close()
+
+
+async def test_keys_overlay_saves_only_filled_fields(qapp: QApplication) -> None:
+    from jarvis.ui.main_window import MainWindow
+    from jarvis.ui.widgets.keys import KeyField
+
+    saved: list[dict[str, str]] = []
+    window = MainWindow()
+    window.resize(1280, 800)
+    window.keys_overlay._on_save = saved.append
+    window._key_fields = lambda: [
+        KeyField("Groq", "GROQ_API_KEY", "https://console.groq.com/keys", False),
+        KeyField("Gemini", "GEMINI_API_KEY", "https://aistudio.google.com/apikey", True),
+    ]
+    window.open_keys()
+    assert window.keys_overlay.isVisible()
+    window.keys_overlay._inputs["GROQ_API_KEY"].setText(" gsk_abc ")
+    window.keys_overlay.save.click()
+    assert saved == [{"GROQ_API_KEY": "gsk_abc"}]
+    assert not window.keys_overlay.isVisible()
     window.quitting = True
     window.close()
