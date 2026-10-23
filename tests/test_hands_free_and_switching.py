@@ -245,3 +245,25 @@ async def test_provider_switch_reports_the_choice(qapp: QApplication) -> None:
     assert window.header._status_text.endswith("OLLAMA")
     window.quitting = True
     window.close()
+
+
+def test_screenshots_encode_as_jpeg(qapp: QApplication) -> None:
+    from PySide6.QtGui import QImage
+
+    from jarvis.ui.main_window import encode_jpeg
+
+    image = QImage(320, 200, QImage.Format.Format_RGB32)
+    image.setDevicePixelRatio(1.25)  # as on a scaled Windows display
+    image.fill(0xFF336699)
+    jpeg = encode_jpeg(image)
+    assert jpeg is not None and jpeg.startswith(b"\xff\xd8")  # JPEG magic
+
+
+async def test_capture_screen_returns_jpeg(qapp: QApplication) -> None:
+    from jarvis.ui.main_window import MainWindow
+
+    window = MainWindow()
+    jpeg = await window.capture_screen()
+    assert jpeg is None or jpeg.startswith(b"\xff\xd8")
+    window.quitting = True
+    window.close()

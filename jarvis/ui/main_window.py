@@ -12,8 +12,17 @@ import asyncio
 import time
 from collections.abc import Callable
 
-from PySide6.QtCore import QBuffer, QIODevice, QRect, Qt, QTimer
-from PySide6.QtGui import QCloseEvent, QColor, QGuiApplication, QImage, QMouseEvent, QPainter
+from loguru import logger
+from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRect, Qt, QTimer
+from PySide6.QtGui import (
+    QCloseEvent,
+    QColor,
+    QGuiApplication,
+    QImage,
+    QImageWriter,
+    QMouseEvent,
+    QPainter,
+)
 from PySide6.QtWidgets import QGraphicsOpacityEffect, QHBoxLayout, QWidget
 
 from jarvis.agent.assistant import ConfirmRequest
@@ -650,10 +659,7 @@ class MainWindow(HudBackdrop):
             return None
         if image.width() > 1600:
             image = image.scaledToWidth(1600, Qt.TransformationMode.SmoothTransformation)
-        buffer = QBuffer()
-        buffer.open(QIODevice.OpenModeFlag.WriteOnly)
-        image.save(buffer, b"JPEG", 80)
-        return bytes(buffer.data().data())
+        return encode_jpeg(image)
 
     # --- window behaviour ---
 
@@ -671,6 +677,20 @@ class MainWindow(HudBackdrop):
             return
         event.ignore()
         self.hide()  # keep running in the tray
+
+
+def encode_jpeg(image: QImage, quality: int = 80) -> bytes | None:
+    """JPEG bytes for the vision request, or None if Qt can't encode it."""
+    buffer = QBuffer()
+    buffer.open(QIODevice.OpenModeFlag.WriteOnly)
+    # QImageWriter, not QImage.save: PySide6 6.12's save() rejects the bytes format its
+    # own type hints ask for, and older versions reject str.
+    writer = QImageWriter(buffer, QByteArray(b"jpeg"))
+    writer.setQuality(quality)
+    if not writer.write(image):
+        logger.warning("Couldn't encode the screenshot: {}", writer.errorString())
+        return None
+    return bytes(buffer.data().data())
 
 
 def _smooth(t: float) -> float:
