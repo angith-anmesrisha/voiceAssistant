@@ -34,15 +34,15 @@ More renders (listening, thinking, speaking, executing, confirmations, offline) 
    or both.
 
 4. Optional, for offline use: install [Ollama](https://ollama.com) and run
-   `ollama pull qwen3.5:latest`. JARVIS uses `qwen3.5:latest` for chat and, since it can see
-   images, for screen questions too (thinking is turned off so replies stay quick). If it
-   isn't installed, any other installed model that can see images is used for the screen.
-   If local replies stop mid-sentence, give Ollama more room: set the user environment
-   variable `OLLAMA_CONTEXT_LENGTH` to `8192` and restart Ollama.
-   `qwen3.5:latest` is the 9B model (about 7 GB). On a laptop without a graphics card,
-   `qwen3.5:4b` answers several times faster: run `ollama pull qwen3.5:4b`, then put this
-   in `%LOCALAPPDATA%\JARVIS\settings.json`:
-   `{"providers": {"ollama": {"chat_model": "qwen3.5:4b", "vision_model": "qwen3.5:4b"}}}`
+   `ollama pull qwen3.5:4b`. JARVIS uses `qwen3.5:4b` for chat and, since it can see
+   images, for screen questions too (thinking is turned off so replies stay quick). It is
+   several times faster than `qwen3.5:latest` (the 9B, about 7 GB) on a laptop without a
+   graphics card; if only `qwen3.5:latest` is installed, that one is used. If no model that
+   can see is installed, any other installed model that can see images is used for the
+   screen. If local replies stop mid-sentence, give Ollama more room: set the user
+   environment variable `OLLAMA_CONTEXT_LENGTH` to `8192` and restart Ollama. To use
+   another local model, put e.g. this in `%LOCALAPPDATA%\JARVIS\settings.json`:
+   `{"providers": {"ollama": {"chat_model": "qwen3.5:latest", "vision_model": "qwen3.5:latest"}}}`
 
 ## Run
 
@@ -71,7 +71,7 @@ python -m jarvis --hidden   # starts in the tray
   Gemini from now on", "switch to the local model", "go back to automatic". The choice is
   remembered. If the chosen one isn't available, JARVIS says so and uses the next one,
   and every answer is labelled with the provider that really produced it.
-- **Automatic fallback:** Groq, then Gemini, then your local `qwen3.5:latest`. Inside
+- **Automatic fallback:** Groq, then Gemini, then your local `qwen3.5:4b`. Inside
   Groq, a rate-limited qwen hands over to GPT-OSS 120B, then Llama 3.3 70B; Gemini uses
   3.8 Flash, then 3.5 Flash-Lite, 3.6 Flash and 2.5 Flash. A timeout, a rejected key or a
   billing problem moves on to the next service at once. While it works, the caption says

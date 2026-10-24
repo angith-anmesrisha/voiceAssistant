@@ -90,10 +90,14 @@ def _ollama() -> ProviderSettings:
     return ProviderSettings(
         base_url="http://localhost:11434/v1",
         # Qwen 3.5 handles chat, tools and images. Reasoning is off for speed on an iGPU.
-        chat_model="qwen3.5:latest",
+        # qwen3.5:4b (~3.5 GB) is several times faster than qwen3.5:latest (the 9B, ~7 GB),
+        # which took 33 s for a one-word answer on the owner's Iris Xe laptop. It still
+        # sees images and calls tools. The 9B is used if only that one is installed.
+        chat_model="qwen3.5:4b",
         # Preferred model for looking at the screen. If it isn't installed or can't see
         # images, any installed model with vision is used instead (see OllamaProvider).
-        vision_model="qwen3.5:latest",
+        vision_model="qwen3.5:4b",
+        fallback_models=["qwen3.5:latest"],
         reasoning_effort="none",
         # Local models on an iGPU are slow, the first request also loads the model, and the
         # tool list makes for a long prompt. A timeout isn't retried.

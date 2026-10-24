@@ -73,7 +73,8 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   STT goes through chat with an `input_audio` part; Ollama has no STT.
 - Keys come only from environment variables (`GROQ_API_KEY`, `GEMINI_API_KEY`). The key
   button in AI PROVIDERS saves them to the user environment (same as `setx`).
-- Ollama: chat and vision model `qwen3.5:latest` (timeout 240 s) with `reasoning_effort:
+- Ollama: chat and vision model `qwen3.5:4b` (owner's pick after the self-test; falls back
+  to `qwen3.5:latest` if only that is installed; timeout 240 s) with `reasoning_effort:
   "none"` so it doesn't think; if the vision model is missing, any installed model whose
   `/api/show` capabilities include `vision`.
 - No modes. Screen questions (regex `wants_screen`) go straight to vision; everything else
@@ -93,7 +94,7 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   backup, so fast first) `gemini-3.5-flash-lite` ("low"), then 3.8 Flash (timed out on the
   owner's key in the self-test), 3.6 Flash, 2.5 Flash ("none" only there; legacy access).
   `qwen3.5:latest` is the 9B (~7 GB) and took 33 s for "OK" on the owner's Iris Xe
-  laptop; `qwen3.5:4b` is the suggested faster local model. Every request sends
+  laptop, hence `qwen3.5:4b` as the local default. Every request sends
   `max_tokens` (`max_output_tokens`, 2048): without it Groq counted the model's full output
   limit against 8K TPM and answered 429 every time. Tool text is kept small (no shortcut
   catalogue, path help once in the prompt): ~2.3K tokens.

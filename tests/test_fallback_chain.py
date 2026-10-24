@@ -79,7 +79,7 @@ async def test_groq_then_gemini_then_local_qwen(monkeypatch: pytest.MonkeyPatch)
     changes: list[str] = []
     router = rig(handler, monkeypatch, changes)
     result = await router.chat([{"role": "user", "content": "hi"}])
-    assert (result.provider, result.model) == ("Ollama", "qwen3.5:latest")
+    assert (result.provider, result.model) == ("Ollama", "qwen3.5:4b")
     # qwen, then the two fallback Groq models; all busy, so the round is tried once more.
     assert calls.count("api.groq.com") == 6
     assert calls.count("generativelanguage.googleapis.com") == 1  # billing: no retry
@@ -333,13 +333,13 @@ async def test_diagnostics_report_says_whose_side(monkeypatch: pytest.MonkeyPatc
     def handler(request: httpx.Request) -> httpx.Response:
         host = request.url.host
         if request.url.path.endswith("/models"):
-            return httpx.Response(200, json={"data": [{"id": "qwen3.5:latest"}]})
+            return httpx.Response(200, json={"data": [{"id": "qwen3.5:4b"}]})
         if "groq" in host:
             message = "Rate limit reached for model `qwen/qwen3.8-27b`"
             return httpx.Response(429, json={"error": {"message": message}})
         if "googleapis" in host:
             return httpx.Response(400, json=GEMINI_BILLING)
-        return reply("OK", model="qwen3.5:latest")
+        return reply("OK", model="qwen3.5:4b")
 
     router = rig(handler, monkeypatch)
     results = await router.diagnose()
@@ -352,7 +352,7 @@ async def test_diagnostics_report_says_whose_side(monkeypatch: pytest.MonkeyPatc
     assert "Groq: none of its models answered" in text and "Rate limit reached" in text
     assert "llama-3.3-70b-versatile: HTTP 429" in text  # every Groq model was tried
     assert "your Gemini account, not JARVIS" in text
-    assert "Ollama: working (qwen3.5:latest" in text
+    assert "Ollama: working (qwen3.5:4b" in text
 
 
 def test_whisper_guesses_on_silence_are_dropped() -> None:

@@ -127,12 +127,12 @@ async def test_ollama_probe_reports_missing_model(monkeypatch: pytest.MonkeyPatc
 
     status = await make(handler, monkeypatch)["ollama"].probe()
     assert status.state is ProviderState.MODEL_MISSING
-    assert "ollama pull qwen3.5" in status.detail
+    assert "ollama pull qwen3.5:4b" in status.detail
 
     def with_model(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/show":
             return httpx.Response(200, json={"capabilities": ["completion", "vision"]})
-        return httpx.Response(200, json={"data": [{"id": "qwen3.5:latest"}]})
+        return httpx.Response(200, json={"data": [{"id": "qwen3.5:4b"}]})
 
     assert (await make(with_model, monkeypatch)["ollama"].probe()).state is ProviderState.READY
 
@@ -193,7 +193,7 @@ async def test_ollama_picks_an_installed_model_that_can_see(
 
     def handler(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/v1/models":
-            names = ["qwen3.5:latest", "llama3.2:latest", "gemma3:4b", "gemma3:1b"]
+            names = ["qwen3.5:4b", "llama3.2:latest", "gemma3:4b", "gemma3:1b"]
             return httpx.Response(200, json={"data": [{"id": n} for n in names]})
         assert str(request.url) == "http://localhost:11434/api/show"
         model = json.loads(request.content)["model"]
@@ -243,5 +243,16 @@ async def test_ollama_uses_qwen_without_reasoning(monkeypatch: pytest.MonkeyPatc
         return chat_reply("Hi.")
 
     await make(handler, monkeypatch)["ollama"].chat([{"role": "user", "content": "hi"}])
-    assert seen["model"] == "qwen3.5:latest"
+    assert seen["model"] == "qwen3.5:4b"
     assert seen["reasoning_effort"] == "none"
+
+
+async def test_ollama_uses_the_9b_until_4b_is_pulled(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"data": [{"id": "qwen3.5:latest"}]})
+        return httpx.Response(200, json={"capabilities": ["completion", "vision"]})
+
+    ollama = make(handler, monkeypatch)["ollama"]
+    assert (await ollama.probe()).state is ProviderState.READY
+    assert ollama.model_for(Capability.CHAT) == "qwen3.5:latest"

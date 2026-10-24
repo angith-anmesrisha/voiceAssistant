@@ -167,7 +167,7 @@ class OllamaProvider(OpenAICompatibleProvider):
             return self._vision_model
         if capability is Capability.STT:
             return ""
-        return self.settings.chat_model
+        return super().model_for(Capability.CHAT)
 
     def _check_models(self, response: httpx.Response, latency: int) -> ProviderStatus:
         try:
@@ -176,10 +176,17 @@ class OllamaProvider(OpenAICompatibleProvider):
             names = []
         self._installed = [n for n in names if n]
         chat = self.settings.chat_model
-        if not _has_model(set(self._installed), chat):
-            return ProviderStatus(
-                ProviderState.MODEL_MISSING, f"run: ollama pull {chat}", latency_ms=latency
-            )
+        installed = set(self._installed)
+        if not _has_model(installed, chat):
+            # e.g. qwen3.5:4b not pulled yet, but qwen3.5:latest is: use that meanwhile.
+            spare = next((m for m in self.settings.fallback_models if _has_model(installed, m)), "")
+            if not spare:
+                return ProviderStatus(
+                    ProviderState.MODEL_MISSING, f"run: ollama pull {chat}", latency_ms=latency
+                )
+            self._use_model(Capability.CHAT, spare)
+        else:
+            self._use_model(Capability.CHAT, chat)
         return ProviderStatus(ProviderState.READY, latency_ms=latency)
 
     async def probe(self) -> ProviderStatus:

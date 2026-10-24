@@ -38,7 +38,7 @@ def demo_router(online: bool) -> ProviderRouter:
         router.statuses.update(
             groq=ProviderStatus(ProviderState.READY, latency_ms=86),
             gemini=ProviderStatus(ProviderState.READY, latency_ms=142),
-            ollama=ProviderStatus(ProviderState.MODEL_MISSING, "run: ollama pull qwen3.5:latest"),
+            ollama=ProviderStatus(ProviderState.MODEL_MISSING, "run: ollama pull qwen3.5:4b"),
         )
         router.network = NetworkStatus(True, 24)
         router.last_used = ("Groq", "qwen/qwen3.8-27b")
