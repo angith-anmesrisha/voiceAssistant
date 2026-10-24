@@ -13,8 +13,15 @@ from loguru import logger
 
 from jarvis.agent.commands import AUTO, diagnose_command, provider_command
 from jarvis.agent.guard import PromptGuard
+from jarvis.agent.planner import (
+    Task,
+    needs_plan,
+    parse_plan,
+    planner_prompt,
+    step_request,
+)
 from jarvis.agent.prompts import system_prompt, wants_screen
-from jarvis.app.events import ChatEntry, EntryKind, EventBus
+from jarvis.app.events import ChatEntry, EntryKind, EventBus, PlanStep, PlanUpdated, StepStatus
 from jarvis.app.state import AppState, StateMachine
 from jarvis.providers.base import Capability, ChatResult, Message, ToolCall
 from jarvis.providers.openai_compat import image_part
@@ -32,6 +39,7 @@ class ConfirmRequest:
 
 LOOKED = "looked at screen"
 ACTED = "used tools"
+PLANNED = "plan"
 
 # Tools whose results carry outside text, screened by the prompt-injection guard.
 UNTRUSTED_TOOLS = frozenset({"read_clipboard", "list_folder", "find_items", "look_at_screen"})
@@ -228,6 +236,9 @@ class Assistant:
         self._blocked = False
         self._turn_context = await self.checked_context()
         try:
+            tasks = await self._plan(shown) if needs_plan(text) else []
+            if len(tasks) > 1:
+                return await self._run_plan(conversation, shown, tasks, spoken)
             if wants_screen(text):
                 self._did.add(LOOKED)
                 result = await self._look(shown, spoken)
@@ -283,13 +294,85 @@ class Assistant:
         ]
         return await self._router.chat(messages, vision=True)
 
-    async def _converse(self, text: str, spoken: bool) -> ChatResult:
+    async def _plan(self, request: str) -> list[Task]:
+        """Split a long request into tasks (one call, no tools); [] if it can't be."""
+        recent = await self._context()
+        messages: list[Message] = [
+            {"role": "system", "content": planner_prompt()},
+            *recent[-6:-1],  # earlier turns, so "it" and "that file" can be resolved
+            {"role": "user", "content": request},
+        ]
+        result = await self._router.chat(messages)
+        tasks = parse_plan(result.content or "")
+        logger.info("Planned {} task(s)", len(tasks))
+        return tasks
+
+    async def _run_plan(
+        self, conversation: int, shown: str, tasks: list[Task], spoken: bool
+    ) -> Reply:
+        """Carry out the tasks in order, each with the normal tools and confirmations."""
+        steps = [PlanStep(task.title) for task in tasks]
+
+        async def publish(finished: bool = False) -> None:
+            await self._bus.publish(PlanUpdated(tuple(steps), finished=finished))
+
+        done: list[str] = []
+        any_failed = False
+        last: ChatResult | None = None
+        for i, task in enumerate(tasks):
+            steps[i] = PlanStep(task.title, StepStatus.RUNNING)
+            await publish()
+            self._failed = self._blocked = False
+            try:
+                result = await self._converse(
+                    step_request(shown, tasks, i, done), spoken, history=False
+                )
+            except AllProvidersFailedError as exc:
+                logger.warning("Plan step {} failed: no provider answered", i + 1)
+                steps[i] = PlanStep(task.title, StepStatus.FAILED, _failure_message(exc))
+                for j in range(i + 1, len(tasks)):
+                    steps[j] = PlanStep(tasks[j].title, StepStatus.SKIPPED)
+                any_failed = True
+                break
+            last = result
+            note = (result.content or "Done.").strip()
+            failed = self._failed or self._blocked or says_it_cannot(note)
+            any_failed = any_failed or failed
+            steps[i] = PlanStep(task.title, StepStatus.FAILED if failed else StepStatus.DONE, note)
+            done.append(f"{i + 1}. {'failed' if failed else 'done'}: {task.title}: {note}")
+        await publish(finished=True)
+        self._did.add(PLANNED)
+        if self._state.state in (AppState.THINKING, AppState.ACTING):
+            await self._state.transition(AppState.IDLE)
+
+        reply, said = plan_summary(steps)
+        provider = last.provider if last is not None else None
+        model = last.model if last is not None else None
+        label = " + ".join(sorted(self._did))
+        await self._store.add_message(
+            conversation,
+            {"role": "assistant", "content": reply},
+            provider=provider,
+            model=model,
+            mode=label,
+        )
+        await self._emit(
+            EntryKind.ASSISTANT,
+            reply,
+            provider=provider,
+            model=model,
+            mode=label,
+            failed=any_failed,
+        )
+        return Reply(said if spoken else reply, ok=True, provider=provider, model=model)
+
+    async def _converse(self, text: str, spoken: bool, *, history: bool = True) -> ChatResult:
         messages: list[Message] = [
             {
                 "role": "system",
                 "content": system_prompt(spoken=spoken, context=self._turn_context),
             },
-            *await self._context(),
+            *(await self._context() if history else []),
         ]
         if not messages[-1:] or messages[-1].get("content") != text:
             messages.append({"role": "user", "content": text})
@@ -370,6 +453,49 @@ _CANNOT = re.compile(
     r"wasn'?t\s+able|don'?t\s+have\s+(?:the\s+)?(?:ability|access|permission))\b",
     re.IGNORECASE,
 )
+
+
+_MARK = {
+    StepStatus.DONE: "✓",
+    StepStatus.FAILED: "✕",
+    StepStatus.SKIPPED: "-",
+    StepStatus.RUNNING: "✱",
+    StepStatus.PENDING: "○",
+}
+
+
+def plan_lines(steps: list[PlanStep] | tuple[PlanStep, ...]) -> str:
+    """One line per task: its mark, title and (once run) a short result."""
+    lines = []
+    for i, step in enumerate(steps):
+        line = f"{_MARK[step.status]} {i + 1}. {step.title}"
+        if step.status is StepStatus.SKIPPED:
+            line += ": not started"
+        elif step.note:
+            note = " ".join(step.note.split())
+            line += ": " + (note if len(note) <= 160 else note[:159] + "…")
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def plan_summary(steps: list[PlanStep]) -> tuple[str, str]:
+    """The reply after a plan (shown), and a shorter one to say aloud."""
+    total = len(steps)
+    ok = sum(step.status is StepStatus.DONE for step in steps)
+    bad = [step for step in steps if step.status is not StepStatus.DONE]
+    if not bad:
+        headline = f"All {total} tasks done."
+        said = headline
+    else:
+        headline = f"{ok} of {total} tasks done; {len(bad)} didn't work."
+        said = (
+            headline
+            + " "
+            + " ".join(
+                f"{step.title}: {(step.note or 'not started').rstrip('.')}." for step in bad[:2]
+            )
+        )
+    return headline + "\n" + plan_lines(steps), said
 
 
 def says_it_cannot(reply: str) -> bool:

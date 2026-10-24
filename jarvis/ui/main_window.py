@@ -25,13 +25,14 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QGraphicsOpacityEffect, QHBoxLayout, QWidget
 
-from jarvis.agent.assistant import ConfirmRequest
+from jarvis.agent.assistant import ConfirmRequest, plan_lines
 from jarvis.app.events import (
     ChatEntry,
     ConversationChanged,
     EntryKind,
     EventBus,
     NoticeLevel,
+    PlanUpdated,
     ProvidersChanged,
     UserNotice,
 )
@@ -158,6 +159,8 @@ class MainWindow(HudBackdrop):
         self._listening_again = False
         self._asked = ""
         self._actions: list[str] = []
+        # While a long request runs as a list of tasks: ("STEP 2/4", "Open Spotify").
+        self._plan_step: tuple[str, str] | None = None
         self.quitting = False
 
         # Eased layout values, advanced by one animation timer.
@@ -258,6 +261,7 @@ class MainWindow(HudBackdrop):
         bus.subscribe(ProvidersChanged, self._on_providers_event)
         bus.subscribe(UserNotice, self._on_notice_event)
         bus.subscribe(ConversationChanged, self._on_conversation_event)
+        bus.subscribe(PlanUpdated, self._on_plan_event)
         self.command.submitted.connect(lambda text: self._submit(text, on_submit))
         self.provider_switch.setToolTip(
             "Which AI to ask first. If it can't answer, the others are tried in turn, and the "
@@ -307,6 +311,9 @@ class MainWindow(HudBackdrop):
             if self.overlay.isVisible():
                 self.overlay.say(title, router.activity)
         self._apply_state()
+
+    async def _on_plan_event(self, event: PlanUpdated) -> None:
+        self.show_plan(event)
 
     async def _on_notice_event(self, event: UserNotice) -> None:
         self.show_notice(f"{event.title}: {event.message}", event.level)
@@ -373,6 +380,7 @@ class MainWindow(HudBackdrop):
         if entry.kind is EntryKind.USER:
             meta = "YOU"
             self._asked, self._actions = entry.text, []
+            self._plan_step = None
             self.close_card()
         elif entry.kind is EntryKind.ASSISTANT:
             meta = "JARVIS"
@@ -400,6 +408,21 @@ class MainWindow(HudBackdrop):
         self._dock.target = 1.0
         self._layout()
         self._start_animation()
+
+    def show_plan(self, plan: PlanUpdated) -> None:
+        """Show the task list in the reply card, ticking tasks off as they finish."""
+        total = len(plan.steps)
+        current = plan.current
+        if plan.finished or current < 0:
+            self._plan_step = None
+        else:
+            self._plan_step = (f"STEP {current + 1}/{total}", plan.steps[current].title)
+        if not plan.finished:
+            meta = f"PLAN · {total} TASKS"
+            if self._plan_step is not None:
+                meta += f" · {self._plan_step[0]}"
+            self._open_card(meta, plan_lines(plan.steps), error=self._alarm.target > 0)
+        self._apply_state()
 
     def show_notice(self, text: str, level: NoticeLevel = NoticeLevel.INFO) -> None:
         color = {NoticeLevel.ERROR: DANGER, NoticeLevel.WARNING: AMBER}.get(level, theme.TEXT_DIM)
@@ -437,6 +460,8 @@ class MainWindow(HudBackdrop):
             # What the router is really doing (it updates on every attempt and fallback).
             first = self._router.first_usable()
             hint = self._router.activity or (f"Asking {first.display_name}…" if first else hint)
+        if self._plan_step is not None and visual in (VisualState.THINKING, VisualState.ACTING):
+            title, hint = self._plan_step
         if visual is VisualState.IDLE:
             self.caption.show_clock(hint)
         else:
@@ -476,7 +501,7 @@ class MainWindow(HudBackdrop):
         if visual is VisualState.LISTENING:
             overlay.say(title, hint if self._listening_again else "Go ahead, I'm listening.")
         elif visual is VisualState.THINKING or visual is VisualState.ACTING:
-            overlay.say(title, self._asked)
+            overlay.say(title, hint if self._plan_step is not None else self._asked)
         if not overlay.isVisible():
             overlay.place()
             overlay.show()

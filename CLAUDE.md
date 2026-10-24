@@ -50,6 +50,7 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   `prompts.py` (one system prompt; `wants_screen` regex; `context` block marked as
   information), `context.py` (`situation`: active window, other open windows, AI choice),
   `guard.py` (`PromptGuard`: Llama Prompt Guard 2 scores outside text for injections),
+  `planner.py` (`needs_plan`, planner prompt, `parse_plan` → `Task`s, `step_request`),
   `assistant.py` (keeps the last 8 actions for context; one turn:
   history, screen fast path, otherwise a tool loop with tools + `look_at_screen`,
   confirmations).
@@ -77,6 +78,17 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   to `qwen3.5:latest` if only that is installed; timeout 240 s) with `reasoning_effort:
   "none"` so it doesn't think; if the vision model is missing, any installed model whose
   `/api/show` capabilities include `vision`.
+- Agentic multi-task requests: a long request (`needs_plan`: 30+ words, or 9+ words with a
+  joiner such as "then"/"after that"/"also"/";"/numbering, or 2+ commas) gets one planner
+  call (no tools, JSON `{"tasks": [{"title", "do"}]}`, max 8, never adds tasks). With 2+
+  tasks, each runs in turn through the normal tool loop (`_converse(history=False)` with
+  `step_request`: this task, the whole request as background, results so far), with the
+  usual confirmations. `PlanUpdated` (steps with pending/running/done/failed/skipped)
+  drives the reply card ("PLAN · 3 TASKS · STEP 2/3", ○ ✱ ✓ ✕ -) and the caption/corner
+  orb ("STEP 2/3" + title). A failed task (tool failed, declined, blocked, "I can't…")
+  doesn't stop the rest; no provider answering does (the rest are skipped). The final
+  ASSISTANT entry is the summary (mode "plan"), red if any task failed; spoken replies say
+  only the headline and failures. One task, or an unparseable plan, takes the normal path.
 - No modes. Screen questions (regex `wants_screen`) go straight to vision; everything else
   goes to the agent with all tools plus `look_at_screen`, so the model decides. The reply
   label says what happened ("looked at screen", "used tools").

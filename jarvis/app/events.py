@@ -126,3 +126,34 @@ class ChatEntry(Event):
 @dataclass(frozen=True, slots=True)
 class ProvidersChanged(Event):
     """Provider or network status changed; the UI re-reads the router."""
+
+
+class StepStatus(StrEnum):
+    PENDING = "pending"
+    RUNNING = "running"
+    DONE = "done"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+
+@dataclass(frozen=True, slots=True)
+class PlanStep:
+    title: str
+    status: StepStatus = StepStatus.PENDING
+    note: str = ""  # the step's reply or error, once it has run
+
+
+@dataclass(frozen=True, slots=True)
+class PlanUpdated(Event):
+    """A long request was split into tasks; sent as each one starts and ends."""
+
+    steps: tuple[PlanStep, ...]
+    finished: bool = False
+
+    @property
+    def current(self) -> int:
+        """Index of the running step, or -1."""
+        for i, step in enumerate(self.steps):
+            if step.status is StepStatus.RUNNING:
+                return i
+        return -1

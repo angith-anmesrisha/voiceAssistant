@@ -17,7 +17,7 @@ from PySide6.QtGui import QColor, QImage, QLinearGradient, QPainter
 from PySide6.QtWidgets import QApplication
 
 from jarvis.app.config import Settings
-from jarvis.app.events import ChatEntry, EntryKind
+from jarvis.app.events import ChatEntry, EntryKind, PlanStep, PlanUpdated, StepStatus
 from jarvis.app.state import AppState
 from jarvis.providers.backends import build_providers
 from jarvis.providers.base import ProviderState, ProviderStatus
@@ -196,6 +196,43 @@ async def render(out: Path) -> None:
     window.orb.set_alarm(True)
     await shot("13-failed", AppState.IDLE, 9.0)
     window.clear_failure()
+    window.close_card()
+
+    # A long request split into tasks, ticked off as JARVIS works through them.
+    window.add_entry(
+        ChatEntry(
+            EntryKind.USER,
+            "Open Spotify and play something relaxing, then make a folder called Trip on my "
+            "desktop, and after that tell me a fun fact about Paris",
+        )
+    )
+    window.add_entry(ChatEntry(EntryKind.ACTION, "✓ Opened Spotify."))
+    titles = ["Play relaxing music", "Make Trip folder", "Paris fun fact"]
+    window.show_plan(
+        PlanUpdated(
+            (
+                PlanStep(titles[0], StepStatus.DONE, "Spotify is playing a relaxing playlist."),
+                PlanStep(titles[1], StepStatus.RUNNING),
+                PlanStep(titles[2]),
+            )
+        )
+    )
+    await shot("16-plan-running", AppState.ACTING, 9.6)
+    window.add_entry(ChatEntry(EntryKind.ACTION, "✓ Created Desktop\\Trip."))
+    window.show_plan(PlanUpdated((), finished=True))
+    window.add_entry(
+        ChatEntry(
+            EntryKind.ASSISTANT,
+            "All 3 tasks done.\n"
+            "✓ 1. Play relaxing music: Spotify is playing a relaxing playlist.\n"
+            "✓ 2. Make Trip folder: Made the Trip folder on your desktop.\n"
+            "✓ 3. Paris fun fact: The Eiffel Tower grows about 15 cm taller in summer.",
+            "Groq",
+            "qwen/qwen3.8-27b",
+            "plan + used tools",
+        )
+    )
+    await shot("17-plan-done", AppState.IDLE, 10.2)
     window.close_card()
 
     # The corner orb over other apps (drawn on a stand-in desktop).

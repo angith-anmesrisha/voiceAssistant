@@ -99,6 +99,16 @@ python -m jarvis --hidden   # starts in the tray
     browser) plus any other key combination, type dictated text into the window you
     were using, lock, sleep, and delayed shutdown or restart. Risky actions still ask
     first.
+- **Long requests become a task list.** Ask for several things at once ("open Spotify
+  and play something relaxing, then make a folder called Trip on my desktop, and after
+  that tell me a fun fact about Paris") and JARVIS first splits it into tasks, shows them
+  in the card, then works through them one by one, ticking each off (✓ done, ✱ working,
+  ✕ didn't work). Risky steps still ask first. If one task fails the others still run,
+  and the summary at the end (and the red tint) says which one didn't work. Short
+  requests skip the planning step.
+
+![JARVIS working through a task list](docs/renders/16-plan-running.png)
+
 - Answers appear in a card in the middle while the orb moves to the corner; close the
   card (or start a new question) and the orb returns. The chat button at the top right
   opens the full history; click the status dots at the bottom for providers, network and
