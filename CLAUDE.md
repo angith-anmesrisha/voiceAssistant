@@ -7,7 +7,8 @@ working rules and safety rules still apply where they don't conflict.
 ## Working rules
 - Plan first, build, run ruff/mypy/pytest, give a manual test checklist, then wait for the
   owner to confirm on Windows.
-- Work on a branch and open a PR to `main`. Never commit secrets.
+- Push to `main` (owner's choice, 2026-10-24: `main` is JARVIS now; the old Wisp/Hitodama
+  main is tagged `old-main`). Never commit secrets.
 - Verify model names and API shapes against provider docs before use. Model names live in
   config only.
 - Every PC action is a tool in `jarvis/tools/builtin.py` with a `Risk`. There is no shell or
@@ -44,7 +45,8 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   `registry.py` (`Risk`, `ToolSpec`, arg validation), `desktop.py` (`WindowsDesktop`:
   approved launches with `shell=False`, pynput keys/typing, clipboard, lock/sleep, delayed
   shutdown), `files.py` (`FileArea`: allowed roots, blocked system folders, Recycle Bin via
-  SHFileOperationW), `shortcuts.py` (`SHORTCUTS` name → keys/risk/what, `parse_combo`
+  SHFileOperationW), `ui.py` (`WindowsUi`: UI Automation via the `uiautomation`
+  package on one COM thread; `format_snapshot`, `blocked_reason`, `click_risk`), `shortcuts.py` (`SHORTCUTS` name → keys/risk/what, `parse_combo`
   refuses Win+R/Win+X/Ctrl+Alt+Del), `builtin.py` (the tool set).
 - `agent/`: `commands.py` ("use Gemini from now on" → provider switch, no model call),
   `prompts.py` (one system prompt; `wants_screen` regex; `context` block marked as
@@ -89,6 +91,20 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   doesn't stop the rest; no provider answering does (the rest are skipped). The final
   ASSISTANT entry is the summary (mode "plan"), red if any task failed; spoken replies say
   only the headline and failures. One task, or an unparseable plan, takes the normal path.
+- Operating apps (computer use): `read_ui` lists a window's controls as numbered lines
+  (`[3] Edit "Type a message"`), and `click_element` / `type_into` / `scroll_ui` act by
+  number and return the window afterwards, so the model works look → act → check
+  (`max_tool_rounds` 15). Only the newest window reading stays in the messages
+  (`trim_old_windows`); a reading is capped at ~3,200 chars (plain text dropped first).
+  Clicks are mouse clicks at the element's centre after bringing the window to the front
+  (Invoke pattern if it has no rectangle); typing focuses the element and types with
+  pynput. Risk: LOW, except clicks on Send/Pay/Delete/Call/Save-style names and
+  double-clicks in Explorer (MEDIUM), and `type_into(submit=True)` (Enter, MEDIUM).
+  Never read or driven: shells, terminals, regedit, mmc, Settings, Control Panel, Task
+  Manager, UAC, the Run box, JARVIS itself; password fields are never read or typed;
+  runnable files are never double-clicked. All four tools' output is screened by Prompt
+  Guard. The module is imported on its worker thread after Qt starts, because it sets the
+  process DPI mode on import.
 - No modes. Screen questions (regex `wants_screen`) go straight to vision; everything else
   goes to the agent with all tools plus `look_at_screen`, so the model decides. The reply
   label says what happened ("looked at screen", "used tools").
@@ -193,6 +209,10 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   the vsync clock, the corner overlay, the key dialog's registry write, and the desktop
   tools are untested on real Windows so far.
 - The wake word needs a pause after "Jarvis"; words said in the same breath are lost.
+- The UI tools (UI Automation, clicks, typing) are untested on real Windows; apps that
+  draw their own UI (games, some Electron/canvas apps) expose few controls, so the model
+  falls back to `look_at_screen`. A long app task uses many tokens (Groq's free tier
+  then hands over to the backup models).
 - No settings window yet; edit `settings.json` in the data dir.
 - File tools, clipboard, the Recycle Bin call and window-title context are untested on
   real Windows. `press_keys`/`type_text` could still drive an address bar; both ask first

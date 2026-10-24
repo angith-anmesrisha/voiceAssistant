@@ -110,7 +110,11 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     from jarvis.tools.apps import AppIndex
 
     installed = AppIndex()
-    registry = build_registry(settings.tools, desktop, installed)
+    from jarvis.tools.ui import WindowsUi
+
+    # Reads and operates app windows (UI Automation) for multi-step tasks inside apps.
+    ui = WindowsUi(desktop.previous_window_handle, desktop.press, desktop.type_text)
+    registry = build_registry(settings.tools, desktop, installed, ui=ui)
 
     hotkey_label = "+".join(
         part.strip().title() for part in settings.hotkeys.push_to_talk.split("+")
@@ -251,6 +255,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         wake.stop()
         hotkeys.stop()
         desktop.stop_tracking()
+        ui.close()
         await controller.shutdown()
         tray.hide()
         window.quitting = True

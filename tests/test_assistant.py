@@ -172,7 +172,7 @@ async def test_unknown_tool_and_bad_args_are_reported_to_model(tmp_path: Path) -
 
 
 async def test_tool_rounds_are_bounded(tmp_path: Path) -> None:
-    loops = [tool_reply("get_datetime") for _ in range(5)]
+    loops = [tool_reply("get_datetime") for _ in range(15)]  # max_tool_rounds
     rig = Rig(tmp_path, ScriptedRouter(*loops, text_reply("Stopped.")))
     reply = await rig.assistant.handle("loop forever")
     assert reply.text == "Stopped."

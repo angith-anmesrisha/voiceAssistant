@@ -42,7 +42,18 @@ ACTED = "used tools"
 PLANNED = "plan"
 
 # Tools whose results carry outside text, screened by the prompt-injection guard.
-UNTRUSTED_TOOLS = frozenset({"read_clipboard", "list_folder", "find_items", "look_at_screen"})
+UNTRUSTED_TOOLS = frozenset(
+    {
+        "read_clipboard",
+        "list_folder",
+        "find_items",
+        "look_at_screen",
+        "read_ui",
+        "click_element",
+        "type_into",
+        "scroll_ui",
+    }
+)
 
 LOOK_AT_SCREEN: dict[str, Any] = {
     "type": "function",
@@ -86,7 +97,7 @@ class Assistant:
         capture_screen: ScreenCaptureFn,
         *,
         history_messages: int = 20,
-        max_tool_rounds: int = 5,
+        max_tool_rounds: int = 15,
         on_prefer: Callable[[str | None], None] | None = None,
         situation: Callable[[], str] | None = None,
         guard: PromptGuard | None = None,
@@ -379,6 +390,7 @@ class Assistant:
 
         tools = [*self._registry.declarations(), LOOK_AT_SCREEN]
         for _round in range(self._max_tool_rounds):
+            trim_old_windows(messages)
             result = await self._router.chat(messages, tools=tools)
             if not result.tool_calls:
                 return result
@@ -445,6 +457,30 @@ class Assistant:
         self._recent.append(("done: " if result.ok else "failed: ") + result.summary)
         await self._emit(EntryKind.ACTION, ("✓ " if result.ok else "✕ ") + result.summary)
         return result
+
+
+_OLD_WINDOW = "(replaced by the newer reading below)"
+
+
+def trim_old_windows(messages: list[Message]) -> None:
+    """Keep only the newest app-window reading in full: older ones cost tokens for nothing."""
+    seen_newest = False
+    for message in reversed(messages):
+        if message.get("role") != "tool":
+            continue
+        content = message.get("content")
+        if not isinstance(content, str) or '"window"' not in content:
+            continue
+        if not seen_newest:
+            seen_newest = True
+            continue
+        try:
+            payload = json.loads(content)
+        except ValueError:
+            continue
+        if isinstance(payload, dict) and payload.get("window") not in (None, _OLD_WINDOW):
+            payload["window"] = _OLD_WINDOW
+            message["content"] = json.dumps(payload)
 
 
 _CANNOT = re.compile(

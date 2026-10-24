@@ -193,7 +193,8 @@ class ToolSettings(BaseModel):
     approved_apps: dict[str, str] = Field(default_factory=_default_apps)
     # Opening these domains (and subdomains) needs no confirmation; others ask first.
     trusted_sites: list[str] = Field(default_factory=_default_sites)
-    max_tool_rounds: int = 5
+    # Look-act-check steps per request: operating an app's window takes several.
+    max_tool_rounds: int = 15
     max_typed_chars: int = 2000
 
 

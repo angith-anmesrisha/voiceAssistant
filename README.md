@@ -109,6 +109,13 @@ python -m jarvis --hidden   # starts in the tray
 
 ![JARVIS working through a task list](docs/renders/16-plan-running.png)
 
+- **Works inside apps.** Ask "send Mom a WhatsApp message saying I'll be late" and
+  JARVIS opens WhatsApp, reads its window (buttons, search box, chats, message box) with
+  Windows' accessibility interface, then clicks and types step by step, checking the
+  window after each step, until it's done. It asks before anything that sends, pays,
+  deletes or calls, and before pressing Enter to send. It never touches shells,
+  terminals, Windows Settings, Task Manager or password fields, and text it reads in
+  apps is checked for hidden instructions like everything else.
 - Answers appear in a card in the middle while the orb moves to the corner; close the
   card (or start a new question) and the orb returns. The chat button at the top right
   opens the full history; click the status dots at the bottom for providers, network and
@@ -120,8 +127,8 @@ python -m jarvis --hidden   # starts in the tray
 
 | Level | Examples | Behaviour |
 |---|---|---|
-| Low | time, system status, opening installed apps and games, trusted sites, web search, media keys, copy, listing, finding and opening files, creating folders, the clipboard | runs directly |
-| Medium | typing text, paste, undo, other key combinations, copying, moving or renaming files, deleting a file, untrusted sites, lock, sleep | asks first |
+| Low | reading an app's window, clicking and typing to move around in it, time, system status, opening installed apps and games, trusted sites, web search, media keys, copy, listing, finding and opening files, creating folders, the clipboard | runs directly |
+| Medium | sending a message, clicking Send/Pay/Delete/Call in an app, typing text, paste, undo, other key combinations, copying, moving or renaming files, deleting a file, untrusted sites, lock, sleep | asks first |
 | High | deleting a folder, shutdown or restart (60 s delay, cancellable) | you must type CONFIRM |
 | Blocked | shell commands, running programs or scripts from files, system folders, the registry and system settings, Win+R, Win+X, Ctrl+Alt+Del | no such tool exists, or refused |
 

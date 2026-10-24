@@ -91,6 +91,10 @@ class WindowsDesktop:
             if pid.value != own_pid:
                 self._previous_hwnd = int(hwnd)
 
+    def previous_window_handle(self) -> int | None:
+        """The window the user was in before talking to JARVIS (for reading its controls)."""
+        return self._previous_hwnd
+
     def focus_previous_window(self) -> bool:
         self._require_windows()
         if not self._previous_hwnd:

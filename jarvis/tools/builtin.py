@@ -12,6 +12,7 @@ from jarvis.tools.desktop import Desktop, DesktopUnsupportedError
 from jarvis.tools.files import FileAccessError, FileArea, default_area
 from jarvis.tools.registry import Risk, ToolRegistry, ToolResult, ToolSpec
 from jarvis.tools.shortcuts import SHORTCUTS, KeyComboError, parse_combo
+from jarvis.tools.ui import UiDriver, UiError, app_label, click_risk, format_snapshot
 
 SEARCH_ENGINES = {
     "google": "https://www.google.com/search?q={}",
@@ -49,6 +50,7 @@ def build_registry(
     desktop: Desktop,
     installed: AppIndex | None = None,
     files: FileArea | None = None,
+    ui: UiDriver | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     installed = installed if installed is not None else AppIndex()
@@ -393,6 +395,9 @@ def build_registry(
         )
     )
 
+    if ui is not None:
+        _register_ui_tools(registry, settings, ui)
+
     # --- power ---
 
     registry.register(
@@ -442,3 +447,147 @@ def build_registry(
         )
     )
     return registry
+
+
+def _register_ui_tools(registry: ToolRegistry, settings: ToolSettings, ui: UiDriver) -> None:
+    """Look at an app window's controls and operate them (computer use, by element id)."""
+
+    async def after(done: str) -> ToolResult:
+        """What was done, plus the window as it looks now, so the model can check it."""
+        try:
+            snapshot = await ui.refresh()
+        except UiError as exc:
+            return ToolResult(True, f"{done} The window can't be read now ({exc}).")
+        return ToolResult(True, done, {"window": format_snapshot(snapshot)})
+
+    def named(element_id: int) -> str:
+        element = ui.element(element_id)
+        return (
+            f"“{element.name}”" if element is not None and element.name else f"element {element_id}"
+        )
+
+    async def read_ui(window: str = "") -> ToolResult:
+        try:
+            snapshot = await ui.snapshot(window)
+        except UiError as exc:
+            return ToolResult(False, f"Couldn't read the window: {exc}.")
+        except Exception as exc:
+            return ToolResult(False, f"Couldn't read the window ({type(exc).__name__}).")
+        summary = f"Read {len(snapshot.elements)} controls of {app_label(snapshot.app)}."
+        return ToolResult(True, summary, {"window": format_snapshot(snapshot)})
+
+    async def click_element(id: int, double: bool = False, right: bool = False) -> ToolResult:
+        what = named(id)
+        try:
+            await ui.click(id, double=double, right=right)
+        except UiError as exc:
+            return ToolResult(False, f"Couldn't click {what}: {exc}.")
+        except Exception as exc:
+            return ToolResult(False, f"Couldn't click {what} ({type(exc).__name__}).")
+        return await after(f"Clicked {what} in {app_label(ui.app)}.")
+
+    async def type_into(
+        id: int,
+        text: str,
+        clear: bool = False,
+        submit: bool = False,
+    ) -> ToolResult:
+        what = named(id)
+        try:
+            await ui.type_into(id, text, clear=clear, submit=submit)
+        except UiError as exc:
+            return ToolResult(False, f"Couldn't type into {what}: {exc}.")
+        except Exception as exc:
+            return ToolResult(False, f"Couldn't type into {what} ({type(exc).__name__}).")
+        done = f"Typed {len(text)} characters into {what}" + (
+            " and pressed Enter." if submit else "."
+        )
+        return await after(done)
+
+    async def scroll_ui(direction: str, id: int | None = None, amount: int = 3) -> ToolResult:
+        try:
+            await ui.scroll(id, direction == "down", amount)
+        except UiError as exc:
+            return ToolResult(False, f"Couldn't scroll: {exc}.")
+        except Exception as exc:
+            return ToolResult(False, f"Couldn't scroll ({type(exc).__name__}).")
+        return await after(f"Scrolled {direction}.")
+
+    def type_description(a: dict[str, Any]) -> str:
+        text = str(a.get("text", ""))
+        where = named(int(a.get("id", 0)))
+        line = f"Type “{text[:80]}” into {where} in {app_label(ui.app)}"
+        return line + (" and press Enter (this sends or submits it)" if a.get("submit") else "")
+
+    element_id = {"type": "integer", "description": "Number from the latest read_ui"}
+    registry.register(
+        ToolSpec(
+            "read_ui",
+            "See an app window's controls (buttons, fields, list items, text), numbered for "
+            "click_element and type_into. Brings a named window to the front.",
+            _schema(
+                {
+                    "window": {
+                        "type": "string",
+                        "maxLength": 100,
+                        "description": "App name or part of its title; empty = the window "
+                        "the user was using",
+                    }
+                }
+            ),
+            read_ui,
+            Risk.LOW,
+            lambda a: f"Read the {a.get('window') or 'current'} window",
+        )
+    )
+    registry.register(
+        ToolSpec(
+            "click_element",
+            "Click a control from read_ui. Returns the window afterwards.",
+            _schema(
+                {"id": element_id, "double": {"type": "boolean"}, "right": {"type": "boolean"}},
+                ["id"],
+            ),
+            click_element,
+            lambda a: click_risk(
+                ui.element(int(a.get("id", 0))), ui.app, double=bool(a.get("double"))
+            ),
+            lambda a: f"Click {named(int(a.get('id', 0)))} in {app_label(ui.app)}",
+        )
+    )
+    registry.register(
+        ToolSpec(
+            "type_into",
+            "Type into a field from read_ui (clear = replace what's there; submit = press "
+            "Enter after, e.g. to send). Returns the window afterwards.",
+            _schema(
+                {
+                    "id": element_id,
+                    "text": {"type": "string", "maxLength": settings.max_typed_chars},
+                    "clear": {"type": "boolean"},
+                    "submit": {"type": "boolean"},
+                },
+                ["id", "text"],
+            ),
+            type_into,
+            lambda a: Risk.MEDIUM if a.get("submit") else Risk.LOW,
+            type_description,
+        )
+    )
+    registry.register(
+        ToolSpec(
+            "scroll_ui",
+            "Scroll the window read last, or the control with this id. Returns the window.",
+            _schema(
+                {
+                    "direction": {"type": "string", "enum": ["up", "down"]},
+                    "id": element_id,
+                    "amount": {"type": "integer"},
+                },
+                ["direction"],
+            ),
+            scroll_ui,
+            Risk.LOW,
+            lambda a: f"Scroll {a.get('direction', 'down')}",
+        )
+    )
