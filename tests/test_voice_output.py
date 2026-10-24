@@ -23,7 +23,7 @@ from jarvis.voice.tts import Speaker
         ("**Done.** It's on [BBC Weather](https://www.bbc.co.uk/weather).",
          "Done. It's on BBC Weather."),
         ("Read more at https://www.theverge.com/2026/10/24/story.", "Read more at theverge.com."),
-        ("# Forecast\n- Sunny, 24°C\n- Light wind 🌬️", "Forecast. Sunny, 24 degrees C. Light wind."),
+        ("# Forecast\n- Sunny, 24°C\n- Light wind 🌬️", "Forecast. Sunny, 24 degrees. Light wind."),
         ("Saved to C:\\Users\\Ann\\Desktop\\notes.txt ✓", "Saved to notes.txt."),
         ("Like this:\n```python\nprint('hi')\n```", "Like this: I've put the code on screen."),
         ("| Item | Cost |\n|---|---|\n| Hotel | 120 |", "Item, Cost. Hotel, 120."),

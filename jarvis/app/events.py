@@ -165,4 +165,4 @@ class Announce(Event):
     in the conversation and said out loud once JARVIS isn't busy."""
 
     text: str
-    kind: str = "reminder"  # reminder | alert | briefing | check-in | news
+    kind: str = "reminder"  # reminder | briefing | news | hardware | check-in

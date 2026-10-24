@@ -24,6 +24,11 @@ _ARROWS = re.compile(r"\s*(->|=>|→|⇒)\s*")
 _SENTENCE_END = (".", "!", "?", ":", ";", "…")
 
 
+def without_thinking(text: str) -> str:
+    """Drop a model's <think>...</think> reasoning, which is never shown or spoken."""
+    return _THINK.sub("", text).strip()
+
+
 def site_name(url: str) -> str:
     """ "https://www.bbc.co.uk/news/x" -> "bbc.co.uk"."""
     host = urlsplit(url if "://" in url else "http://" + url).hostname or ""
@@ -60,7 +65,8 @@ def speakable(text: str) -> str:
     text = _WIN_PATH.sub(lambda m: m.group(1), text)
     text = _INLINE_CODE.sub(lambda m: m.group(1) if len(m.group(1)) <= 40 else "that", text)
     text = _ARROWS.sub(" to ", text)
-    text = re.sub(r"\s*°\s*([CF])\b", r" degrees \1", text).replace("°", " degrees")
+    text = re.sub(r"\s*°\s*C\b", " degrees", text)
+    text = re.sub(r"\s*°\s*F\b", " degrees Fahrenheit", text).replace("°", " degrees")
     text = _symbols(text)
     lines = [_line(line) for line in text.splitlines()]
     spoken = " ".join(line for line in lines if line)

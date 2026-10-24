@@ -7,7 +7,7 @@ import asyncio
 import contextlib
 import signal
 import sys
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import qasync
 from loguru import logger
@@ -30,6 +30,14 @@ from jarvis.app.logging_setup import configure_logging
 from jarvis.app.paths import database_file, keep_file, voices_dir
 from jarvis.app.single_instance import SingleInstance
 from jarvis.app.state import AppState, StateChanged, StateMachine
+
+if TYPE_CHECKING:
+    import httpx
+
+    from jarvis.agent.routines import Job
+    from jarvis.providers.router import ProviderRouter
+    from jarvis.storage.db import HistoryStore
+    from jarvis.storage.keep import Keep
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -265,7 +273,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         wake.start()
         spawn(check_wake())
 
-    background = Background(bus, keep)
+    background = Background(bus, keep, jobs=_routines(settings, keep, store, router, client))
     background.start()
     spawn(asyncio.to_thread(installed.refresh))  # so "open Valorant" is instant later
 
@@ -345,6 +353,63 @@ def run(argv: list[str] | None = None) -> int:
     logger.info("{} exited cleanly", APP_NAME)
     logger.complete()
     return 0
+
+
+def _routines(
+    settings: Settings,
+    keep: Keep,
+    store: HistoryStore,
+    router: ProviderRouter,
+    client: httpx.AsyncClient,
+) -> list[Job]:
+    """The things JARVIS brings up by itself, as configured in ``routines``."""
+    from jarvis.agent.prompts import SUMMARY_PROMPT
+    from jarvis.agent.routines import (
+        Briefing,
+        CheckIns,
+        HardwareWatch,
+        SessionSummaries,
+        TopicWatch,
+    )
+    from jarvis.tools import web
+    from jarvis.tools.personal import home_city
+    from jarvis.voice.spoken_text import without_thinking
+
+    plan = settings.routines
+    locale = settings.tools.news_locale
+    quiet_hours = (plan.quiet_from, plan.quiet_until)
+
+    async def weather() -> web.Forecast | None:
+        place = await home_city(keep, settings.tools.home_place)
+        return await web.forecast(client, place) if place else None
+
+    async def headlines() -> list[web.Headline]:
+        if plan.briefing_headlines <= 0:
+            return []
+        return await web.news(client, "", locale, limit=plan.briefing_headlines)
+
+    async def topic_news(topic: str) -> list[web.Headline]:
+        return await web.news(client, topic, locale, limit=3)
+
+    async def summarize(transcript: str) -> str:
+        result = await router.chat(
+            [
+                {"role": "system", "content": SUMMARY_PROMPT},
+                {"role": "user", "content": transcript},
+            ]
+        )
+        return without_thinking(result.content or "")
+
+    jobs: list[Job] = [TopicWatch(keep, topic_news, quiet_hours)]
+    if plan.briefing:
+        jobs.append(Briefing(keep, weather, headlines))
+    if plan.hardware_alerts:
+        jobs.append(HardwareWatch(battery_low=plan.battery_low))
+    if plan.check_in_hours > 0:
+        jobs.append(CheckIns(plan.check_in_hours, quiet_hours=quiet_hours))
+    if plan.summaries:
+        jobs.append(SessionSummaries(store, keep, summarize))
+    return jobs
 
 
 async def _memory(keep: Any, render: Any) -> str:

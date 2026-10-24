@@ -213,6 +213,25 @@ class ToolSettings(BaseModel):
     news_locale: str = "en-US"
 
 
+class RoutineSettings(BaseModel):
+    """Things JARVIS brings up by itself. Each can be turned off."""
+
+    # Before noon, on the first moment you're at the PC: date, weather, reminders,
+    # yesterday's recap and a few headlines.
+    briefing: bool = True
+    briefing_headlines: int = 3
+    # A short spoken nudge after this many hours at the PC without a break (0 = off).
+    check_in_hours: float = 2.0
+    # Low battery, and processor or memory flat out for a couple of minutes.
+    hardware_alerts: bool = True
+    battery_low: int = Field(default=20, ge=5, le=50)
+    # One- or two-sentence summaries of each session, mentioned in the next briefing.
+    summaries: bool = True
+    # No check-ins or topic news between these hours (local time, 24 h clock).
+    quiet_from: int = Field(default=22, ge=0, le=23)
+    quiet_until: int = Field(default=8, ge=0, le=23)
+
+
 class Settings(BaseModel):
     log_level: str = "INFO"
     history_messages: int = 20
@@ -220,6 +239,7 @@ class Settings(BaseModel):
     hotkeys: HotkeySettings = Field(default_factory=HotkeySettings)
     voice: VoiceSettings = Field(default_factory=VoiceSettings)
     tools: ToolSettings = Field(default_factory=ToolSettings)
+    routines: RoutineSettings = Field(default_factory=RoutineSettings)
 
 
 def load_settings(path: Path | None = None) -> Settings:

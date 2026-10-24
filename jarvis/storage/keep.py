@@ -203,16 +203,19 @@ class Keep:
 
     async def watch(self, topic: str) -> None:
         def go() -> None:
-            self._conn.execute(
-                "INSERT OR IGNORE INTO topics (topic) VALUES (?)", (topic.strip().lower(),)
-            )
+            # Kept as the user wrote it ("SpaceX"), matched without regard to case.
+            known = self._conn.execute(
+                "SELECT 1 FROM topics WHERE lower(topic) = lower(?)", (topic.strip(),)
+            ).fetchone()
+            if known is None:
+                self._conn.execute("INSERT INTO topics (topic) VALUES (?)", (topic.strip(),))
 
         await self._run(go)
 
     async def unwatch(self, topic: str) -> bool:
         def go() -> bool:
             cursor = self._conn.execute(
-                "DELETE FROM topics WHERE topic = ?", (topic.strip().lower(),)
+                "DELETE FROM topics WHERE lower(topic) = lower(?)", (topic.strip(),)
             )
             return cursor.rowcount > 0
 
@@ -228,11 +231,11 @@ class Keep:
         result: list[tuple[str, str, float]] = await self._run(go)
         return result
 
-    async def mark_topic(self, topic: str, seen: str) -> None:
+    async def mark_topic(self, topic: str, seen: str, checked: float | None = None) -> None:
         def go() -> None:
             self._conn.execute(
                 "UPDATE topics SET seen = ?, checked = ? WHERE topic = ?",
-                (seen, time.time(), topic),
+                (seen, time.time() if checked is None else checked, topic),
             )
 
         await self._run(go)

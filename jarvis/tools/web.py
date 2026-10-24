@@ -84,8 +84,38 @@ async def _get(client: httpx.AsyncClient, url: str, **params: str | int) -> http
     return response
 
 
-async def weather(client: httpx.AsyncClient, place: str) -> str:
-    """Current weather and the next two days for a place, as one short paragraph."""
+@dataclass(frozen=True, slots=True)
+class DayForecast:
+    label: str  # Today, Tomorrow, The day after
+    sky: str
+    low: int
+    high: int
+    rain: int | None  # chance of rain, %
+
+
+@dataclass(frozen=True, slots=True)
+class Forecast:
+    place: str  # "Kochi, India"
+    sky: str
+    temperature: int
+    feels_like: int
+    humidity: int
+    wind: int  # km/h
+    days: tuple[DayForecast, ...]
+
+    def text(self) -> str:
+        line = (
+            f"{self.place}: {self.sky}, {self.temperature}°C (feels like {self.feels_like}°C), "
+            f"humidity {self.humidity}%, wind {self.wind} km/h."
+        )
+        for day in self.days:
+            chance = f", {day.rain}% chance of rain" if day.rain is not None else ""
+            line += f" {day.label}: {day.sky}, {day.low} to {day.high}°C{chance}."
+        return line
+
+
+async def forecast(client: httpx.AsyncClient, place: str) -> Forecast:
+    """Current weather and the next two days for a place."""
     found = await _get(
         client,
         "https://geocoding-api.open-meteo.com/v1/search",
@@ -99,7 +129,7 @@ async def weather(client: httpx.AsyncClient, place: str) -> str:
         raise WebError(f"I couldn't find a place called {place}")
     spot = results[0]
     name = ", ".join(str(p) for p in (spot.get("name"), spot.get("country")) if p)
-    forecast = await _get(
+    response = await _get(
         client,
         "https://api.open-meteo.com/v1/forecast",
         latitude=str(spot["latitude"]),
@@ -110,18 +140,11 @@ async def weather(client: httpx.AsyncClient, place: str) -> str:
         timezone="auto",
         forecast_days=3,
     )
-    data = forecast.json()
+    data = response.json()
     now = data.get("current") or {}
     daily = data.get("daily") or {}
-    text = (
-        f"{name}: {describe_code(int(now.get('weather_code', -1)))}, "
-        f"{round(now.get('temperature_2m', 0))}°C (feels like "
-        f"{round(now.get('apparent_temperature', 0))}°C), humidity "
-        f"{round(now.get('relative_humidity_2m', 0))}%, wind "
-        f"{round(now.get('wind_speed_10m', 0))} km/h."
-    )
-    days = ["Today", "Tomorrow", "The day after"]
-    for i, label in enumerate(days):
+    days = []
+    for i, label in enumerate(["Today", "Tomorrow", "The day after"]):
         try:
             high = round(daily["temperature_2m_max"][i])
             low = round(daily["temperature_2m_min"][i])
@@ -129,9 +152,21 @@ async def weather(client: httpx.AsyncClient, place: str) -> str:
             rain = daily.get("precipitation_probability_max", [None] * 3)[i]
         except (KeyError, IndexError, TypeError):
             break
-        chance = f", {rain}% chance of rain" if rain is not None else ""
-        text += f" {label}: {describe_code(code)}, {low} to {high}°C{chance}."
-    return text
+        days.append(DayForecast(label, describe_code(code), low, high, rain))
+    return Forecast(
+        name,
+        describe_code(int(now.get("weather_code", -1))),
+        round(now.get("temperature_2m", 0)),
+        round(now.get("apparent_temperature", 0)),
+        round(now.get("relative_humidity_2m", 0)),
+        round(now.get("wind_speed_10m", 0)),
+        tuple(days),
+    )
+
+
+async def weather(client: httpx.AsyncClient, place: str) -> str:
+    """Current weather and the next two days for a place, as one short paragraph."""
+    return (await forecast(client, place)).text()
 
 
 async def news(

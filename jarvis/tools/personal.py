@@ -75,6 +75,15 @@ def register_personal_tools(
         _web_tools(registry, http, keep, home_place, news_locale)
 
 
+async def home_city(keep: Keep | None, default: str = "") -> str:
+    """The user's city: from memory if they've mentioned it, else ``tools.home_place``."""
+    if keep is not None:
+        for fact in await keep.recall("home city town live location", limit=3):
+            if any(w in fact.key for w in ("city", "town", "home", "live", "location")):
+                return fact.value
+    return default
+
+
 def _memory_tools(registry: ToolRegistry, keep: Keep) -> None:
     async def remember(topic: str, fact: str, category: str = "other") -> ToolResult:
         try:
@@ -215,13 +224,7 @@ def _web_tools(
     news_locale: str,
 ) -> None:
     async def place_or_home(place: str) -> str:
-        if place.strip():
-            return place.strip()
-        if keep is not None:
-            for fact in await keep.recall("home city town live location", limit=3):
-                if any(w in fact.key for w in ("city", "town", "home", "live", "location")):
-                    return fact.value
-        return home_place
+        return place.strip() or await home_city(keep, home_place)
 
     async def get_weather(place: str = "") -> ToolResult:
         where = await place_or_home(place)

@@ -119,6 +119,16 @@ class HistoryStore:
             for r in reversed(rows)
         ]
 
+    def _messages_after(self, after_id: int, limit: int) -> list[StoredMessage]:
+        rows = self._conn.execute(
+            "SELECT id, role, content, payload, provider, model, mode, created_at FROM messages"
+            " WHERE id > ? ORDER BY id LIMIT ?",
+            (after_id, limit),
+        ).fetchall()
+        return [
+            StoredMessage(r[0], r[1], r[2], json.loads(r[3]), r[4], r[5], r[6], r[7]) for r in rows
+        ]
+
     def _clear(self, conversation_id: int) -> None:
         self._conn.execute("DELETE FROM messages WHERE conversation_id = ?", (conversation_id,))
         self._conn.commit()
@@ -146,6 +156,19 @@ class HistoryStore:
 
     async def messages(self, conversation_id: int, limit: int = 200) -> list[StoredMessage]:
         result: list[StoredMessage] = await self._run(self._messages, conversation_id, limit)
+        return result
+
+    async def messages_after(self, after_id: int, limit: int = 200) -> list[StoredMessage]:
+        """Messages of any conversation newer than ``after_id``, oldest first."""
+        result: list[StoredMessage] = await self._run(self._messages_after, after_id, limit)
+        return result
+
+    async def last_message_id(self) -> int:
+        def go() -> int:
+            row = self._conn.execute("SELECT MAX(id) FROM messages").fetchone()
+            return int(row[0] or 0)
+
+        result: int = await self._run(go)
         return result
 
     async def clear(self, conversation_id: int) -> None:
