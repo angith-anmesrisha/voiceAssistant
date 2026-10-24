@@ -44,7 +44,8 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   single instance, `autostart.py` (Startup-folder shortcut `pythonw -m jarvis --hidden`,
   tray toggle "Start with Windows").
 - `providers/`: `base.py` (types, `ProviderError`, `ErrorKind`, `ProviderState`),
-  `openai_compat.py` (shared chat/transcribe/probe), `backends.py` (Groq, Gemini, Ollama),
+  `openai_compat.py` (shared chat/transcribe/probe; `vocabulary` → Whisper `prompt`),
+  `backends.py` (Groq, Gemini, OpenRouter with `pick_free_model`, Ollama),
   `network.py` (TCP reachability), `router.py` (priority, capability routing, bounded
   retries with backoff, fallback, `AllProvidersFailedError`).
 - `app/keys.py`: API keys from the process env, then (Windows) the user env in
@@ -52,6 +53,10 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 - `storage/db.py`: `HistoryStore` (SQLite conversations + messages, via `asyncio.to_thread`).
   `storage/keep.py`: `Keep` (`keep.sqlite3`: facts, reminders, watched topics, conversation
   summaries, small state) and `memory_prompt` (newest facts + an index of the rest).
+  `storage/vault.py`: `Vault` (Markdown memory folder: Daily/, Notes/, JARVIS/Facts.md;
+  `rank` = BM25 over ≤420-char chunks fused by reciprocal rank with `time_range` days;
+  `recall_block`). `storage/memory.py`: `Memory` (vault + optional Hindsight: `recall`,
+  `log`, `summary`, `note`, `facts_changed`). `storage/hindsight.py`: REST connector.
 - `tools/`: `apps.py` (`AppIndex` of installed apps: Start menu .lnk/.url + shell:AppsFolder,
   minus uninstallers/help/links and blocked shells/system editors; fuzzy `best_match`),
   `media.py` (play_youtube: first `videoRenderer` on the results page, else the results;
@@ -59,6 +64,10 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   `messaging.py` (`send_whatsapp`: search, paste, Enter),
   `steam.py` (libraryfolders.vdf + appmanifest_*.acf; StateFlags≠4 = needs update;
   `steam://rungameid/<id>`, `steam://open/downloads`),
+  `live.py` (keyless public APIs: `price_of` → Yahoo chart/search, CoinGecko →
+  fawazahmed0, metals per gram, mfapi NAV; `convert` Frankfurter → fawazahmed0;
+  `wiki_summary`, `define`, `air_quality`, `earthquakes`, `holidays`, `joke`;
+  `register_live_tools` incl. `watch_market`, state `market_watch` in keep),
   `registry.py` (`Risk`, `ToolSpec`, arg validation), `desktop.py` (`WindowsDesktop`:
   approved launches with `shell=False`, pynput keys/typing, clipboard, lock/sleep, delayed
   shutdown), `files.py` (`FileArea`: allowed roots, blocked system folders, Recycle Bin via
@@ -88,7 +97,10 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   pipelining, barge-in), `neural.py` (Kokoro-82M via onnxruntime + phonemizer/espeak-ng
   en-gb; model files from kokoro-onnx's model-files-v1.1 release, SHA-256 pinned),
   `spoken_text.py` (`speakable`: strips Markdown, think blocks, code, emoji; links →
-  site name, paths → file name, lines → sentences), `confirm.py` (spoken yes/no), `hotkeys.py` (global push-to-talk; Windows hook swallows the
+  site name, paths → file name, lines → sentences, ₹/$/£/€ → words),
+  `dictation.py` (`Dictation.paste`: refuses `blocked_reason` windows, clipboard paste,
+  no Enter), `vocabulary.py` (`vocabulary`, `VocabularyRefresh` job), `whistle.py`
+  (`WhistleStt`, `OfflineStt` chain), `confirm.py` (spoken yes/no), `hotkeys.py` (global push-to-talk; Windows hook swallows the
   chord's main key), `local_stt.py` (offline SAPI dictation fallback), `wake_word.py`
   (offline SAPI command grammar for "Jarvis").
 - `remote/`: `dashboard.py` (`Dashboard`: asyncio HTTP server on `dashboard.port` 8765,
@@ -148,11 +160,55 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   asks first" for the code runner, plugins, phone dashboard and dark mode/Wi-Fi).
   Feature map: /mnt/project-files/jarvis/mark-lvi-feature-map.md.
 - Tool budget: requests carry only "core" tools plus the groups `groups_for` finds in the
-  words (system, keys, memory, clipboard, power, files, ui, reminders) and the groups the
+  words (system, keys, memory, clipboard, power, files, ui, reminders, finance, info,
+  media, code, camera) and the groups the
   previous request used. Keeps Groq's 8K TPM free tier usable as tools grow.
 - Memory: `remember`/`recall_memory`/`forget`; the prompt carries ~900 chars of the newest
   facts plus an index of the other keys (by category, round robin), marked as facts, not
   instructions. Nothing is deleted automatically.
+- Long-term memory (owner, 2026-10-24: "obsidian or something ... so it doesn't forget a
+  single thing"): `memory.vault` folder (default Documents\JARVIS Memory; data_dir/memory
+  with `JARVIS_DATA_DIR`). Every answered exchange is appended to Daily/<date>.md in a
+  background task (WhatsApp sends as a one-line summary; diagnostics, pairing and
+  dictation never). `checked_context(query)` adds ≤`recall_chars` (700) of matching
+  passages for requests of 3+ words, screened by Prompt Guard (dropped if flagged). The
+  vault is the user's own data store, like history; the log files still never hold
+  their words. `recall_memory` also searches the vault; `save_note` (LOW, group memory)
+  writes Notes/. `SessionSummaries` asks for JSON {summary, facts}; the summary goes to
+  keep and the daily note, facts (≤8, user-stated only) to `keep.remember` when
+  `memory.learn_facts`. Facts.md is rewritten on remember/forget/learn and at start.
+  Hindsight (MIT) was judged too heavy to bundle (Postgres, embeddings, reranker, an LLM
+  call per memory); its ideas are reimplemented, and `memory.hindsight_url` adds its
+  REST API (retain + recall merged in, failures ignored). Open Glean was not used: it's
+  a web app over Hydra DB's paid cloud.
+- Live data (owner asked for public-apis features, 2026-10-24): groups "finance"
+  (`get_price`, `convert_currency`, `watch_market`) and "info" (`wikipedia`,
+  `define_word`, `air_quality`, `earthquakes`, `public_holidays`, `tell_joke`, all
+  Prompt-Guard screened). Home currency from `tools.news_locale` (en-IN → INR; Indian
+  shares prefer .NS). `MarketWatch` checks every 30 min outside quiet hours and speaks a
+  move ≥ `move` % from the last mentioned price (then re-marks). Briefing adds
+  `routines.briefing_markets` (["nifty", "sensex", "gold"]). The sandbox can't reach these
+  APIs; shapes come from their docs (Frankfurter, fawazahmed0 and mfapi were checked live
+  earlier) and tests use MockTransport.
+- Interrupt (owner, 2026-10-24): `controller.interrupt()` from Esc (`window.on_escape`),
+  the tray's Stop JARVIS, push-to-talk, the wake word (kept listening while busy:
+  `voice.wake_while_busy`) or a typed request cancels the running task and speech
+  ("Stopped.", mode "stopped"); "stop"/"never mind"/"cancel that" (`is_stop_command`)
+  needs no AI. A confirmation in progress is never cancelled (only its speech stops).
+  `voice.interrupt` turns it off.
+- Dictation (Handy, MIT, reimplemented): `hotkeys.dictation` (Alt+Shift+`) records
+  while held, transcribes, pastes into the foreground window (not JARVIS, shells,
+  terminals or other `blocked_reason` windows), restores the clipboard, never Enter, no
+  AI, no history. Ignored while a request runs. Chords need exactly their modifiers, so
+  Alt+Shift+` doesn't also fire Alt+`.
+- App clicks (cua, MIT, ideas only): plain clicks on Button/MenuItem/Hyperlink/
+  SplitButton use Invoke, CheckBox Toggle, RadioButton/TabItem Select, mouse as fallback
+  (ListItems stay mouse clicks). After click/type the tool compares readings: identical
+  elements → `effect: "no visible change"` plus a hint; typed text not in any value →
+  `typed_check: "not seen"`.
+- OmniVoice (k2-fsa, Apache-2.0) was assessed for non-English speech and not added:
+  torch plus a 0.6B model is too heavy for the owner's Iris Xe laptop on CPU, and
+  SAPI voices already cover installed languages.
 - Undo (`undo_last`, LOW): reverses JARVIS's own last move/rename/copy (copy → Recycle
   Bin)/new folder (only while empty)/new text file (→ Recycle Bin)/desktop tidy-up (one
   step)/volume, mute, brightness or wallpaper change, session only, 30 steps.
@@ -172,14 +228,20 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 - No modes. Screen questions (regex `wants_screen`) go straight to vision; everything else
   goes to the agent with all tools plus `look_at_screen`, so the model decides. The reply
   label says what happened ("looked at screen", "used tools").
-- Speech-to-text: Groq Whisper, then Gemini, then Windows SAPI dictation (offline, weaker).
+- Speech-to-text: Groq Whisper, then Gemini, then offline: Cactus Whistle (Apache-2.0;
+  only if `needle` is importable, `voice.whistle`; NEEDLE_TELEMETRY=0 set before import;
+  en/de/fr/es/it/nl/pl; vocabulary passed as keywords), then Windows SAPI dictation.
+  `voice.custom_words` plus capitalised names in people/places/about_user/projects facts
+  (≤60, refreshed every 5 min) go to Whisper's `prompt` and Gemini's transcription text.
 - The controller's "busy" is the running request task, so it can't get stuck after errors.
   Typing while recording discards the recording. Identical consecutive error cards are
   collapsed.
 - Gemini returns HTTP 400 "API key not valid" for a bad key; it is classified as AUTH.
   FAILED_PRECONDITION from Gemini is account/billing side, not ours.
 - Models: Groq `qwen/qwen3.8-27b` (owner's choice; Preview, free tier 8K tokens/min,
-  `reasoning_effort: "none"`), then `openai/gpt-oss-120b` ("low") and
+  `reasoning_effort: "none"`), then `minimaxai/minimax-m2.7` (Preview, agentic; owner asked
+  for "kimi k3 or something light but very good", 2026-10-24; Groq has no Kimi; no
+  reasoning field, its <think> is stripped), `openai/gpt-oss-120b` ("low") and
   `llama-3.3-70b-versatile` (no reasoning field) for chat when qwen is rate-limited; STT
   `whisper-large-v3-turbo` with `verbose_json`, dropping segments with no_speech_prob ≥ 0.6
   or avg_logprob ≤ -1 (Whisper invents "I'm going to go." from silence). Gemini (the
@@ -211,7 +273,12 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   chunks; flagged tool text is withheld (ACTION "✕ Blocked…", reply marked failed, red),
   flagged titles are dropped. Guard errors fail open (logged). The user's own words are
   never screened.
-- Fallback is Groq → Gemini → Ollama (or the preferred one first). Only 5xx is retried on
+- Fallback is Groq → Gemini → OpenRouter → Ollama (or the preferred one first). OpenRouter
+  is optional (`OPENROUTER_API_KEY`; skipped and listed when missing), default
+  `nvidia/nemotron-3.5-super-vl:free` for chat and vision; if a configured free model
+  vanishes, the first listed free tool-capable model is used. Kimi K3
+  (`moonshotai/kimi-k3`) is paid there and is only a documented option. A saved priority
+  equal to the old default gets openrouter inserted. Only 5xx is retried on
   the same provider (1 + `max_retries`, now 1; timeouts 20 s); a timeout, network error, auth, billing
   or bad request moves to the next provider at once (retrying timeouts used to take
   minutes before switching). The router publishes `activity` ("Groq didn't answer, asking
@@ -337,6 +404,9 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   the vsync clock, the corner overlay, the key dialog's registry write, and the desktop
   tools are untested on real Windows so far.
 - The wake word needs a pause after "Jarvis"; words said in the same breath are lost.
+- Round 11 (memory vault, live data tools, interrupt, OpenRouter, dictation, Whistle,
+  pattern clicks) is untested on Windows; the live APIs were mocked (the sandbox can't
+  reach them).
 - The UI tools (UI Automation, clicks, typing) are untested on real Windows; apps that
   draw their own UI (games, some Electron/canvas apps) expose few controls, so the model
   falls back to `look_at_screen`. A long app task uses many tokens (Groq's free tier

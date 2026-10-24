@@ -61,9 +61,20 @@ python -m jarvis --hidden   # starts in the tray
   - or hold **Alt+`** (the key left of 1) anywhere in Windows and let go to send;
   - or tap the mic button.
 
-  Spoken questions get spoken answers; talk again to interrupt.
-  Speech is turned into text by Groq (or Gemini); with neither, Windows' offline speech
-  recognition is used.
+  Spoken questions get spoken answers.
+  Speech is turned into text by Groq (or Gemini); with neither, the offline Whistle model
+  (if you `pip install cactus-needle`) or Windows' own speech recognition is used. Names
+  you've told JARVIS about, plus `voice.custom_words`, are passed along so they're spelled
+  right.
+- **Interrupt any time.** Press Esc in the window, choose Stop JARVIS in the tray, hold
+  Alt+`, say "Jarvis" (it keeps listening for its name while it talks or works), or just
+  type a new request: JARVIS stops talking and drops what it was doing. Saying or typing
+  "stop" (or "never mind", "cancel that") ends it without asking the AI anything.
+  Confirmations aren't cut off: they wait for your yes or no.
+- **Dictation anywhere.** Hold **Alt+Shift+`**, speak, let go: your words are typed where
+  the cursor is, in any app (pasted, with your clipboard put back afterwards). No AI
+  answers and nothing is saved. It never types into shells, terminals or JARVIS itself,
+  and never presses Enter. Change or turn off with `hotkeys.dictation`.
 - When you call JARVIS while working in another app, only the **orb appears in the
   bottom-right corner**, above your other windows, with a short caption. It never steals
   focus, and it fades away when JARVIS is done. Click it to open the full window.
@@ -71,9 +82,14 @@ python -m jarvis --hidden   # starts in the tray
   Gemini from now on", "switch to the local model", "go back to automatic". The choice is
   remembered. If the chosen one isn't available, JARVIS says so and uses the next one,
   and every answer is labelled with the provider that really produced it.
-- **Automatic fallback:** Groq, then Gemini, then your local `qwen3.5:4b`. Inside
-  Groq, a rate-limited qwen hands over to GPT-OSS 120B, then Llama 3.3 70B; Gemini uses
-  3.8 Flash, then 3.5 Flash-Lite, 3.6 Flash and 2.5 Flash. A timeout, a rejected key or a
+- **Automatic fallback:** Groq, then Gemini, then OpenRouter (if you add a key), then
+  your local `qwen3.5:4b`. Inside Groq, a rate-limited qwen hands over to MiniMax M2.7
+  (a strong agentic model, free on Groq), then GPT-OSS 120B and Llama 3.3 70B; Gemini
+  uses 3.5 Flash-Lite, then 3.8 Flash, 3.6 Flash and 2.5 Flash. **OpenRouter** is
+  optional (`OPENROUTER_API_KEY`, free at openrouter.ai): it starts on a free model that
+  can also see the screen (`nvidia/nemotron-3.5-super-vl:free`), and you can point
+  `providers.openrouter.chat_model` at a paid model such as `moonshotai/kimi-k3` (very
+  capable, but paid per use and slower to start). Nothing heavy runs on your PC. A timeout, a rejected key or a
   billing problem moves on to the next service at once. While it works, the caption says
   who it's asking ("Groq didn't answer, asking Gemini…"), and a note says why a backup
   answered.
@@ -110,7 +126,29 @@ python -m jarvis --hidden   # starts in the tray
 ![JARVIS working through a task list](docs/renders/16-plan-running.png)
 
 - **Remembers you.** Tell it "my sister is Ayşe" or "I live in Kochi" and it keeps that
-  on your PC (`keep.sqlite3`), uses it later, and forgets it when you ask.
+  on your PC (`keep.sqlite3`), uses it later, and forgets it when you ask. After each
+  conversation it also picks up lasting facts you mentioned on your own.
+- **Never forgets a conversation.** Everything also goes into a folder of plain
+  Markdown notes, **Documents\JARVIS Memory**, that you can open in Obsidian ("Open
+  folder as vault") or any editor: `Daily/` has every exchange and a summary of each
+  conversation, one note per day; `JARVIS/Facts.md` lists what it remembers about you;
+  `Notes/` holds notes you ask it to take ("note down the trip plan"). Before every
+  answer JARVIS searches the whole folder, your own notes included, and gives the AI
+  the few passages that match ("what did we decide about the car yesterday?"), so you
+  don't repeat yourself. The search runs on your PC with no AI; only the matching
+  passages are sent with your request. Settings: `memory.*` (folder, on/off, how much is
+  recalled). If you run a [Hindsight](https://github.com/vectorize-io/hindsight) memory
+  server, set `memory.hindsight_url` and JARVIS uses it too.
+- **Live prices and facts from free public APIs.** "What's the Nifty at?", "Reliance
+  share price", "bitcoin in rupees", "gold rate per gram", "NAV of Parag Parikh Flexi
+  Cap", "convert 250 dollars to rupees", "tell me about the Chola dynasty" (Wikipedia),
+  "what does ephemeral mean", "how's the air in Delhi", "any big earthquakes today",
+  "next public holidays", "tell me a joke". Sources: Yahoo Finance, CoinGecko,
+  Frankfurter (ECB rates), mfapi.in, Wikipedia, dictionaryapi.dev, Open-Meteo, USGS,
+  Nager.Date, JokeAPI; no keys needed, and each answer names its source. Gold and silver
+  are the international spot price (Indian shop prices add duty and GST). "Watch
+  bitcoin and tell me if it moves 3%" checks every 30 minutes, and the morning briefing
+  reads `routines.briefing_markets` (Nifty, Sensex and gold by default).
 - **Reminders and timers.** "Remind me at 6 pm to call Mom", "set a 10 minute timer":
   it says them out loud when due, even after a restart.
 - **Weather, news and web answers.** "Will it rain tomorrow?", "latest news on the
@@ -158,7 +196,10 @@ python -m jarvis --hidden   # starts in the tray
   window after each step, until it's done. It asks before anything that sends, pays,
   deletes or calls, and before pressing Enter to send. It never touches shells,
   terminals, Windows Settings, Task Manager or password fields, and text it reads in
-  apps is checked for hidden instructions like everything else.
+  apps is checked for hidden instructions like everything else. Buttons, menus, links,
+  checkboxes and tabs are pressed through the accessibility interface itself (works
+  even when they're partly covered), and if a click changes nothing or typed text
+  doesn't show up, JARVIS notices and checks again instead of carrying on.
 - Answers appear in a card in the middle while the orb moves to the corner; close the
   card (or start a new question) and the orb returns. The chat button at the top right
   opens the full history; click the status dots at the bottom for providers, network and
@@ -226,11 +267,27 @@ done something its tools didn't actually do.
 
 `%LOCALAPPDATA%\JARVIS\settings.json` (created when you first save settings; defaults apply
 otherwise). You can change provider priority, model names, timeouts and retries, approved
-apps, trusted sites, the hotkey (`hotkeys.push_to_talk`, default ``alt+` ``), the wake word (`voice.wake_word`,
+apps, trusted sites, the hotkeys (`hotkeys.push_to_talk`, default ``alt+` ``;
+`hotkeys.dictation`, default ``alt+shift+` ``), the wake word (`voice.wake_word`,
 `voice.wake_phrases`, `voice.wake_min_confidence`: `low`, `normal` or `high`), how long it keeps listening for
 follow-ups (`voice.follow_up_s`, 0 to turn off) and the voice (see above). Conversation history is stored in
 `%LOCALAPPDATA%\JARVIS\jarvis.sqlite3`; logs are in `%LOCALAPPDATA%\JARVIS\logs` and never
 contain your messages, audio or keys.
+
+## Ideas borrowed (no code copied)
+
+- [Handy](https://github.com/cjpais/handy) (MIT): the dictation hotkey and custom words.
+- [Cactus Whistle](https://cactuscompute.com/blog/whistle) (Apache-2.0): optional offline
+  speech-to-text.
+- [cua](https://github.com/trycua/cua) (MIT): pressing controls through accessibility
+  patterns and checking each action's effect.
+- [public-apis](https://github.com/public-apis/public-apis) (MIT): the list the live-data
+  sources were picked from.
+- [Hindsight](https://github.com/vectorize-io/hindsight) (MIT): keyword plus time-based
+  recall fused into one ranking; an optional connector to a Hindsight server.
+- [Open Glean](https://github.com/hydra-db/open-glean) (Apache-2.0): answers from your
+  notes that name the note they came from.
+- Mark-LVI (CC BY-NC 4.0): WhatsApp sending and several features, reimplemented.
 
 ## Develop
 
