@@ -1,12 +1,17 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
+import pytest
+
+from jarvis.agent.commands import WhatsAppRequest, contact_reply, whatsapp_command
 from jarvis.tools.messaging import register_messaging_tools, shows_contact
 from jarvis.tools.registry import Risk, ToolRegistry, ToolResult
 from jarvis.tools.ui import UiElement, UiSnapshot
 from tests.fakes import FakeDesktop, FakeUi
+from tests.test_assistant import Rig, ScriptedRouter
 
 
 async def _no_wait(_seconds: float) -> None:
@@ -113,3 +118,64 @@ def test_empty_contact_or_message_refused() -> None:
     assert not _send(registry, contact=" ").ok
     assert not _send(registry, message="").ok
     assert not desktop.calls
+
+
+# --- WhatsApp requests skip the model entirely ---
+
+
+@pytest.mark.parametrize(
+    ("text", "contact", "message"),
+    [
+        ("Send hi to Mom on WhatsApp.", "Mom", "hi"),
+        ("Jarvis, send a WhatsApp message to Rahul saying I'll be late", "Rahul", "I'll be late"),
+        ("message mom on whatsapp saying hi", "mom", "hi"),
+        ("send mom a whatsapp message saying I'll be late", "mom", "I'll be late"),
+        ("tell Arjun on WhatsApp that the match is at 6", "Arjun", "the match is at 6"),
+        ("tell Arjun the match is at 6 on whatsapp", "Arjun", "the match is at 6"),
+        ("open whatsapp and send hi to my brother", "brother", "hi"),
+        ("text Priya on WhatsApp: see you soon", "Priya", "see you soon"),
+        ("send hi on whatsapp", "", "hi"),
+    ],
+)
+def test_whatsapp_requests_are_understood(text: str, contact: str, message: str) -> None:
+    assert whatsapp_command(text) == WhatsAppRequest(contact, message)
+
+
+@pytest.mark.parametrize(
+    "text", ["open whatsapp", "read my latest whatsapp message", "send hi to mom"]
+)
+def test_other_requests_are_not_whatsapp_sends(text: str) -> None:
+    assert whatsapp_command(text) is None
+
+
+def test_contact_replies() -> None:
+    assert contact_reply("to my mom.") == "mom"
+    assert contact_reply("cancel") == ""
+    assert contact_reply("what's the weather like in Kochi today then") is None
+
+
+async def test_assistant_sends_whatsapp_without_asking_a_model(tmp_path: Path) -> None:
+    rig = Rig(tmp_path, ScriptedRouter())  # no model replies queued: none may be asked
+    reply = await rig.assistant.handle("send hi to Mom on WhatsApp")
+    assert rig.router.requests == []
+    assert [c.tool for c in rig.confirms] == ["send_whatsapp"]
+    assert rig.confirms[0].description == "Send “hi” to Mom on WhatsApp"
+    # The test desktop has no WhatsApp, so the send fails, and says so in red.
+    assert rig.entries[-1].failed and rig.entries[-1].mode == "whatsapp"
+    assert reply.text == rig.entries[-1].text
+
+
+async def test_assistant_asks_who_then_sends(tmp_path: Path) -> None:
+    rig = Rig(tmp_path, ScriptedRouter())
+    first = await rig.assistant.handle("send hi on whatsapp")
+    assert "Who should I send" in first.text and not rig.confirms
+    await rig.assistant.handle("to Mom")
+    assert rig.confirms[0].description == "Send “hi” to Mom on WhatsApp"
+    assert rig.router.requests == []
+
+
+async def test_declined_whatsapp_send(tmp_path: Path) -> None:
+    rig = Rig(tmp_path, ScriptedRouter(), approve=False)
+    reply = await rig.assistant.handle("send hi to Mom on WhatsApp")
+    assert reply.text == "Very well, I didn't send it."
+    assert not [c for c in rig.desktop.calls if c[0] in ("press", "type")]

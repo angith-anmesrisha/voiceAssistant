@@ -11,7 +11,15 @@ from typing import Any
 
 from loguru import logger
 
-from jarvis.agent.commands import AUTO, diagnose_command, pair_command, provider_command
+from jarvis.agent.commands import (
+    AUTO,
+    WhatsAppRequest,
+    contact_reply,
+    diagnose_command,
+    pair_command,
+    provider_command,
+    whatsapp_command,
+)
 from jarvis.agent.guard import PromptGuard
 from jarvis.agent.planner import (
     Task,
@@ -26,7 +34,7 @@ from jarvis.app.events import ChatEntry, EntryKind, EventBus, PlanStep, PlanUpda
 from jarvis.app.state import AppState, StateMachine
 from jarvis.providers.base import Capability, ChatResult, Message, ToolCall
 from jarvis.providers.openai_compat import image_part
-from jarvis.providers.router import AllProvidersFailedError, Diagnosis, ProviderRouter
+from jarvis.providers.router import NO_VISION, AllProvidersFailedError, Diagnosis, ProviderRouter
 from jarvis.storage.db import HistoryStore
 from jarvis.tools.plugins import is_plugin_tool
 from jarvis.tools.registry import ArgumentError, Risk, ToolRegistry, ToolResult, validate_args
@@ -126,6 +134,7 @@ class Assistant:
         self._guard = guard
         self._memory = memory
         self._on_pair = on_pair  # -> (shown, spoken)
+        self._whatsapp_draft: str | None = None  # a message waiting for "who to?"
         self._turn_context = ""
         self._blocked = False
         # What JARVIS did lately (this session), so "undo that" or "do it again" make sense.
@@ -266,6 +275,9 @@ class Assistant:
         choice = provider_command(text)
         if choice is not None:
             return await self._switch_provider(conversation, choice)
+        whatsapp = self._whatsapp_request(text)
+        if whatsapp is not None:
+            return await self._whatsapp(conversation, whatsapp)
         await self._state.transition(AppState.THINKING)
         self._did = set()
         self._carry, self._last_groups = self._last_groups, set()
@@ -317,6 +329,50 @@ class Assistant:
             failed=self._failed or self._blocked or says_it_cannot(reply),
         )
         return Reply(reply, ok=True, provider=result.provider, model=result.model)
+
+    def _whatsapp_request(self, text: str) -> WhatsAppRequest | None:
+        """A WhatsApp message to send without asking a model (it needs none)."""
+        draft, self._whatsapp_draft = self._whatsapp_draft, None
+        if self._registry.get("send_whatsapp") is None:
+            return None
+        request = whatsapp_command(text)
+        if request is not None or draft is None:
+            return request
+        contact = contact_reply(text)  # the answer to "Who should I send it to?"
+        if contact is None:
+            return None
+        return WhatsAppRequest(contact, draft if contact else "")
+
+    async def _whatsapp(self, conversation: int, request: WhatsAppRequest) -> Reply:
+        failed = False
+        if not request.message:
+            reply = "Very well, I won't send it."
+        elif not request.contact:
+            self._whatsapp_draft = request.message
+            reply = f"Who should I send “{request.message}” to on WhatsApp?"
+        else:
+            await self._state.transition(AppState.THINKING)
+            self._did = set()
+            try:
+                result = await self._run_tool(
+                    ToolCall(
+                        "whatsapp",
+                        "send_whatsapp",
+                        {"contact": request.contact, "message": request.message},
+                    )
+                )
+            finally:
+                if self._state.state in (AppState.THINKING, AppState.ACTING):
+                    await self._state.transition(AppState.IDLE)
+            failed = not result.ok
+            reply = result.summary
+            if result.summary == _DECLINED:
+                reply = "Very well, I didn't send it."
+        await self._store.add_message(
+            conversation, {"role": "assistant", "content": reply}, mode="whatsapp"
+        )
+        await self._emit(EntryKind.ASSISTANT, reply, mode="whatsapp", failed=failed)
+        return Reply(reply, ok=True)
 
     async def _look(self, question: str, spoken: bool) -> ChatResult:
         jpeg = await self._capture_screen()
@@ -415,22 +471,32 @@ class Assistant:
             messages.append({"role": "user", "content": text})
 
         groups = groups_for(text, self._carry)
-        tools = [*self._registry.declarations(groups), LOOK_AT_SCREEN]
+        tools = self._registry.declarations(groups)
+        if _WHATSAPP_SEND.match(text):
+            tools = [t for t in tools if t["function"]["name"] not in _APP_DRIVING]
+        else:
+            tools.append(LOOK_AT_SCREEN)
+        failed_rounds = 0
         for _round in range(self._max_tool_rounds):
             trim_old_windows(messages)
             result = await self._router.chat(messages, tools=tools)
             if not result.tool_calls:
                 return result
             messages.append(result.message)
+            outcomes: list[ToolResult] = []
             for call in result.tool_calls:
                 spec = self._registry.get(call.name)
                 if spec is not None and spec.group != "core":
                     self._last_groups.add(spec.group)
                 if call.name == LOOK_AT_SCREEN["function"]["name"]:
                     outcome = await self._look_tool(call, spoken)
+                    if not outcome.ok:  # no model can see now: don't let it keep trying
+                        tools = [t for t in tools if t is not LOOK_AT_SCREEN]
+                        self._failed = True
                 else:
                     outcome = await self._run_tool(call)
                 outcome = await self._screen(call, outcome)
+                outcomes.append(outcome)
                 messages.append(
                     {
                         "role": "tool",
@@ -438,6 +504,18 @@ class Assistant:
                         "name": call.name,
                         "content": json.dumps(outcome.as_payload()),
                     }
+                )
+            failed_rounds = 0 if any(o.ok for o in outcomes) else failed_rounds + 1
+            if failed_rounds >= _MAX_FAILED_ROUNDS:
+                # Stop a loop of failures and say why, instead of trying forever.
+                logger.warning("Stopped after {} failed tool rounds", failed_rounds)
+                self._failed = True
+                reason = outcomes[-1].summary.rstrip(".")
+                return ChatResult(
+                    result.provider,
+                    result.model,
+                    f"I stopped after {failed_rounds} attempts in a row failed. "
+                    f"The last one: {reason}.",
                 )
             await self._state.transition(AppState.THINKING)
         # Out of rounds: ask for a final answer without tools.
@@ -476,7 +554,7 @@ class Assistant:
                 await self._emit(EntryKind.ACTION, f"Declined: {description}")
                 self._recent.append(f"declined: {description}")
                 self._failed = True
-                return ToolResult(False, "The user declined this action.")
+                return ToolResult(False, _DECLINED)
         await self._state.transition(AppState.ACTING)
         self._did.add(ACTED)
         try:
@@ -491,7 +569,15 @@ class Assistant:
         return result
 
 
+_DECLINED = "The user declined this action."
 _OLD_WINDOW = "(replaced by the newer reading below)"
+_WHATSAPP_SEND = re.compile(
+    r"^(?=.*whats\s?app)(?:.*\b(?:send|tell|reply|ping)\b|\W*(?:message|text|whats\s?app)\s)",
+    re.IGNORECASE | re.DOTALL,
+)
+# For WhatsApp, send_whatsapp does the whole job: no reading or driving the window.
+_APP_DRIVING = frozenset({"read_ui", "click_element", "type_into", "scroll_ui"})
+_MAX_FAILED_ROUNDS = 3
 
 
 def trim_old_windows(messages: list[Message]) -> None:
@@ -617,7 +703,7 @@ def diagnosis_report(results: list[Diagnosis]) -> str:
 
 
 def _failure_message(exc: AllProvidersFailedError) -> str:
-    if exc.capability is Capability.VISION and not exc.attempts:
+    if exc.capability is Capability.VISION and all(a.error == NO_VISION for a in exc.attempts):
         return (
             "I can't analyze the screen yet: that needs a model that can see images. Add a "
             "Gemini key, or install one in Ollama (for example: ollama pull qwen3.5:4b)."

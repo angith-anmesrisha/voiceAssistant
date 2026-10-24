@@ -256,3 +256,17 @@ async def test_ollama_uses_the_9b_until_4b_is_pulled(monkeypatch: pytest.MonkeyP
     ollama = make(handler, monkeypatch)["ollama"]
     assert (await ollama.probe()).state is ProviderState.READY
     assert ollama.model_for(Capability.CHAT) == "qwen3.5:latest"
+
+
+async def test_ollama_trusts_the_configured_vision_model_when_installed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"data": [{"id": "qwen3.5:4b"}]})
+        return httpx.Response(200, json={})  # older Ollama: no capabilities listed
+
+    ollama = make(handler, monkeypatch)["ollama"]
+    assert (await ollama.probe()).state is ProviderState.READY
+    assert Capability.VISION in ollama.capabilities()
+    assert ollama.model_for(Capability.VISION) == "qwen3.5:4b"

@@ -224,7 +224,7 @@ async def test_whatsapp_message_end_to_end(tmp_path: Path) -> None:
     )
     rig = Rig(tmp_path, router)
     rig.assistant._registry = tools_with(ui)
-    reply = await rig.assistant.handle("tell mom on whatsapp I'll be 10 minutes late")
+    reply = await rig.assistant.handle("in Signal, tell mom I'll be 10 minutes late")
     assert reply.ok and not rig.entries[-1].failed
     assert ("type", (3, "I'll be 10 minutes late", False, True)) in ui.calls
     # Only sending asked first; searching and opening the chat didn't.

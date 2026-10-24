@@ -110,6 +110,9 @@ _MODEL_GONE = (
 )
 
 
+# 400s about the account (Gemini), not the model: the other models get them too.
+_ACCOUNT_WIDE = ("FAILED_PRECONDITION", "PERMISSION_DENIED", "billing")
+
 _COOL_DOWN_S = 60.0
 _SLOW_COOL_DOWN_S = 300.0
 
@@ -389,6 +392,7 @@ class OpenAICompatibleProvider(Provider):
                 data = await self._post("chat/completions", json=body)
             except ProviderError as exc:
                 errors.append((model, exc))
+                logger.warning("{} {} failed: {}", self.display_name, model, exc.message[:200])
                 if model_unavailable(exc):
                     self._dead.add(model)  # this account can't use it: never again
                 elif exc.kind is ErrorKind.QUOTA:
@@ -398,10 +402,13 @@ class OpenAICompatibleProvider(Provider):
                     # router try the next provider for this one.
                     self._cooling[model] = time.monotonic() + _SLOW_COOL_DOWN_S
                     raise _combined(self.display_name, errors) from exc
-                elif exc.kind is not ErrorKind.UNAVAILABLE:
-                    # Key, billing or a bad request: another model won't help. A timeout
-                    # already cost the user 20 s: let the router try the next provider.
+                elif exc.kind not in (ErrorKind.UNAVAILABLE, ErrorKind.BAD_REQUEST) or any(
+                    code in exc.message for code in _ACCOUNT_WIDE
+                ):
+                    # Key, billing or account: another model won't help.
                     raise _combined(self.display_name, errors) from exc
+                # Busy, or this model rejected the request (Groq answers 400
+                # "tool_use_failed" when a model garbles a tool call): try the next one.
                 continue  # try the next model on the same provider
             self._use_model(capability, model)
             break

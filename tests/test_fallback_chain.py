@@ -415,3 +415,51 @@ def test_settings_can_change_just_the_local_model(tmp_path: Any) -> None:
     assert settings.providers.ollama.chat_model == "qwen3.5:4b"
     assert settings.providers.ollama.base_url == "http://localhost:11434/v1"  # kept
     assert settings.providers.groq.chat_model == "qwen/qwen3.8-27b"
+
+
+async def test_a_model_rejecting_the_request_hands_over_to_the_next_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    models: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        model = json.loads(request.content)["model"]
+        models.append(model)
+        if model == "qwen/qwen3.8-27b":
+            return httpx.Response(
+                400,
+                json={
+                    "error": {
+                        "message": "Failed to call a function. Please adjust your prompt.",
+                        "code": "tool_use_failed",
+                    }
+                },
+            )
+        return reply("Done.", model=model)
+
+    router = rig(handler, monkeypatch)
+    result = await router.chat([{"role": "user", "content": "hi"}])
+    assert result.provider == "Groq"
+    assert models == ["qwen/qwen3.8-27b", "openai/gpt-oss-120b"]
+
+
+async def test_vision_failure_names_the_provider_without_a_vision_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "groq" in request.url.host:
+            return httpx.Response(429, json={"error": {"message": "rate limit"}})
+        if "googleapis" in request.url.host:
+            return httpx.Response(503, json={"error": {"message": "overloaded"}})
+        if request.url.path == "/v1/models":
+            return httpx.Response(200, json={"data": [{"id": "llama3.2:3b"}]})
+        return httpx.Response(200, json={"capabilities": ["completion"]})
+
+    router = rig(handler, monkeypatch)
+    ollama = router.provider("ollama")
+    assert ollama is not None
+    await ollama.probe()
+    with pytest.raises(AllProvidersFailedError) as caught:
+        await router.chat([{"role": "user", "content": "look"}], vision=True)
+    assert [a.provider for a in caught.value.attempts][-1] == "Ollama"
+    assert "can see images" in caught.value.attempts[-1].error

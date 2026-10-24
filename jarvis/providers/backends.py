@@ -205,7 +205,9 @@ class OllamaProvider(OpenAICompatibleProvider):
         for name in candidates[:8]:
             if await self._can_see(name):
                 return name
-        return ""
+        # Older Ollama versions don't list capabilities; the configured vision model
+        # (qwen3.5 sees images) is trusted when it's installed.
+        return next((n for n in self._installed if preferred and _same_model(n, preferred)), "")
 
     async def _can_see(self, model: str) -> bool:
         if model in self._capability_cache:

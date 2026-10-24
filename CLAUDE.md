@@ -192,8 +192,10 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   catalogue, path help once in the prompt): ~2.3K tokens.
 - Model fallback inside a provider: 404/"model not found" → model dropped for the session;
   429 → model cools down 60 s; timeout → model cools down 5 min (and the router moves on);
-  503 → next model now; timeout, auth, billing, bad request →
-  raise (the router moves to the next provider). An error naming several models lists each.
+  503 or another 400 (Groq's `tool_use_failed` when a model garbles a tool call) → next
+  model now; timeout, auth, billing (FAILED_PRECONDITION/PERMISSION_DENIED) →
+  raise (the router moves to the next provider). Each model's failure is logged with
+  the provider's error text (≤200 chars). An error naming several models lists each.
   Replies cut off at the limit (`finish_reason: length`) end with "…".
 - Diagnostics: "test the AI providers" / "run diagnostics" (or the TEST AI PROVIDERS button)
   probes each provider and pings its models in turn ("Reply with just the word OK.", 30 s
@@ -220,6 +222,12 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   signature for Gemini (placeholder `skip_thought_signature_validator` for calls made by
   another provider) and have it stripped for Groq/Ollama. Google's error status
   (FAILED_PRECONDITION etc.) is shown with a plain hint.
+- Failure loops: if look_at_screen fails (no provider could see), it is removed from the
+  turn's tools and the reply is red; three tool rounds in a row with every call failing
+  stop the turn with "I stopped after 3 attempts in a row failed. The last one: …"
+  (red). A usable provider with no vision model is listed in the failure ("Ollama: no
+  model that can see images is installed"). Ollama trusts the configured vision model
+  (qwen3.5:4b) when it's installed even if `/api/show` lists no capabilities.
 - Any unexpected exception in a turn becomes an ERROR entry (so the UI goes red), never a
   silent return to idle. Chat that fails after all retries (1 + `max_retries`) on every
   provider is an ERROR too.
@@ -246,7 +254,13 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   the message via the clipboard (restored after), Enter. Nothing is pressed unless the
   foreground title contains "WhatsApp" (checked before searching and before pasting);
   a UIA read after the chat opens checks the contact's name (search box ignored) but
-  never blocks; a mismatch is said in the reply. High risk requires typing CONFIRM. Shutdown/restart run with a
+  never blocks; a mismatch is said in the reply. WhatsApp sends never need a model:
+  `commands.whatsapp_command` parses "send hi to Mom on WhatsApp", "message Mom on
+  WhatsApp saying hi", "tell Arjun … on WhatsApp", "open WhatsApp and send …" and runs
+  the tool directly (one confirm, mode "whatsapp"); with no contact it asks "Who should I
+  send … to?" and takes the next short answer (`contact_reply`; "cancel" drops it).
+  Send-style WhatsApp requests that still reach a model get no look_at_screen and no
+  read_ui/click/type/scroll tools. High risk requires typing CONFIRM. Shutdown/restart run with a
   60 s delay and can be cancelled.
 - Screen, web, and file text is treated as information, never instructions (in every prompt).
 - UI follows the owner's reference video: charcoal grid HUD, particle globe + clock when

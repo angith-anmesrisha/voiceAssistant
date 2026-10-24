@@ -246,3 +246,34 @@ def test_screen_intent(text: str, screen: bool) -> None:
     from jarvis.agent.prompts import wants_screen
 
     assert wants_screen(text) is screen
+
+
+async def test_failed_look_is_not_offered_again(tmp_path: Path) -> None:
+    router = ScriptedRouter(
+        tool_reply("look_at_screen"),
+        AllProvidersFailedError(Capability.VISION, [Attempt("Gemini", "overloaded")]),
+        text_reply("I couldn't see the screen."),
+    )
+    rig = Rig(tmp_path, router)
+    await rig.assistant.handle("what's the weather doing")
+    names = [t["function"]["name"] for t in router.requests[-1]["tools"]]
+    assert "look_at_screen" not in names
+    assert rig.entries[-1].failed
+
+
+async def test_a_loop_of_failures_stops_with_the_reason(tmp_path: Path) -> None:
+    router = ScriptedRouter(*(tool_reply("no_such_tool") for _ in range(10)))
+    rig = Rig(tmp_path, router)
+    reply = await rig.assistant.handle("do the thing")
+    assert len(router.requests) == 3
+    assert "3 attempts in a row failed" in reply.text and "no_such_tool" in reply.text
+    assert rig.entries[-1].failed
+
+
+async def test_whatsapp_sends_through_the_model_get_no_screen_tools(tmp_path: Path) -> None:
+    router = ScriptedRouter(text_reply("Who is Rahul?"))
+    rig = Rig(tmp_path, router)
+    await rig.assistant.handle("whatsapp rahul and the others about tonight")
+    names = [t["function"]["name"] for t in router.requests[0]["tools"]]
+    assert "send_whatsapp" in names
+    assert not {"look_at_screen", "read_ui"} & set(names)

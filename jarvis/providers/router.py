@@ -37,6 +37,7 @@ _ERROR_STATE = {
 
 
 _PING = "Reply with just the word OK."
+NO_VISION = "no model that can see images is installed"
 _PING_TIMEOUT_S = 30.0  # longer than a normal request: this is to find out, not to chat
 
 
@@ -183,9 +184,12 @@ class ProviderRouter:
         attempts: list[Attempt] = []
         failed: list[Attempt] = []  # tried and failed (not just skipped as unusable)
         for provider in self.ordered:
-            if capability not in provider.capabilities():
-                continue
             status = self.statuses[provider.name]
+            if capability not in provider.capabilities():
+                if capability is Capability.VISION and status.usable:
+                    # Say so, so the failure explains itself ("Ollama: no vision model").
+                    attempts.append(Attempt(provider.display_name, NO_VISION))
+                continue
             if not status.usable:
                 attempts.append(Attempt(provider.display_name, status.detail or status.state))
                 continue
