@@ -40,6 +40,7 @@ if TYPE_CHECKING:
     from jarvis.providers.router import ProviderRouter
     from jarvis.storage.db import HistoryStore
     from jarvis.storage.keep import Keep
+    from jarvis.storage.memory import Memory
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -124,6 +125,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     from jarvis.ui.camera import capture_webcam
 
     keep = Keep(keep_file())
+    memory = _long_memory(settings, client)
     desktop = WindowsDesktop()
     desktop.start_tracking()
     from jarvis.tools.apps import AppIndex
@@ -147,6 +149,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         camera=capture_webcam,
         describe_image=lambda photo, question: _describe_photo(router, photo, question),
         code_folder=code_dir() if settings.tools.code_runner else None,
+        memory=memory,
     )
 
     hotkey_label = "+".join(
@@ -181,6 +184,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         guard=guard,
         memory=lambda: _memory(keep, memory_prompt),
         on_pair=lambda: _pair_phone(dashboard),
+        long_memory=memory,
     )
     speaker = Speaker(
         settings.voice.tts_voice,
@@ -322,12 +326,18 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         wake.start()
         spawn(check_wake())
 
-    background = Background(bus, keep, jobs=_routines(settings, keep, store, router, client))
+    background = Background(
+        bus, keep, jobs=_routines(settings, keep, store, router, client, memory)
+    )
     background.start()
     spawn(_start_dashboard(dashboard, bus))
     if settings.tools.plugins:
         spawn(_load_plugins(bus, registry, keep, controller))
     spawn(asyncio.to_thread(installed.refresh))  # so "open Valorant" is instant later
+    if memory is not None:
+        from jarvis.tools.personal import mirror_facts
+
+        spawn(mirror_facts(keep, memory))  # Facts.md matches what's remembered
 
     def voice_status(title: str, message: str) -> None:
         notice = UserNotice(title, message)
@@ -487,6 +497,7 @@ def _routines(
     store: HistoryStore,
     router: ProviderRouter,
     client: httpx.AsyncClient,
+    memory: Memory | None = None,
 ) -> list[Job]:
     """The things JARVIS brings up by itself, as configured in ``routines``."""
     from jarvis.agent.prompts import SUMMARY_PROMPT
@@ -534,8 +545,44 @@ def _routines(
     if plan.check_in_hours > 0:
         jobs.append(CheckIns(plan.check_in_hours, quiet_hours=quiet_hours))
     if plan.summaries:
-        jobs.append(SessionSummaries(store, keep, summarize))
+        jobs.append(
+            SessionSummaries(
+                store, keep, summarize, memory=memory, learn_facts=settings.memory.learn_facts
+            )
+        )
     return jobs
+
+
+def _long_memory(settings: Settings, client: httpx.AsyncClient) -> Memory | None:
+    """The memory vault (Markdown notes), with Hindsight if a server is configured."""
+    from jarvis.app.paths import memory_dir
+    from jarvis.storage.hindsight import Hindsight
+    from jarvis.storage.memory import Memory
+    from jarvis.storage.vault import Vault
+
+    plan = settings.memory
+    if not plan.vault:
+        return None
+    vault = Vault(memory_dir(plan.vault_path))
+    try:
+        vault.ensure()
+    except OSError as exc:
+        logger.warning(
+            "Memory folder unavailable ({}); long-term memory is off", type(exc).__name__
+        )
+        return None
+    hindsight = (
+        Hindsight(client, plan.hindsight_url, plan.hindsight_bank)
+        if plan.hindsight_url.strip()
+        else None
+    )
+    return Memory(
+        vault,
+        hindsight=hindsight,
+        log_conversations=plan.log_conversations,
+        auto_recall=plan.auto_recall,
+        budget=plan.recall_chars,
+    )
 
 
 async def _memory(keep: Any, render: Any) -> str:

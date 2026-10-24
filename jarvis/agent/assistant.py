@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import re
 from collections import deque
@@ -36,6 +37,7 @@ from jarvis.providers.base import Capability, ChatResult, Message, ToolCall
 from jarvis.providers.openai_compat import image_part
 from jarvis.providers.router import NO_VISION, AllProvidersFailedError, Diagnosis, ProviderRouter
 from jarvis.storage.db import HistoryStore
+from jarvis.storage.memory import Memory
 from jarvis.tools.plugins import is_plugin_tool
 from jarvis.tools.registry import ArgumentError, Risk, ToolRegistry, ToolResult, validate_args
 from jarvis.voice.spoken_text import without_thinking
@@ -119,6 +121,7 @@ class Assistant:
         guard: PromptGuard | None = None,
         memory: Callable[[], Awaitable[str]] | None = None,
         on_pair: Callable[[], Awaitable[tuple[str, str]]] | None = None,
+        long_memory: Memory | None = None,
     ) -> None:
         self._router = router
         self._store = store
@@ -134,6 +137,8 @@ class Assistant:
         self._guard = guard
         self._memory = memory
         self._on_pair = on_pair  # -> (shown, spoken)
+        self._long_memory = long_memory
+        self._writes: set[asyncio.Task[None]] = set()
         self._whatsapp_draft: str | None = None  # a message waiting for "who to?"
         self._turn_context = ""
         self._blocked = False
@@ -145,8 +150,9 @@ class Assistant:
         self._last_groups: set[str] = set()
         self._carry: set[str] = set()
 
-    async def checked_context(self) -> str:
-        """context(), with window titles dropped if the guard thinks they carry an attack."""
+    async def checked_context(self, query: str = "") -> str:
+        """context(), with window titles dropped if the guard thinks they carry an attack,
+        plus the memory notes that match ``query`` (also screened)."""
         situation = ""
         if self._situation is not None:
             try:
@@ -161,9 +167,31 @@ class Assistant:
                 lines.append(await self._memory())
             except Exception as exc:
                 logger.debug("Memory unavailable: {}", type(exc).__name__)
+        if self._long_memory is not None and query:
+            lines.append(await self._recall(query))
         if self._recent:
             lines.append("Recent actions, oldest first: " + " | ".join(self._recent))
         return "\n".join(line for line in lines if line)
+
+    async def _recall(self, query: str) -> str:
+        if self._long_memory is None:
+            return ""
+        try:
+            block = await self._long_memory.recall(query)
+        except Exception as exc:
+            logger.debug("Memory recall unavailable: {}", type(exc).__name__)
+            return ""
+        if block and self._guard is not None and await self._guard.suspicious(block):
+            return ""  # a note that tries to steer JARVIS isn't passed on
+        return block
+
+    def _keep(self, asked: str, answered: str) -> None:
+        """Write the exchange to long-term memory without holding up the reply."""
+        if self._long_memory is None:
+            return
+        task = asyncio.create_task(self._long_memory.log(asked, answered))
+        self._writes.add(task)
+        task.add_done_callback(self._writes.discard)
 
     async def _screen(self, call: ToolCall, outcome: ToolResult) -> ToolResult:
         """Withhold outside text (clipboard, files, screen) that tries to steer JARVIS."""
@@ -283,7 +311,7 @@ class Assistant:
         self._carry, self._last_groups = self._last_groups, set()
         self._failed = False
         self._blocked = False
-        self._turn_context = await self.checked_context()
+        self._turn_context = await self.checked_context(shown)
         try:
             tasks = await self._plan(shown) if needs_plan(text) else []
             if len(tasks) > 1:
@@ -328,6 +356,7 @@ class Assistant:
             mode=label,
             failed=self._failed or self._blocked or says_it_cannot(reply),
         )
+        self._keep(shown, reply)
         return Reply(reply, ok=True, provider=result.provider, model=result.model)
 
     def _whatsapp_request(self, text: str) -> WhatsAppRequest | None:
@@ -372,6 +401,8 @@ class Assistant:
             conversation, {"role": "assistant", "content": reply}, mode="whatsapp"
         )
         await self._emit(EntryKind.ASSISTANT, reply, mode="whatsapp", failed=failed)
+        if request.contact and request.message:
+            self._keep(f"Send “{request.message}” to {request.contact} on WhatsApp", reply)
         return Reply(reply, ok=True)
 
     async def _look(self, question: str, spoken: bool) -> ChatResult:
@@ -457,6 +488,7 @@ class Assistant:
             mode=label,
             failed=any_failed,
         )
+        self._keep(shown, reply)
         return Reply(said if spoken else reply, ok=True, provider=provider, model=model)
 
     async def _converse(self, text: str, spoken: bool, *, history: bool = True) -> ChatResult:

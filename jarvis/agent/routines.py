@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import asyncio
 import ctypes
+import json
+import re
 import sys
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -20,6 +22,7 @@ from loguru import logger
 
 from jarvis.storage.db import HistoryStore
 from jarvis.storage.keep import Keep
+from jarvis.storage.memory import Memory
 from jarvis.tools.web import Forecast, Headline, WebError
 
 
@@ -295,10 +298,15 @@ class CheckIns:
 
 @dataclass
 class SessionSummaries:
+    """After a session, a short summary (for the briefing and the day's memory note) and
+    the lasting facts the user mentioned (remembered like ``remember`` would)."""
+
     history: HistoryStore
     keep: Keep
     summarize: Callable[[str], Awaitable[str]]
     gap: timedelta = timedelta(minutes=15)  # this quiet = the session is over
+    memory: Memory | None = None
+    learn_facts: bool = False
     _next: datetime | None = None
 
     async def tick(self, now: datetime) -> list[Said]:
@@ -329,8 +337,52 @@ class SessionSummaries:
             logger.info("Session summary postponed: {}", type(exc).__name__)
             self._next = now + timedelta(minutes=30)
             return []
+        summary, facts = parse_summary(summary)
         if summary:
-            day = datetime.fromisoformat(said[0].created_at).astimezone().date().isoformat()
-            await self.keep.add_summary(messages[-1].id, day, summary[:400])
+            day = datetime.fromisoformat(said[0].created_at).astimezone().date()
+            await self.keep.add_summary(messages[-1].id, day.isoformat(), summary[:400])
+            if self.memory is not None:
+                await self.memory.summary(day, summary[:400])
+        if self.learn_facts and facts:
+            await self._learn(facts)
         await self.keep.set_state("summarised_upto", upto)
         return []
+
+    async def _learn(self, facts: list[tuple[str, str, str]]) -> None:
+        learned = 0
+        for topic, fact, category in facts[:8]:
+            try:
+                await self.keep.remember(topic, fact, category)
+                learned += 1
+            except ValueError:
+                continue
+        if learned and self.memory is not None:
+            await self.memory.facts_changed(
+                (f.key, f.value, f.category) for f in await self.keep.facts()
+            )
+        logger.info("Learned {} facts from the session", learned)
+
+
+def parse_summary(reply: str) -> tuple[str, list[tuple[str, str, str]]]:
+    """(summary, [(topic, fact, category)]) from the summariser's JSON; plain text is
+    taken as the summary alone."""
+    match = re.search(r"\{.*\}", reply, re.DOTALL)
+    if not match:
+        return reply.strip(), []
+    try:
+        data = json.loads(match.group(0))
+    except ValueError:
+        return reply.strip(), []
+    if not isinstance(data, dict):
+        return reply.strip(), []
+    summary = " ".join(str(data.get("summary") or "").split())
+    facts: list[tuple[str, str, str]] = []
+    raw = data.get("facts")
+    for item in raw if isinstance(raw, list) else []:
+        if not isinstance(item, dict):
+            continue
+        topic = str(item.get("topic") or "").strip()[:60]
+        fact = " ".join(str(item.get("fact") or "").split())[:500]
+        if topic and fact:
+            facts.append((topic, fact, str(item.get("category") or "other")))
+    return summary, facts

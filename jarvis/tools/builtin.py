@@ -13,6 +13,7 @@ import httpx
 
 from jarvis.app.config import ToolSettings
 from jarvis.storage.keep import Keep
+from jarvis.storage.memory import Memory
 from jarvis.tools.apps import AppIndex
 from jarvis.tools.code_runner import register_code_tool
 from jarvis.tools.desktop import Desktop, DesktopUnsupportedError
@@ -83,6 +84,7 @@ def build_registry(
     camera: CameraFn | None = None,
     describe_image: DescribeFn | None = None,
     code_folder: Path | None = None,
+    memory: Memory | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     journal = undo if undo is not None else UndoJournal()
@@ -521,7 +523,12 @@ def build_registry(
     if code_folder is not None:
         register_code_tool(registry, code_folder)
     register_personal_tools(
-        registry, keep, http, home_place=settings.home_place, news_locale=settings.news_locale
+        registry,
+        keep,
+        http,
+        home_place=settings.home_place,
+        news_locale=settings.news_locale,
+        memory=memory,
     )
 
     # --- power ---

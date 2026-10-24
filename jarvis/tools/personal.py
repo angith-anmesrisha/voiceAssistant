@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 
 from jarvis.storage.keep import CATEGORIES, Keep
+from jarvis.storage.memory import Memory
 from jarvis.tools.registry import Risk, ToolRegistry, ToolResult, ToolSpec
 from jarvis.tools.web import WebError, news, search, weather
 
@@ -67,10 +68,13 @@ def register_personal_tools(
     *,
     home_place: str = "",
     news_locale: str = "en-US",
+    memory: Memory | None = None,
 ) -> None:
     if keep is not None:
-        _memory_tools(registry, keep)
+        _memory_tools(registry, keep, memory)
         _reminder_tools(registry, keep)
+    if memory is not None:
+        _note_tool(registry, memory)
     if http is not None:
         _web_tools(registry, http, keep, home_place, news_locale)
 
@@ -84,25 +88,42 @@ async def home_city(keep: Keep | None, default: str = "") -> str:
     return default
 
 
-def _memory_tools(registry: ToolRegistry, keep: Keep) -> None:
+async def mirror_facts(keep: Keep, memory: Memory | None) -> None:
+    """Rewrite JARVIS/Facts.md in the memory folder from the remembered facts."""
+    if memory is not None:
+        await memory.facts_changed((f.key, f.value, f.category) for f in await keep.facts())
+
+
+def _memory_tools(registry: ToolRegistry, keep: Keep, memory: Memory | None) -> None:
     async def remember(topic: str, fact: str, category: str = "other") -> ToolResult:
         try:
             saved = await keep.remember(topic, fact, category)
         except ValueError as exc:
             return ToolResult(False, f"Couldn't remember that: {exc}.")
+        await mirror_facts(keep, memory)
         return ToolResult(True, f"Remembered ({saved.key.replace('_', ' ')}).")
 
     async def recall_memory(query: str = "") -> ToolResult:
         facts = await keep.recall(query)
-        if not facts:
-            return ToolResult(True, "Nothing in memory matches that.")
         lines = [f"{f.key.replace('_', ' ')}: {f.value}" for f in facts]
-        return ToolResult(True, f"{len(lines)} remembered facts.", {"facts": lines})
+        data: dict[str, Any] = {"facts": lines}
+        notes: list[str] = []
+        if memory is not None and query.strip():
+            hits = await memory.search(query)
+            notes = [f"[{h.note}] {' '.join(h.text.split())[:500]}" for h in hits]
+            data["notes"] = notes
+        if not lines and not notes:
+            return ToolResult(True, "Nothing in memory matches that.")
+        summary = f"{len(lines)} remembered facts"
+        if notes:
+            summary += f", {len(notes)} passages from past conversations and notes"
+        return ToolResult(True, summary + ".", data)
 
     async def forget(topic: str) -> ToolResult:
         gone = await keep.forget(topic)
         if not gone:
             return ToolResult(False, "I had nothing remembered about that.")
+        await mirror_facts(keep, memory)
         return ToolResult(True, f"Forgot {gone[0].replace('_', ' ')}.")
 
     registry.register(
@@ -127,7 +148,10 @@ def _memory_tools(registry: ToolRegistry, keep: Keep) -> None:
     registry.register(
         ToolSpec(
             "recall_memory",
-            "Look up remembered facts about the user by words (empty = the most recent).",
+            "Look up what the user told you before: remembered facts, plus past "
+            "conversations and notes in their memory folder (words, or times like "
+            "'yesterday', 'last week'). Empty = the most recent facts. Name the note you "
+            "found something in.",
             _schema({"query": {"type": "string", "maxLength": 200}}),
             recall_memory,
             Risk.LOW,
@@ -142,6 +166,37 @@ def _memory_tools(registry: ToolRegistry, keep: Keep) -> None:
             forget,
             Risk.LOW,
             lambda a: f"Forget {a.get('topic', 'that')}",
+            group="memory",
+        )
+    )
+
+
+def _note_tool(registry: ToolRegistry, memory: Memory) -> None:
+    async def save_note(title: str, text: str) -> ToolResult:
+        if not text.strip():
+            return ToolResult(False, "There's nothing to write in the note.")
+        try:
+            where = await memory.note(title, text)
+        except OSError as exc:
+            return ToolResult(False, f"Couldn't write the note ({type(exc).__name__}).")
+        return ToolResult(True, f"Noted in {where}.", {"note": where})
+
+    registry.register(
+        ToolSpec(
+            "save_note",
+            "Write a note into the user's memory folder (Markdown, Obsidian-friendly) when "
+            "they ask you to note, jot down or keep something longer than a fact: plans, "
+            "lists, ideas, meeting notes. The same title adds to that note.",
+            _schema(
+                {
+                    "title": {"type": "string", "maxLength": 80},
+                    "text": {"type": "string", "maxLength": 8000},
+                },
+                ["title", "text"],
+            ),
+            save_note,
+            Risk.LOW,
+            lambda a: f"Write the note “{a.get('title', '')}”",
             group="memory",
         )
     )

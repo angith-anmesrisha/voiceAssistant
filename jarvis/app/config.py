@@ -284,6 +284,25 @@ class RoutineSettings(BaseModel):
     quiet_until: int = Field(default=8, ge=0, le=23)
 
 
+class MemorySettings(BaseModel):
+    """Long-term memory as Markdown notes (a folder you can open in Obsidian)."""
+
+    vault: bool = True
+    # Empty = "Documents/JARVIS Memory". Point it at an existing Obsidian vault to share it.
+    vault_path: str = ""
+    # Write every exchange into the day's note (Daily/2026-10-24.md).
+    log_conversations: bool = True
+    # Search the notes before each answer and give the AI the passages that match.
+    auto_recall: bool = True
+    recall_chars: int = Field(default=700, ge=200, le=3000)
+    # After a conversation, keep lasting facts it mentioned (with its summary).
+    learn_facts: bool = True
+    # Optional Hindsight server (github.com/vectorize-io/hindsight), e.g.
+    # "http://localhost:8888". Exchanges are sent there too, and its recall is merged in.
+    hindsight_url: str = ""
+    hindsight_bank: str = "jarvis"
+
+
 class Settings(BaseModel):
     log_level: str = "INFO"
     history_messages: int = 20
@@ -293,6 +312,7 @@ class Settings(BaseModel):
     tools: ToolSettings = Field(default_factory=ToolSettings)
     routines: RoutineSettings = Field(default_factory=RoutineSettings)
     dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
+    memory: MemorySettings = Field(default_factory=MemorySettings)
 
 
 def load_settings(path: Path | None = None) -> Settings:

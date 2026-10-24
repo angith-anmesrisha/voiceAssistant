@@ -60,3 +60,27 @@ def code_dir() -> Path:
 def plugins_dir() -> Path:
     """Your own tools as .py files; each new or changed one asks before loading."""
     return data_dir() / "plugins"
+
+
+def memory_dir(configured: str = "") -> Path:
+    """The memory vault: ``memory.vault_path``, else Documents/JARVIS Memory.
+
+    With ``JARVIS_DATA_DIR`` set (tests, portable use) it sits in the data folder instead.
+    """
+    if configured.strip():
+        return Path(os.path.expandvars(configured.strip())).expanduser()
+    if os.environ.get("JARVIS_DATA_DIR"):
+        return data_dir() / "memory"
+    return documents_dir() / "JARVIS Memory"
+
+
+def documents_dir() -> Path:
+    """The user's Documents folder (moved or OneDrive-redirected ones included)."""
+    if sys.platform == "win32":
+        try:
+            from jarvis.tools.files import known_folder
+
+            return known_folder("documents", Path.home())
+        except Exception:
+            pass
+    return Path.home() / "Documents"

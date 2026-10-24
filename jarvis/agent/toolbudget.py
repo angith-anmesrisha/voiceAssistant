@@ -24,7 +24,9 @@ _GROUPS: dict[str, re.Pattern[str]] = {
         r"enter|escape|type|dictate|write (this|that|it) (in|into))\b",
         re.IGNORECASE,
     ),
-    "memory": re.compile(r"\b(forget|memory|memories|remember)\b", re.IGNORECASE),
+    "memory": re.compile(
+        r"\b(forget|memory|memories|remember|notes?|jot|write down)\b", re.IGNORECASE
+    ),
     "clipboard": re.compile(r"\b(clipboard|copied|copy|paste|pasted)\b", re.IGNORECASE),
     "power": re.compile(
         r"\b(lock|sleep|shut ?down|turn off the (pc|computer|laptop)|restart|reboot|"
