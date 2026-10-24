@@ -63,3 +63,17 @@ def is_echo(heard: str, said: str, threshold: float = 0.8) -> bool:
     matcher = SequenceMatcher(a=words, b=spoken, autojunk=False)
     matched = sum(block.size for block in matcher.get_matching_blocks())
     return matched / len(words) >= threshold
+
+
+_STOP = re.compile(
+    r"^\W*(?:(?:ok(?:ay)?|hey|oh)\W+)?(?:jarvis\W+)?(?:please\W+)?"
+    r"(?:stop|cancel|never\s*mind|forget\s+(?:it|that)|shut\s+up|be\s+quiet|quiet|"
+    r"enough|that'?s\s+enough|hold\s+on|wait|pause|abort|halt|silence)"
+    r"(?:\W+(?:it|that|this|now|please|talking|speaking|jarvis|everything|there))*\W*$",
+    re.IGNORECASE,
+)
+
+
+def is_stop_command(text: str) -> bool:
+    """ "Stop", "cancel that", "Jarvis, be quiet": the user wants JARVIS to stop."""
+    return bool(_STOP.match(text))

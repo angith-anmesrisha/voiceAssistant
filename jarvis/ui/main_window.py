@@ -20,6 +20,7 @@ from PySide6.QtGui import (
     QGuiApplication,
     QImage,
     QImageWriter,
+    QKeyEvent,
     QMouseEvent,
     QPainter,
 )
@@ -147,6 +148,8 @@ class _DetailsOverlay(QWidget):
 class MainWindow(HudBackdrop):
     def __init__(self, hotkey_label: str = "Alt+`") -> None:
         super().__init__()
+        # Esc that no overlay used: stop JARVIS (set by main).
+        self.on_escape: Callable[[], None] | None = None
         self.setWindowTitle("JARVIS")
         self.setMinimumSize(1100, 700)
         self.resize(1360, 840)
@@ -743,6 +746,13 @@ class MainWindow(HudBackdrop):
         self.confirm_overlay.setGeometry(self.rect())
         self.keys_overlay.setGeometry(self.rect())
         self.details.setGeometry(self.rect())
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
+        if event.key() == Qt.Key.Key_Escape and self.on_escape is not None:
+            self.on_escape()
+            event.accept()
+            return
+        super().keyPressEvent(event)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # noqa: N802
         if self.quitting:

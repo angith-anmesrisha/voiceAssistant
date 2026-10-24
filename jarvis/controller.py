@@ -1,8 +1,9 @@
 """Glue between the UI, voice input, the assistant and spoken replies.
 
 Handles one request at a time. Typed requests are answered in text; spoken requests
-are transcribed, answered, and (optionally) read aloud. Starting to talk while JARVIS
-is speaking cuts the speech off (barge-in).
+are transcribed, answered, and (optionally) read aloud. JARVIS can be interrupted at
+any time: push-to-talk, the wake word or typing while it speaks or works stops it
+(barge-in), and the next words are the new request ("stop" just ends it).
 """
 
 from __future__ import annotations
@@ -31,7 +32,7 @@ from jarvis.app.state import AppState, InvalidTransitionError, StateMachine
 from jarvis.providers.router import AllProvidersFailedError, ProviderRouter
 from jarvis.tools.registry import Risk
 from jarvis.voice.audio_io import AudioDeviceError, Recorder
-from jarvis.voice.confirm import is_echo, parse_yes_no, spoken_question
+from jarvis.voice.confirm import is_echo, is_stop_command, parse_yes_no, spoken_question
 from jarvis.voice.local_stt import DISPLAY_NAME as LOCAL_STT_NAME
 from jarvis.voice.tts import Speaker
 
@@ -78,6 +79,7 @@ class AppController:
         # A wake-word conversation: after each reply JARVIS listens again for a while,
         # so follow-ups need no wake word. Silence, typing or a mic problem ends it.
         self._conversation = False
+        self._confirming = 0  # confirmations being asked right now
         # Confirmation buttons in the window (set by main); voice asks alongside them.
         self._ui_ask: Callable[[ConfirmRequest, bool], Awaitable[bool]] | None = None
         self._ui_dismiss: Callable[[bool], None] | None = None
@@ -105,14 +107,58 @@ class AppController:
     # --- typed input ---
 
     def submit(self, text: str) -> bool:
-        """Start answering ``text``. Returns False if JARVIS is busy."""
+        """Start answering ``text`` (interrupting whatever JARVIS is doing). Returns False
+        if JARVIS is busy and interrupting is turned off."""
         if self._recorder.recording:
             self._discard_recording()  # typing wins over a recording in progress
         self._end_conversation()
-        if self.busy:
+        if self.busy and (not self._voice.interrupt or self._confirming):
             return False
-        self._active = self._spawn(self._answer(text, spoken=False))
+        previous = self._active if self.busy else None
+        self._active = self._spawn(self._typed_turn(text, previous))
         return True
+
+    async def _typed_turn(self, text: str, previous: asyncio.Task[None] | None) -> None:
+        if previous is not None:
+            await self._cancel(previous)
+        if is_stop_command(text):
+            await self._stopped()
+            await self._settle()
+            return
+        await self._answer(text, spoken=False)
+
+    # --- interrupting ---
+
+    async def interrupt(self) -> bool:
+        """Stop talking and drop the request in hand (Esc, Stop in the tray, "stop").
+        Returns whether there was anything to stop."""
+        if self._recorder.recording:
+            self._discard_recording()
+            return True
+        stopped = self._speaker.speaking
+        self._speaker.stop()
+        task = self._active
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            await self._cancel(task)
+            stopped = True
+        if stopped:
+            await self._end_conversation_async()
+            await self._stopped()
+            await self._settle()
+        return stopped
+
+    async def _cancel(self, task: asyncio.Task[None]) -> None:
+        """Cancel a running request and wait (briefly) for it to wind down."""
+        self._speaker.stop()
+        if task.done():
+            return
+        logger.info("Interrupted the request in progress")
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await asyncio.wait_for(asyncio.shield(task), timeout=3)
+
+    async def _stopped(self) -> None:
+        await self._bus.publish(ChatEntry(EntryKind.ASSISTANT, "Stopped.", mode="stopped"))
 
     # --- voice input ---
 
@@ -138,10 +184,17 @@ class AppController:
         """Start recording. Hands-free recordings stop by themselves when you go quiet."""
         if self._recorder.recording:
             return
+        if self._confirming:
+            # A question is being asked: just stop talking so the answer can be heard.
+            if self._speaker.speaking:
+                self._speaker.stop()
+            return
         if self._speaker.speaking or self._state.state is AppState.SPEAKING:
             self._speaker.stop()  # barge-in
-        elif self.busy:
-            return
+        if self.busy:
+            if not self._voice.interrupt:
+                return
+            await self._cancel(self._active)  # type: ignore[arg-type]
         on_done = (lambda: self._spawn(self._finish_hands_free())) if hands_free else None
         try:
             self._recorder.start(on_done, no_speech_s=no_speech_s)
@@ -186,9 +239,7 @@ class AppController:
 
     async def _voice_turn(self, wav: bytes, previous: asyncio.Task[None] | None) -> None:
         if previous is not None and not previous.done():
-            # Barge-in: let the interrupted reply wind down first.
-            with contextlib.suppress(Exception, asyncio.CancelledError):
-                await asyncio.wait_for(asyncio.shield(previous), timeout=10)
+            await self._cancel(previous)  # barge-in: the new words win
         try:
             await self._move_to(AppState.THINKING)
             heard = await self._transcribe(wav)
@@ -199,6 +250,10 @@ class AppController:
                 return
             if self._conversation and is_echo(heard, self._last_said):
                 logger.info("Ignored the microphone hearing JARVIS's own reply")
+                return
+            if is_stop_command(heard):
+                await self._end_conversation_async()
+                await self._stopped()
                 return
             await self._answer_locked(heard, spoken=True)
         finally:
@@ -307,7 +362,15 @@ class AppController:
         self._ui_forward = bring_forward
 
     async def confirm(self, request: ConfirmRequest) -> bool:
-        """Ask before a risky step. Medium risk is asked out loud too; the first answer wins."""
+        """Ask before a risky step. Medium risk is asked out loud too; the first answer wins.
+        Interrupting JARVIS while it asks counts as no."""
+        self._confirming += 1
+        try:
+            return await self._confirm(request)
+        finally:
+            self._confirming -= 1
+
+    async def _confirm(self, request: ConfirmRequest) -> bool:
         aloud = (
             request.risk < Risk.HIGH
             and self._voice.voice_confirm
@@ -319,9 +382,24 @@ class AppController:
             # Asked out loud, the buttons stay in the background: switching windows
             # mid-task would break what JARVIS is doing in the other app.
             ui = asyncio.ensure_future(self._ui_ask(request, not aloud))
-        if not aloud:
-            return await ui if ui is not None else False
-        voice = asyncio.ensure_future(self._ask_aloud(request.description))
+        voice: asyncio.Future[bool | None] | None = None
+        try:
+            if not aloud:
+                return await ui if ui is not None else False
+            voice = asyncio.ensure_future(self._ask_aloud(request.description))
+            return await self._first_answer(voice, ui)
+        except asyncio.CancelledError:
+            # Interrupted while asking: take the buttons down and treat it as a no.
+            for pending in (voice, ui):
+                if pending is not None and not pending.done():
+                    pending.cancel()
+            if self._ui_dismiss is not None:
+                self._ui_dismiss(False)
+            raise
+
+    async def _first_answer(
+        self, voice: asyncio.Future[bool | None], ui: asyncio.Future[bool] | None
+    ) -> bool:
         waiting: set[asyncio.Future[Any]] = {voice} if ui is None else {voice, ui}
         done, _pending = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
         if ui is not None and ui in done:

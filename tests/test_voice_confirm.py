@@ -181,3 +181,22 @@ async def test_slow_spoken_requests_get_a_short_acknowledgement(
     await asyncio.sleep(0.05)
     assert rig.speaker.spoken == ["answer to what time is it"]  # quick: no "On it."
     await controller.shutdown()
+
+
+@pytest.mark.parametrize(
+    ("text", "stop"),
+    [
+        ("Stop.", True),
+        ("Jarvis, stop", True),
+        ("cancel that", True),
+        ("never mind", True),
+        ("okay, be quiet now", True),
+        ("stop the music", False),
+        ("cancel my 3 pm meeting", False),
+        ("wait for the download then open it", False),
+    ],
+)
+def test_stop_commands(text: str, stop: bool) -> None:
+    from jarvis.voice.confirm import is_stop_command
+
+    assert is_stop_command(text) is stop

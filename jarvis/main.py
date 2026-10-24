@@ -259,12 +259,19 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         await dashboard.unpair_all()
         await bus.publish(UserNotice("Phone", "Every paired phone was forgotten."))
 
+    async def stop_jarvis() -> None:
+        await controller.interrupt()
+
+    # Esc in JARVIS's window stops it (only there: Esc belongs to every other app).
+    window.on_escape = lambda: spawn(stop_jarvis())
+
     tray = Tray(
         bus,
         show_window=window.show_and_raise,
         window_visible=window.isVisible,
         on_pair=lambda: spawn(pair_from_tray()),
         on_unpair=lambda: spawn(unpair_from_tray()),
+        on_stop=lambda: spawn(stop_jarvis()),
     )
     tray.show()
     if not args.hidden:
@@ -282,7 +289,8 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
             )
         )
 
-    # Offline wake word: paused whenever JARVIS is busy, so it never hears itself.
+    # Offline wake word: paused while JARVIS records (and, unless wake_while_busy, while
+    # it speaks or works), so it never hears itself; "Jarvis, stop" interrupts otherwise.
     wake = WakeWordListener(
         settings.voice.wake_phrases,
         on_wake=lambda: loop.call_soon_threadsafe(lambda: spawn(bus.publish(WakeWordHeard()))),
@@ -290,7 +298,10 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     )
 
     async def pause_wake(event: StateChanged) -> None:
-        wake.pause(event.current is not AppState.IDLE)
+        busy = event.current is not AppState.IDLE
+        wake.pause(
+            event.current is AppState.LISTENING or (busy and not settings.voice.wake_while_busy)
+        )
 
     async def check_wake() -> None:
         await asyncio.sleep(4)

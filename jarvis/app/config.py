@@ -169,6 +169,12 @@ class VoiceSettings(BaseModel):
     voice_confirm: bool = True
     # Say "On it." when a spoken request is still being worked on after a moment.
     acknowledge: bool = True
+    # Interrupt any time: push-to-talk, the wake word, typing a new request, Esc in the
+    # window or Stop in the tray cut JARVIS off mid-reply or mid-task. "Stop" ends it.
+    interrupt: bool = True
+    # Keep listening for the wake word while JARVIS is speaking or working, so
+    # "Jarvis, stop" works then too (never while it is recording you).
+    wake_while_busy: bool = True
 
 
 def _default_apps() -> dict[str, str]:

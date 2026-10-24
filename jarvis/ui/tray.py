@@ -1,4 +1,4 @@
-"""System tray icon: show/hide the window, start with Windows, quit."""
+"""System tray icon: show/hide the window, stop JARVIS, start with Windows, quit."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ class Tray:
         window_visible: Callable[[], bool],
         on_pair: Callable[[], None] | None = None,
         on_unpair: Callable[[], None] | None = None,
+        on_stop: Callable[[], None] | None = None,
     ):
         self._bus = bus
         self._window_visible = window_visible
@@ -43,6 +44,11 @@ class Tray:
         self._menu.addAction(self._status)
         self._menu.addSeparator()
         self._menu.addAction(show)
+        if on_stop is not None:
+            stop = QAction(f"Stop {APP_NAME}")
+            stop.triggered.connect(on_stop)
+            self._actions.append(stop)
+            self._menu.addAction(stop)
         self._menu.addAction(self._autostart)
         for label, callback in (("Pair a phone…", on_pair), ("Unpair phones", on_unpair)):
             if callback is not None:

@@ -128,7 +128,6 @@ async def settle() -> None:
 async def test_typed_request_is_answered_in_text_only() -> None:
     controller, rig = make_controller()
     assert controller.submit("open notepad")
-    assert not controller.submit("second")  # busy
     await settle()
     assert rig.assistant.calls == [("open notepad", False)]
     assert rig.speaker.spoken == []
@@ -289,3 +288,93 @@ async def test_keys_overlay_saves_only_filled_fields(qapp: QApplication) -> None
     assert not window.keys_overlay.isVisible()
     window.quitting = True
     window.close()
+
+
+class SlowAssistant(FakeAssistant):
+    """Works until cancelled (or released), like a long task."""
+
+    def __init__(self, state: StateMachine) -> None:
+        super().__init__(state)
+        self.release = asyncio.Event()
+        self.cancelled = 0
+
+    async def handle(self, text: str, *, spoken: bool = False) -> Reply:
+        self.calls.append((text, spoken))
+        await self.state.transition(AppState.THINKING)
+        try:
+            await self.release.wait()
+        except asyncio.CancelledError:
+            self.cancelled += 1
+            await self.state.transition(AppState.IDLE)
+            raise
+        await self.state.transition(AppState.IDLE)
+        return Reply(f"answer to {text}", ok=True)
+
+
+def slow_controller() -> tuple[AppController, Any]:
+    controller, rig = make_controller()
+    rig.assistant = SlowAssistant(rig.state)
+    controller._assistant = rig.assistant
+    return controller, rig
+
+
+async def test_interrupt_stops_the_request_in_hand() -> None:
+    controller, rig = slow_controller()
+    controller.submit("do a long task")
+    await settle()
+    assert controller.busy
+    assert await controller.interrupt()
+    assert not controller.busy and rig.assistant.cancelled == 1
+    assert rig.entries[-1].text == "Stopped."
+    assert rig.state.state is AppState.IDLE
+    assert not await controller.interrupt()  # nothing left to stop
+
+
+async def test_a_new_typed_request_replaces_the_running_one() -> None:
+    controller, rig = slow_controller()
+    controller.submit("first")
+    await settle()
+    assert controller.submit("second")
+    await settle()
+    assert rig.assistant.cancelled == 1
+    assert [c[0] for c in rig.assistant.calls] == ["first", "second"]
+    rig.assistant.release.set()
+    await settle()
+    assert not controller.busy
+
+
+async def test_typing_stop_only_stops() -> None:
+    controller, rig = slow_controller()
+    controller.submit("first")
+    await settle()
+    controller.submit("stop")
+    await settle()
+    assert [c[0] for c in rig.assistant.calls] == ["first"]
+    assert rig.entries[-1].text == "Stopped."
+
+
+async def test_push_to_talk_while_working_interrupts_and_listens() -> None:
+    controller, rig = slow_controller()
+    controller.submit("first")
+    await settle()
+    await rig.bus.publish(PushToTalkPressed())
+    assert rig.assistant.cancelled == 1
+    assert rig.state.state is AppState.LISTENING
+
+
+async def test_saying_stop_ends_it_without_asking_the_ai() -> None:
+    _controller, rig = make_controller(FakeRouter(text="Stop."))
+    await rig.bus.publish(PushToTalkPressed())
+    rig.mic.on_chunk(b"\x10\x00" * 16_000)
+    await rig.bus.publish(PushToTalkReleased())
+    await settle()
+    assert rig.assistant.calls == []
+    assert rig.entries[-1].text == "Stopped."
+
+
+async def test_interrupting_off_keeps_the_old_behaviour() -> None:
+    controller, _rig = slow_controller()
+    controller._voice = VoiceSettings(interrupt=False)
+    controller.submit("first")
+    await settle()
+    assert not controller.submit("second")
