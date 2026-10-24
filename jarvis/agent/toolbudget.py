@@ -62,6 +62,20 @@ _GROUPS: dict[str, re.Pattern[str]] = {
         r"\b(webcam|camera|how do i look|look at me|see me|what am i (holding|wearing))\b",
         re.IGNORECASE,
     ),
+    "finance": re.compile(
+        r"\b(stocks?|shares?|share price|markets?|nifty|sensex|nasdaq|dow|s ?& ?p|ftse|"
+        r"nikkei|index|indices|crypto|bitcoin|btc|ethereum|eth|solana|dogecoin|coin|gold|"
+        r"silver|platinum|prices?|rates?|exchange rate|currency|convert|dollars?|rupees?|"
+        r"euros?|pounds?|yen|dirhams?|usd|inr|eur|gbp|mutual funds?|nav|sip|portfolio|"
+        r"invest\w*|trading|finance|financial)\b",
+        re.IGNORECASE,
+    ),
+    "info": re.compile(
+        r"\b(wikipedia|wiki|define|definition|meaning|what does .+ mean|spell|"
+        r"air quality|aqi|pollution|smog|earthquakes?|quakes?|holidays?|bank holiday|"
+        r"jokes?|funny|make me laugh|tell me about|who (is|was)|history of)\b",
+        re.IGNORECASE,
+    ),
     "reminders": re.compile(
         r"\b(remind|reminder|reminders|timer|alarm|wake me|in \d+ (sec|second|min|minute|"
         r"hour)s?|at \d{1,2}(:\d\d)?\s*(am|pm)?|tomorrow|tonight|later|schedule|"

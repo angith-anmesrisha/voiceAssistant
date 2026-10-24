@@ -22,6 +22,8 @@ _LINE_START = re.compile(r"^\s*(#{1,6}\s+|>\s*|[-*+•]\s+|\d{1,2}[.)]\s+)")
 _EMPHASIS = re.compile(r"(\*\*|__|\*|~~)")
 _ARROWS = re.compile(r"\s*(->|=>|→|⇒)\s*")
 _SENTENCE_END = (".", "!", "?", ":", ";", "…")
+_MONEY = re.compile(r"([₹$£€¥])\s?(\d[\d,]*(?:\.\d+)?)")
+_CURRENCY_NAMES = {"₹": "rupees", "$": "dollars", "£": "pounds", "€": "euros", "¥": "yen"}
 
 
 def without_thinking(text: str) -> str:
@@ -65,6 +67,7 @@ def speakable(text: str) -> str:
     text = _WIN_PATH.sub(lambda m: m.group(1), text)
     text = _INLINE_CODE.sub(lambda m: m.group(1) if len(m.group(1)) <= 40 else "that", text)
     text = _ARROWS.sub(" to ", text)
+    text = _MONEY.sub(lambda m: f"{m.group(2)} {_CURRENCY_NAMES[m.group(1)]}", text)
     text = re.sub(r"\s*°\s*C\b", " degrees", text)
     text = re.sub(r"\s*°\s*F\b", " degrees Fahrenheit", text).replace("°", " degrees")
     text = _symbols(text)

@@ -505,10 +505,11 @@ def _routines(
         Briefing,
         CheckIns,
         HardwareWatch,
+        MarketWatch,
         SessionSummaries,
         TopicWatch,
     )
-    from jarvis.tools import web
+    from jarvis.tools import live, web
     from jarvis.tools.personal import home_city
     from jarvis.voice.spoken_text import without_thinking
 
@@ -537,9 +538,22 @@ def _routines(
         )
         return without_thinking(result.content or "")
 
+    async def price(name: str) -> live.Quote:
+        return await live.price_of(client, name, locale)
+
+    async def markets() -> list[live.Quote]:
+        found = await asyncio.gather(
+            *(price(name) for name in plan.briefing_markets[:5]), return_exceptions=True
+        )
+        return [q for q in found if isinstance(q, live.Quote)]
+
     jobs: list[Job] = [TopicWatch(keep, topic_news, quiet_hours)]
     if plan.briefing:
-        jobs.append(Briefing(keep, weather, headlines))
+        jobs.append(
+            Briefing(keep, weather, headlines, markets=markets if plan.briefing_markets else None)
+        )
+    if plan.market_watch:
+        jobs.append(MarketWatch(keep, price, quiet_hours))
     if plan.hardware_alerts:
         jobs.append(HardwareWatch(battery_low=plan.battery_low))
     if plan.check_in_hours > 0:

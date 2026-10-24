@@ -70,6 +70,11 @@ UNTRUSTED_TOOLS = frozenset(
         "play_youtube",
         "look_through_webcam",
         "run_python",
+        "wikipedia",
+        "define_word",
+        "earthquakes",
+        "public_holidays",
+        "tell_joke",
     }
 )
 

@@ -18,6 +18,7 @@ from jarvis.tools.apps import AppIndex
 from jarvis.tools.code_runner import register_code_tool
 from jarvis.tools.desktop import Desktop, DesktopUnsupportedError
 from jarvis.tools.files import FileAccessError, FileArea, default_area
+from jarvis.tools.live import register_live_tools
 from jarvis.tools.media import CameraFn, DescribeFn, register_media_tools
 from jarvis.tools.messaging import register_messaging_tools
 from jarvis.tools.pc import register_pc_tools
@@ -530,6 +531,10 @@ def build_registry(
         news_locale=settings.news_locale,
         memory=memory,
     )
+    if http is not None:
+        register_live_tools(
+            registry, http, keep, locale=settings.news_locale, home_place=settings.home_place
+        )
 
     # --- power ---
 

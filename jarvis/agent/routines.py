@@ -23,6 +23,7 @@ from loguru import logger
 from jarvis.storage.db import HistoryStore
 from jarvis.storage.keep import Keep
 from jarvis.storage.memory import Memory
+from jarvis.tools.live import Quote, money, save_watched, watched
 from jarvis.tools.web import Forecast, Headline, WebError
 
 
@@ -79,6 +80,7 @@ class Briefing:
     weather: Callable[[], Awaitable[Forecast | None]]
     headlines: Callable[[], Awaitable[list[Headline]]]
     idle: Callable[[], float] = idle_seconds
+    markets: Callable[[], Awaitable[list[Quote]]] | None = None
     until_hour: int = 12
     _done: str = ""
 
@@ -104,6 +106,7 @@ class Briefing:
             forecast = None
         if forecast is not None:
             lines.append(_weather_line(forecast))
+        lines.extend(await self._markets())
         lines.extend(await self._reminders(now))
         recap = await self.keep.unmentioned_summaries(now.date().isoformat())
         if recap:
@@ -120,6 +123,23 @@ class Briefing:
             )
             lines.append(f"In the news: {joined}.")
         return "\n".join(lines)
+
+    async def _markets(self) -> list[str]:
+        if self.markets is None:
+            return []
+        try:
+            quotes = await self.markets()
+        except Exception as exc:
+            logger.info("Briefing without markets: {}", type(exc).__name__)
+            return []
+        parts = []
+        for q in quotes:
+            name = q.name.split(" (")[0]
+            part = f"{name} {money(q.price, q.currency)}{' ' + q.unit if q.unit else ''}"
+            if q.change_pct is not None:
+                part += f", {'up' if q.change_pct >= 0 else 'down'} {abs(q.change_pct):.1f}%"
+            parts.append(part)
+        return [f"Markets: {'; '.join(parts)}."] if parts else []
 
     async def _reminders(self, now: datetime) -> list[str]:
         end = datetime.combine(now.date() + timedelta(days=1), datetime.min.time(), now.tzinfo)
@@ -183,6 +203,54 @@ class TopicWatch:
                 source = f" ({newest.source})" if newest.source else ""
                 said.append(Said(f"News on {topic}: {newest.title}{source}.", "news"))
             await self.keep.mark_topic(topic, newest.title, now.timestamp())
+        return said
+
+
+@dataclass
+class MarketWatch:
+    """Prices the user asked to watch: said when one moves ``move`` % from the last price
+    mentioned (that price then becomes the new mark)."""
+
+    keep: Keep
+    price: Callable[[str], Awaitable[Quote]]
+    quiet_hours: tuple[int, int] = (22, 8)
+    every: timedelta = timedelta(minutes=30)
+    _next: datetime | None = None
+
+    async def tick(self, now: datetime) -> list[Said]:
+        if self._next is not None and now < self._next:
+            return []
+        self._next = now + self.every
+        if quiet(now, *self.quiet_hours):
+            return []
+        items = await watched(self.keep)
+        said: list[Said] = []
+        changed = False
+        for name, item in items.items():
+            try:
+                found = await self.price(name)
+            except (WebError, ValueError) as exc:
+                logger.info("Market check failed: {}", exc)
+                continue
+            last = item.get("last")
+            move = float(item.get("move") or 2.0)
+            if not last:
+                item["last"], changed = found.price, True
+                continue
+            change = (found.price / float(last) - 1) * 100
+            if abs(change) >= move:
+                direction = "up" if change > 0 else "down"
+                said.append(
+                    Said(
+                        f"{name.title()} is {direction} {abs(change):.1f}% since I last "
+                        f"mentioned it: {money(found.price, found.currency)}"
+                        f"{' ' + found.unit if found.unit else ''}.",
+                        "market",
+                    )
+                )
+                item["last"], changed = found.price, True
+        if changed:
+            await save_watched(self.keep, items)
         return said
 
 

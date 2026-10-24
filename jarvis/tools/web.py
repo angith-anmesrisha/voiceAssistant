@@ -72,7 +72,7 @@ def describe_code(code: int) -> str:
     return _WEATHER.get(code, "mixed weather")
 
 
-async def _get(client: httpx.AsyncClient, url: str, **params: str | int) -> httpx.Response:
+async def get(client: httpx.AsyncClient, url: str, **params: str | int) -> httpx.Response:
     try:
         response = await client.get(url, params=params or None, headers=_UA, timeout=_TIMEOUT)
     except httpx.TimeoutException as exc:
@@ -114,9 +114,9 @@ class Forecast:
         return line
 
 
-async def forecast(client: httpx.AsyncClient, place: str) -> Forecast:
-    """Current weather and the next two days for a place."""
-    found = await _get(
+async def locate(client: httpx.AsyncClient, place: str) -> tuple[str, float, float]:
+    """("Kochi, India", latitude, longitude) for a place name (Open-Meteo geocoding)."""
+    found = await get(
         client,
         "https://geocoding-api.open-meteo.com/v1/search",
         name=place,
@@ -129,11 +129,17 @@ async def forecast(client: httpx.AsyncClient, place: str) -> Forecast:
         raise WebError(f"I couldn't find a place called {place}")
     spot = results[0]
     name = ", ".join(str(p) for p in (spot.get("name"), spot.get("country")) if p)
-    response = await _get(
+    return name, float(spot["latitude"]), float(spot["longitude"])
+
+
+async def forecast(client: httpx.AsyncClient, place: str) -> Forecast:
+    """Current weather and the next two days for a place."""
+    name, latitude, longitude = await locate(client, place)
+    response = await get(
         client,
         "https://api.open-meteo.com/v1/forecast",
-        latitude=str(spot["latitude"]),
-        longitude=str(spot["longitude"]),
+        latitude=str(latitude),
+        longitude=str(longitude),
         current="temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,"
         "wind_speed_10m",
         daily="weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
@@ -180,7 +186,7 @@ async def news(
     if topic.strip():
         url += "/search"
         params["q"] = topic.strip()  # (httpx replaces a query written into the url)
-    response = await _get(client, url, **params)
+    response = await get(client, url, **params)
     try:
         root = ElementTree.fromstring(response.content)
     except ElementTree.ParseError as exc:
@@ -241,7 +247,7 @@ def parse_results(page: str, limit: int = 6) -> list[SearchHit]:
 
 
 async def search(client: httpx.AsyncClient, query: str, limit: int = 6) -> list[SearchHit]:
-    response = await _get(client, "https://html.duckduckgo.com/html/", q=query)
+    response = await get(client, "https://html.duckduckgo.com/html/", q=query)
     hits = parse_results(response.text, limit)
     if not hits:
         raise WebError("the search found nothing (or the search page changed)")

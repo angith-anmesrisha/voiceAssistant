@@ -277,6 +277,10 @@ class RoutineSettings(BaseModel):
     # Low battery, and processor or memory flat out for a couple of minutes.
     hardware_alerts: bool = True
     battery_low: int = Field(default=20, ge=5, le=50)
+    # Prices read out in the morning briefing (any name get_price knows; [] = none).
+    briefing_markets: list[str] = Field(default_factory=lambda: ["nifty", "sensex", "gold"])
+    # Prices you asked JARVIS to watch ("watch bitcoin") are checked every 30 minutes.
+    market_watch: bool = True
     # One- or two-sentence summaries of each session, mentioned in the next briefing.
     summaries: bool = True
     # No check-ins or topic news between these hours (local time, 24 h clock).
