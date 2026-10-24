@@ -1,4 +1,4 @@
-"""The three concrete providers."""
+"""The concrete providers: Groq, Gemini, OpenRouter and Ollama."""
 
 from __future__ import annotations
 
@@ -48,7 +48,52 @@ class GroqProvider(OpenAICompatibleProvider):
             return self.settings.reasoning_effort  # "none": no thinking
         if model.startswith("openai/gpt-oss"):
             return "low"  # gpt-oss can't turn reasoning off
-        return ""  # Llama has no reasoning setting
+        return ""  # Llama and MiniMax have no reasoning setting (MiniMax's <think> is stripped)
+
+
+class OpenRouterProvider(OpenAICompatibleProvider):
+    """Optional online provider: many hosted models (free and paid) behind one key."""
+
+    def reasoning_for(self, model: str) -> str:
+        return ""
+
+    def _check_models(self, response: httpx.Response, latency: int) -> ProviderStatus:
+        """If the configured free model is gone, use another free one that fits."""
+        try:
+            listed = [item for item in response.json().get("data", []) if isinstance(item, dict)]
+        except (ValueError, AttributeError):
+            listed = []
+        if not listed:
+            return ProviderStatus(ProviderState.READY, latency_ms=latency)
+        ids = {str(item.get("id", "")) for item in listed}
+        for capability in (Capability.CHAT, Capability.VISION):
+            configured = self.configured_model(capability)
+            if not configured or configured in ids:
+                continue
+            spare = pick_free_model(listed, vision=capability is Capability.VISION)
+            if spare:
+                self._use_model(capability, spare)
+            elif capability is Capability.CHAT:
+                return ProviderStatus(
+                    ProviderState.MODEL_MISSING,
+                    f"{configured} isn't on OpenRouter any more",
+                    latency_ms=latency,
+                )
+        return ProviderStatus(ProviderState.READY, latency_ms=latency)
+
+
+def pick_free_model(models: list[dict[str, Any]], *, vision: bool = False) -> str:
+    """The first free OpenRouter model that can call tools (and see images, if asked)."""
+    for item in models:
+        model_id = str(item.get("id", ""))
+        params = item.get("supported_parameters") or []
+        inputs = (item.get("architecture") or {}).get("input_modalities") or []
+        if not model_id.endswith(":free") or "tools" not in params:
+            continue
+        if vision and "image" not in inputs:
+            continue
+        return model_id
+    return ""
 
 
 class GeminiProvider(OpenAICompatibleProvider):
@@ -249,5 +294,6 @@ def build_providers(config: ProvidersConfig, client: httpx.AsyncClient) -> dict[
     return {
         "groq": GroqProvider("groq", "Groq", config.groq, client),
         "gemini": GeminiProvider("gemini", "Gemini", config.gemini, client),
+        "openrouter": OpenRouterProvider("openrouter", "OpenRouter", config.openrouter, client),
         "ollama": OllamaProvider("ollama", "Ollama", config.ollama, client),
     }

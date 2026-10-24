@@ -80,8 +80,8 @@ async def test_groq_then_gemini_then_local_qwen(monkeypatch: pytest.MonkeyPatch)
     router = rig(handler, monkeypatch, changes)
     result = await router.chat([{"role": "user", "content": "hi"}])
     assert (result.provider, result.model) == ("Ollama", "qwen3.5:4b")
-    # qwen, then the two fallback Groq models; all busy, so the round is tried once more.
-    assert calls.count("api.groq.com") == 6
+    # qwen, then the three fallback Groq models; all busy, so the round is tried once more.
+    assert calls.count("api.groq.com") == 8
     assert calls.count("generativelanguage.googleapis.com") == 1  # billing: no retry
     assert [a.provider for a in router.skipped] == ["Groq", "Gemini"]
     assert "FAILED_PRECONDITION" in router.skipped[1].error
@@ -104,7 +104,12 @@ async def test_all_three_failing_lists_each_reason(monkeypatch: pytest.MonkeyPat
     router = rig(handler, monkeypatch)
     with pytest.raises(AllProvidersFailedError) as caught:
         await router.chat([{"role": "user", "content": "hi"}])
-    assert [a.provider for a in caught.value.attempts] == ["Groq", "Gemini", "Ollama"]
+    assert [a.provider for a in caught.value.attempts] == [
+        "Groq",
+        "Gemini",
+        "OpenRouter",  # no key: skipped without a request
+        "Ollama",
+    ]
 
 
 async def test_gemini_switches_to_a_model_the_key_can_use(
@@ -252,12 +257,12 @@ async def test_groq_rate_limit_switches_model_and_says_why(
         ProvidersConfig(), httpx.AsyncClient(transport=httpx.MockTransport(handler))
     )["groq"]
     result = await groq.chat([{"role": "user", "content": "hi"}], tools=[{"type": "function"}])
-    assert result.model == "openai/gpt-oss-120b"
+    assert result.model == "minimaxai/minimax-m2.7"
     assert sent[0]["max_tokens"] == 2048 and sent[0]["reasoning_effort"] == "none"
-    assert sent[1]["reasoning_effort"] == "low"  # gpt-oss can't switch reasoning off
+    assert "reasoning_effort" not in sent[1]  # MiniMax has no such setting
     # The rate-limited model waits a minute before it is tried again.
     await groq.chat([{"role": "user", "content": "again"}])
-    assert sent[2]["model"] == "openai/gpt-oss-120b"
+    assert sent[2]["model"] == "minimaxai/minimax-m2.7"
 
 
 async def test_all_groq_models_limited_names_each(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -346,6 +351,7 @@ async def test_diagnostics_report_says_whose_side(monkeypatch: pytest.MonkeyPatc
     assert [(r.provider, r.ok, r.blame) for r in results] == [
         ("Groq", False, "account"),
         ("Gemini", False, "account"),
+        ("OpenRouter", False, "setup"),  # no key
         ("Ollama", True, ""),
     ]
     text = diagnosis_report(results)
@@ -440,7 +446,7 @@ async def test_a_model_rejecting_the_request_hands_over_to_the_next_model(
     router = rig(handler, monkeypatch)
     result = await router.chat([{"role": "user", "content": "hi"}])
     assert result.provider == "Groq"
-    assert models == ["qwen/qwen3.8-27b", "openai/gpt-oss-120b"]
+    assert models == ["qwen/qwen3.8-27b", "minimaxai/minimax-m2.7"]
 
 
 async def test_vision_failure_names_the_provider_without_a_vision_model(
@@ -463,3 +469,28 @@ async def test_vision_failure_names_the_provider_without_a_vision_model(
         await router.chat([{"role": "user", "content": "look"}], vision=True)
     assert [a.provider for a in caught.value.attempts][-1] == "Ollama"
     assert "can see images" in caught.value.attempts[-1].error
+
+
+def test_openrouter_picks_a_free_model_that_fits() -> None:
+    from jarvis.providers.backends import pick_free_model
+
+    models: list[dict[str, Any]] = [
+        {"id": "moonshotai/kimi-k3", "supported_parameters": ["tools"]},
+        {"id": "a/no-tools:free", "supported_parameters": []},
+        {"id": "b/text:free", "supported_parameters": ["tools"]},
+        {
+            "id": "c/sees:free",
+            "supported_parameters": ["tools"],
+            "architecture": {"input_modalities": ["text", "image"]},
+        },
+    ]
+    assert pick_free_model(models) == "b/text:free"
+    assert pick_free_model(models, vision=True) == "c/sees:free"
+    assert pick_free_model([]) == ""
+
+
+def test_old_saved_priority_gains_openrouter() -> None:
+    old = ProvidersConfig.model_validate({"priority": ["groq", "gemini", "ollama"]})
+    assert old.priority == ["groq", "gemini", "openrouter", "ollama"]
+    custom = ProvidersConfig.model_validate({"priority": ["ollama", "groq"]})
+    assert custom.priority == ["ollama", "groq"]

@@ -59,8 +59,14 @@ def _groq() -> ProviderSettings:
         stt_model="whisper-large-v3-turbo",
         reasoning_effort="none",
         # When qwen is rate-limited (free tier: 8K tokens/min, 1K requests/day per model),
-        # these Groq production models answer instead (console.groq.com/docs/models).
-        fallback_models=["openai/gpt-oss-120b", "llama-3.3-70b-versatile"],
+        # these answer instead (console.groq.com/docs/models, 2026-10-24): MiniMax M2.7
+        # (preview, built for agent and tool work), then the production gpt-oss-120b and
+        # Llama 3.3 70B. All run on Groq's servers, so none of them loads the PC.
+        fallback_models=[
+            "minimaxai/minimax-m2.7",
+            "openai/gpt-oss-120b",
+            "llama-3.3-70b-versatile",
+        ],
         # The owner asked for Llama Prompt Guard 2 (86M). It is a classifier, not a chat
         # model (console.groq.com/docs/model/meta-llama/llama-prompt-guard-2-86m, 512
         # token input), so it screens untrusted text; qwen still answers.
@@ -86,6 +92,22 @@ def _gemini() -> ProviderSettings:
     )
 
 
+def _openrouter() -> ProviderSettings:
+    # One key for hundreds of hosted models (openrouter.ai/api/v1/models, 2026-10-24).
+    # Off until OPENROUTER_API_KEY is set. The default is a free model with tool use and
+    # image input; free models come and go, so if it isn't listed any more the first
+    # listed free model that supports tools (and images, for the screen) is used. Paid
+    # models work too, e.g. "moonshotai/kimi-k3" (Kimi K3, about $3 in / $15 out per
+    # million tokens, slow to start) for hard tasks.
+    return ProviderSettings(
+        base_url="https://openrouter.ai/api/v1",
+        api_key_env="OPENROUTER_API_KEY",
+        chat_model="nvidia/nemotron-3.5-super-vl:free",
+        vision_model="nvidia/nemotron-3.5-super-vl:free",
+        timeout_s=30.0,
+    )
+
+
 def _ollama() -> ProviderSettings:
     return ProviderSettings(
         base_url="http://localhost:11434/v1",
@@ -108,11 +130,12 @@ def _ollama() -> ProviderSettings:
 
 class ProvidersConfig(BaseModel):
     # Tried in this order; unavailable providers are skipped.
-    priority: list[str] = Field(default_factory=lambda: ["groq", "gemini", "ollama"])
+    priority: list[str] = Field(default_factory=lambda: ["groq", "gemini", "openrouter", "ollama"])
     # Provider the user picked (top bar, or "use Gemini from now on"); "" = automatic.
     preferred: str = ""
     groq: ProviderSettings = Field(default_factory=_groq)
     gemini: ProviderSettings = Field(default_factory=_gemini)
+    openrouter: ProviderSettings = Field(default_factory=_openrouter)
     ollama: ProviderSettings = Field(default_factory=_ollama)
     # How often to re-check network and provider availability.
     probe_interval_s: float = 20.0
@@ -123,7 +146,17 @@ class ProvidersConfig(BaseModel):
         """Let settings.json change just one field, e.g. {"ollama": {"chat_model": ...}}."""
         if isinstance(data, dict):
             data = dict(data)
-            for name, default in (("groq", _groq), ("gemini", _gemini), ("ollama", _ollama)):
+            priority = data.get("priority")
+            if priority == ["groq", "gemini", "ollama"]:
+                # The old default, saved before OpenRouter existed (a custom order stays).
+                data["priority"] = ["groq", "gemini", "openrouter", "ollama"]
+            defaults = (
+                ("groq", _groq),
+                ("gemini", _gemini),
+                ("openrouter", _openrouter),
+                ("ollama", _ollama),
+            )
+            for name, default in defaults:
                 part = data.get(name)
                 if isinstance(part, dict):
                     data[name] = {**default().model_dump(), **part}

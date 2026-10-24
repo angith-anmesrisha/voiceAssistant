@@ -190,8 +190,12 @@ class ProviderRouter:
                     # Say so, so the failure explains itself ("Ollama: no vision model").
                     attempts.append(Attempt(provider.display_name, NO_VISION))
                 continue
-            if not status.usable:
-                attempts.append(Attempt(provider.display_name, status.detail or status.state))
+            missing = provider.missing_config() if hasattr(provider, "missing_config") else None
+            if not status.usable or missing:
+                # Not set up (no key) or known to be down: skip without trying.
+                attempts.append(
+                    Attempt(provider.display_name, missing or status.detail or status.state)
+                )
                 continue
             max_attempts = 1 + max(0, self._retries.get(provider.name, 0))
             last_error: ProviderError | None = None

@@ -22,6 +22,10 @@ _NAMES = {
     "gemini": "gemini",
     "google": "gemini",
     "google gemini": "gemini",
+    "openrouter": "openrouter",
+    "router": "openrouter",
+    "kimi": "openrouter",
+    "nemotron": "openrouter",
     "ollama": "ollama",
     "llama": "ollama",
     "local": "ollama",
@@ -40,7 +44,7 @@ _PROVIDER_COMMAND = re.compile(
     (?:use|switch(?:\s+over)?\s+to|change\s+to|go\s+(?:back\s+)?to|move\s+to|start\s+using
        |set\s+(?:the\s+)?(?:ai|model|provider|brain)\s+to)
     \s+(?:the\s+)?
-    (?P<name>google\s+gemini|the\s+best\s+available|[a-z]+)
+    (?P<name>google\s+gemini|the\s+best\s+available|open\s+router|[a-z]+)
     (?:\s+(?:ai|model|models|provider|mode|brain))?
     (?:\s+(?:from\s+now\s+on|for\s+now|instead|now|again|please|only))*
     \s*[.!]*\s*$""",
@@ -68,7 +72,7 @@ def provider_command(text: str) -> str | None:
     match = _PROVIDER_COMMAND.match(text)
     if match is None:
         return None
-    return _NAMES.get(match.group("name").lower().strip())
+    return _NAMES.get(re.sub(r"open\s+router", "openrouter", match.group("name").lower().strip()))
 
 
 _PAIR_COMMAND = re.compile(

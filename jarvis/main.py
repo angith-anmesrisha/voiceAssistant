@@ -106,7 +106,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     router = ProviderRouter(
         build_providers(config, client),
         config.priority,
-        {name: config.get(name).max_retries for name in ("groq", "gemini", "ollama")},
+        {name: config.get(name).max_retries for name in config.priority},
         on_change=lambda: spawn(bus.publish(ProvidersChanged())),
     )
     if config.preferred:
@@ -208,6 +208,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     key_links = {
         "groq": "https://console.groq.com/keys",
         "gemini": "https://aistudio.google.com/apikey",
+        "openrouter": "https://openrouter.ai/settings/keys",
     }
 
     def key_fields() -> list[KeyField]:
@@ -215,7 +216,8 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         for name, url in key_links.items():
             env = config.get(name).api_key_env
             if env:
-                fields.append(KeyField(name.title(), env, url, keys.get_key(env) is not None))
+                label = "OpenRouter" if name == "openrouter" else name.title()
+                fields.append(KeyField(label, env, url, keys.get_key(env) is not None))
         return fields
 
     def save_keys(values: dict[str, str]) -> None:

@@ -92,6 +92,7 @@ class SystemPanel(GlassPanel):
         for key, name, role in (
             ("groq", "Groq", "PRIMARY"),
             ("gemini", "Gemini", "BACKUP"),
+            ("openrouter", "OpenRouter", "EXTRA"),
             ("ollama", "Ollama", "LOCAL"),
         ):
             row = ProviderRow(name, role)
