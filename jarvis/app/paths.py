@@ -40,3 +40,8 @@ def settings_file() -> Path:
 
 def database_file() -> Path:
     return data_dir() / "jarvis.sqlite3"
+
+
+def keep_file() -> Path:
+    """Facts JARVIS remembers, reminders, watched topics, conversation summaries."""
+    return data_dir() / "keep.sqlite3"

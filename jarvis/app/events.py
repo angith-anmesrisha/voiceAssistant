@@ -157,3 +157,12 @@ class PlanUpdated(Event):
             if step.status is StepStatus.RUNNING:
                 return i
         return -1
+
+
+@dataclass(frozen=True, slots=True)
+class Announce(Event):
+    """Something JARVIS brings up by itself (a reminder, an alert, a briefing). It is shown
+    in the conversation and said out loud once JARVIS isn't busy."""
+
+    text: str
+    kind: str = "reminder"  # reminder | alert | briefing | check-in | news

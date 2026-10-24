@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import inspect
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
@@ -40,6 +41,8 @@ class ToolSpec:
     risk: RiskRule
     # Human-readable sentence shown in confirmations, e.g. "Type 42 characters".
     describe: Callable[[dict[str, Any]], str]
+    # Which requests get this tool (see jarvis/agent/toolbudget.py); "core" always does.
+    group: str = "core"
 
     def risk_for(self, args: dict[str, Any]) -> Risk:
         return self.risk(args) if callable(self.risk) else self.risk
@@ -106,14 +109,26 @@ class ToolRegistry:
             raise ValueError(f"duplicate tool {spec.name}")
         self._tools[spec.name] = spec
 
+    def set_group(self, group: str, *names: str) -> None:
+        for name in names:
+            self._tools[name] = dataclasses.replace(self._tools[name], group=group)
+
     def get(self, name: str) -> ToolSpec | None:
         return self._tools.get(name)
 
     def names(self) -> list[str]:
         return sorted(self._tools)
 
-    def declarations(self) -> list[dict[str, Any]]:
-        return [spec.declaration() for spec in self._tools.values()]
+    def declarations(self, groups: set[str] | None = None) -> list[dict[str, Any]]:
+        """All tools, or only those in ``groups`` (plus "core") to keep requests small."""
+        return [
+            spec.declaration()
+            for spec in self._tools.values()
+            if groups is None or spec.group == "core" or spec.group in groups
+        ]
+
+    def groups(self) -> set[str]:
+        return {spec.group for spec in self._tools.values()}
 
     async def run(self, spec: ToolSpec, args: dict[str, Any]) -> ToolResult:
         result = spec.func(**args)

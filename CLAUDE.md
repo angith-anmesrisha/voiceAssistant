@@ -40,6 +40,8 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 - `app/keys.py`: API keys from the process env, then (Windows) the user env in
   `HKCU\Environment`; saving from the UI writes there too, like `setx`.
 - `storage/db.py`: `HistoryStore` (SQLite conversations + messages, via `asyncio.to_thread`).
+  `storage/keep.py`: `Keep` (`keep.sqlite3`: facts, reminders, watched topics, conversation
+  summaries, small state) and `memory_prompt` (newest facts + an index of the rest).
 - `tools/`: `apps.py` (`AppIndex` of installed apps: Start menu .lnk/.url + shell:AppsFolder,
   minus uninstallers/help/links and blocked shells/system editors; fuzzy `best_match`),
   `registry.py` (`Risk`, `ToolSpec`, arg validation), `desktop.py` (`WindowsDesktop`:
@@ -47,12 +49,15 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   shutdown), `files.py` (`FileArea`: allowed roots, blocked system folders, Recycle Bin via
   SHFileOperationW), `ui.py` (`WindowsUi`: UI Automation via the `uiautomation`
   package on one COM thread; `format_snapshot`, `blocked_reason`, `click_risk`), `shortcuts.py` (`SHORTCUTS` name → keys/risk/what, `parse_combo`
-  refuses Win+R/Win+X/Ctrl+Alt+Del), `builtin.py` (the tool set).
+  refuses Win+R/Win+X/Ctrl+Alt+Del), `undo.py` (`UndoJournal`: each change records its own reverse), `web.py` (Open-Meteo
+  weather, Google News RSS, DuckDuckGo HTML results), `personal.py` (memory, reminder,
+  weather, look_up and watch_topic tools), `builtin.py` (the tool set; `ToolSpec.group`).
 - `agent/`: `commands.py` ("use Gemini from now on" → provider switch, no model call),
   `prompts.py` (one system prompt; `wants_screen` regex; `context` block marked as
   information), `context.py` (`situation`: active window, other open windows, AI choice),
   `guard.py` (`PromptGuard`: Llama Prompt Guard 2 scores outside text for injections),
-  `planner.py` (`needs_plan`, planner prompt, `parse_plan` → `Task`s, `step_request`),
+  `toolbudget.py` (`groups_for`: which tool groups a request gets), `background.py`
+  (`Background`: reminders and other jobs → `Announce`), `planner.py` (`needs_plan`, planner prompt, `parse_plan` → `Task`s, `step_request`),
   `assistant.py` (keeps the last 8 actions for context; one turn:
   history, screen fast path, otherwise a tool loop with tools + `look_at_screen`,
   confirmations).
@@ -105,6 +110,25 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   runnable files are never double-clicked. All four tools' output is screened by Prompt
   Guard. The module is imported on its worker thread after Qt starts, because it sets the
   process DPI mode on import.
+- From Mark-LVI (github.com/FatihMakes/Mark-LVI, CC BY-NC 4.0: ideas reimplemented, no
+  code copied; owner asked for all non-UI features on 2026-10-24, and chose "all four, each
+  asks first" for the code runner, plugins, phone dashboard and dark mode/Wi-Fi).
+  Feature map: /mnt/project-files/jarvis/mark-lvi-feature-map.md.
+- Tool budget: requests carry only "core" tools plus the groups `groups_for` finds in the
+  words (system, keys, memory, clipboard, power, files, ui, reminders) and the groups the
+  previous request used. Keeps Groq's 8K TPM free tier usable as tools grow.
+- Memory: `remember`/`recall_memory`/`forget`; the prompt carries ~900 chars of the newest
+  facts plus an index of the other keys (by category, round robin), marked as facts, not
+  instructions. Nothing is deleted automatically.
+- Undo (`undo_last`, LOW): reverses JARVIS's own last move/rename/copy (copy → Recycle
+  Bin)/new folder (only while empty), session only, 30 steps.
+- Reminders live in `keep.sqlite3`, not Task Scheduler; `Background` checks every 10 s,
+  publishes a ChatEntry (mode "reminder") and `Announce`; the controller speaks
+  announcements only when IDLE and not recording (busy while speaking). Missed ones say
+  when they were due.
+- Web: `get_weather` (Open-Meteo, home place from memory or `tools.home_place`),
+  `look_up` (search or news; `tools.news_locale`), `watch_topic`. `look_up` and
+  `recall_memory` output is screened by Prompt Guard.
 - No modes. Screen questions (regex `wants_screen`) go straight to vision; everything else
   goes to the agent with all tools plus `look_at_screen`, so the model decides. The reply
   label says what happened ("looked at screen", "used tools").

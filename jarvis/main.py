@@ -27,7 +27,7 @@ from jarvis.app.events import (
     WakeWordHeard,
 )
 from jarvis.app.logging_setup import configure_logging
-from jarvis.app.paths import database_file
+from jarvis.app.paths import database_file, keep_file
 from jarvis.app.single_instance import SingleInstance
 from jarvis.app.state import AppState, StateChanged, StateMachine
 
@@ -105,6 +105,11 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         except KeyError:
             logger.warning("Unknown preferred provider in settings; using automatic")
     store = HistoryStore(database_file())
+    from jarvis.agent.background import Background
+    from jarvis.storage.keep import Keep, memory_prompt
+    from jarvis.tools.undo import UndoJournal
+
+    keep = Keep(keep_file())
     desktop = WindowsDesktop()
     desktop.start_tracking()
     from jarvis.tools.apps import AppIndex
@@ -114,7 +119,9 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
 
     # Reads and operates app windows (UI Automation) for multi-step tasks inside apps.
     ui = WindowsUi(desktop.previous_window_handle, desktop.press, desktop.type_text)
-    registry = build_registry(settings.tools, desktop, installed, ui=ui)
+    registry = build_registry(
+        settings.tools, desktop, installed, ui=ui, undo=UndoJournal(), keep=keep, http=client
+    )
 
     hotkey_label = "+".join(
         part.strip().title() for part in settings.hotkeys.push_to_talk.split("+")
@@ -139,6 +146,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         on_prefer=lambda name: save_choice("providers", "preferred", name or ""),
         situation=situation(desktop, router),
         guard=guard,
+        memory=lambda: _memory(keep, memory_prompt),
     )
     speaker = Speaker(settings.voice.tts_voice, settings.voice.tts_rate)
     speaker.start()
@@ -240,6 +248,8 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         wake.start()
         spawn(check_wake())
 
+    background = Background(bus, keep)
+    background.start()
     spawn(asyncio.to_thread(installed.refresh))  # so "open Valorant" is instant later
     probes = asyncio.create_task(router.run_probes(config.probe_interval_s))
     logger.info("{} {} running", APP_NAME, __version__)
@@ -257,12 +267,14 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         hotkeys.stop()
         desktop.stop_tracking()
         ui.close()
+        await background.stop()
         await controller.shutdown()
         tray.hide()
         window.quitting = True
         window.close()
         await client.aclose()
         store.close()
+        keep.close()
 
 
 def run(argv: list[str] | None = None) -> int:
@@ -310,3 +322,7 @@ def run(argv: list[str] | None = None) -> int:
     logger.info("{} exited cleanly", APP_NAME)
     logger.complete()
     return 0
+
+
+async def _memory(keep: Any, render: Any) -> str:
+    return str(render(await keep.facts()))

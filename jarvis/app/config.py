@@ -199,6 +199,10 @@ class ToolSettings(BaseModel):
     # Look-act-check steps per request: operating an app's window takes several.
     max_tool_rounds: int = 15
     max_typed_chars: int = 2000
+    # Weather when no place is named (a "home city" you tell JARVIS is used first).
+    home_place: str = ""
+    # Language and country of news headlines, e.g. "en-IN" or "en-GB".
+    news_locale: str = "en-US"
 
 
 class Settings(BaseModel):

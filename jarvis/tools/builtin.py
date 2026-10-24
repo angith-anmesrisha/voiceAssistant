@@ -6,13 +6,18 @@ from datetime import datetime
 from typing import Any
 from urllib.parse import quote_plus, urlparse
 
+import httpx
+
 from jarvis.app.config import ToolSettings
+from jarvis.storage.keep import Keep
 from jarvis.tools.apps import AppIndex
 from jarvis.tools.desktop import Desktop, DesktopUnsupportedError
 from jarvis.tools.files import FileAccessError, FileArea, default_area
+from jarvis.tools.personal import register_personal_tools
 from jarvis.tools.registry import Risk, ToolRegistry, ToolResult, ToolSpec
 from jarvis.tools.shortcuts import SHORTCUTS, KeyComboError, parse_combo
 from jarvis.tools.ui import UiDriver, UiError, app_label, click_risk, format_snapshot
+from jarvis.tools.undo import UndoJournal
 
 SEARCH_ENGINES = {
     "google": "https://www.google.com/search?q={}",
@@ -51,8 +56,12 @@ def build_registry(
     installed: AppIndex | None = None,
     files: FileArea | None = None,
     ui: UiDriver | None = None,
+    undo: UndoJournal | None = None,
+    keep: Keep | None = None,
+    http: httpx.AsyncClient | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
+    journal = undo if undo is not None else UndoJournal()
     installed = installed if installed is not None else AppIndex()
     area = files if files is not None else default_area()
     apps = {name.lower(): target for name, target in settings.approved_apps.items()}
@@ -295,17 +304,63 @@ def build_registry(
 
         return file_op(f"search for {name}", go)
 
+    # Each change records how to take it back ("undo that").
+
     def create_folder(path: str) -> ToolResult:
-        return file_op("create the folder", lambda: f"Created folder {area.create_folder(path)}.")
+        def go() -> str:
+            existed = area.resolve(path).exists()
+            folder = area.create_folder(path)
+            if not existed:
+
+                def revert() -> str:
+                    area.remove_empty_folder(folder)
+                    return f"Removed the new folder {folder.name}."
+
+                journal.record(f"Created folder {folder.name}", revert)
+            return f"Created folder {folder}."
+
+        return file_op("create the folder", go)
 
     def copy_item(source: str, destination: str) -> ToolResult:
-        return file_op("copy it", lambda: f"Copied to {area.copy(source, destination)}.")
+        def go() -> str:
+            copied = area.copy(source, destination)
+
+            def revert() -> str:
+                area.recycle(str(copied))
+                return f"Sent the copy {copied.name} to the Recycle Bin."
+
+            journal.record(f"Copied to {copied}", revert)
+            return f"Copied to {copied}."
+
+        return file_op("copy it", go)
 
     def move_item(source: str, destination: str) -> ToolResult:
-        return file_op("move it", lambda: f"Moved to {area.move(source, destination)}.")
+        def go() -> str:
+            original = area.resolve(source)
+            moved = area.move(source, destination)
+
+            def revert() -> str:
+                area.move(str(moved), str(original))
+                return f"Moved {original.name} back to {original.parent}."
+
+            journal.record(f"Moved {original.name} to {moved.parent}", revert)
+            return f"Moved to {moved}."
+
+        return file_op("move it", go)
 
     def rename_item(path: str, new_name: str) -> ToolResult:
-        return file_op("rename it", lambda: f"Renamed to {area.rename(path, new_name).name}.")
+        def go() -> str:
+            original = area.resolve(path)
+            renamed = area.rename(path, new_name)
+
+            def revert() -> str:
+                area.rename(str(renamed), original.name)
+                return f"Renamed {renamed.name} back to {original.name}."
+
+            journal.record(f"Renamed {original.name} to {renamed.name}", revert)
+            return f"Renamed to {renamed.name}."
+
+        return file_op("rename it", go)
 
     def move_to_recycle_bin(path: str) -> ToolResult:
         return file_op(
@@ -357,6 +412,24 @@ def build_registry(
             ToolSpec(name, description, _schema(props, required), func, risk_rule, describe)
         )
 
+    def undo_last() -> ToolResult:
+        step = journal.last
+        if step is None:
+            return ToolResult(False, "There's nothing of mine to undo in this session.")
+        return file_op(f"undo “{step.what}”", journal.undo)
+
+    registry.register(
+        ToolSpec(
+            "undo_last",
+            "Take back JARVIS's own last change (file moved, renamed, copied, folder created, "
+            "volume, brightness or wallpaper). For undo inside an app, press ctrl+z instead.",
+            _schema({}),
+            undo_last,
+            Risk.LOW,  # it only reverses what JARVIS itself just did
+            lambda a: "Undo: " + (journal.last.what if journal.last else "nothing to undo"),
+        )
+    )
+
     # --- clipboard ---
 
     def copy_text_to_clipboard(text: str) -> ToolResult:
@@ -397,6 +470,9 @@ def build_registry(
 
     if ui is not None:
         _register_ui_tools(registry, settings, ui)
+    register_personal_tools(
+        registry, keep, http, home_place=settings.home_place, news_locale=settings.news_locale
+    )
 
     # --- power ---
 
@@ -446,6 +522,14 @@ def build_registry(
             lambda a: "Cancel the scheduled shutdown",
         )
     )
+    # Requests only carry the tools they may need (see jarvis/agent/toolbudget.py).
+    registry.set_group("system", "get_system_status", "list_open_windows")
+    registry.set_group("keys", "press_keys", "type_text")
+    registry.set_group("clipboard", "copy_text_to_clipboard", "read_clipboard")
+    registry.set_group("power", "lock_pc", "sleep_pc", "shutdown_or_restart_pc", "cancel_shutdown")
+    registry.set_group("files", *(name for name, *_rest in file_tools))
+    if ui is not None:
+        registry.set_group("ui", "read_ui", "click_element", "type_into", "scroll_ui")
     return registry
 
 

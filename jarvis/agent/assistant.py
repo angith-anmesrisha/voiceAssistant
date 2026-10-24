@@ -21,6 +21,7 @@ from jarvis.agent.planner import (
     step_request,
 )
 from jarvis.agent.prompts import system_prompt, wants_screen
+from jarvis.agent.toolbudget import groups_for
 from jarvis.app.events import ChatEntry, EntryKind, EventBus, PlanStep, PlanUpdated, StepStatus
 from jarvis.app.state import AppState, StateMachine
 from jarvis.providers.base import Capability, ChatResult, Message, ToolCall
@@ -52,6 +53,8 @@ UNTRUSTED_TOOLS = frozenset(
         "click_element",
         "type_into",
         "scroll_ui",
+        "look_up",
+        "recall_memory",
     }
 )
 
@@ -101,6 +104,7 @@ class Assistant:
         on_prefer: Callable[[str | None], None] | None = None,
         situation: Callable[[], str] | None = None,
         guard: PromptGuard | None = None,
+        memory: Callable[[], Awaitable[str]] | None = None,
     ) -> None:
         self._router = router
         self._store = store
@@ -114,12 +118,16 @@ class Assistant:
         self._on_prefer = on_prefer
         self._situation = situation
         self._guard = guard
+        self._memory = memory
         self._turn_context = ""
         self._blocked = False
         # What JARVIS did lately (this session), so "undo that" or "do it again" make sense.
         self._recent: deque[str] = deque(maxlen=8)
         self._conversation_id: int | None = None
         self._did: set[str] = set()
+        # Tool groups used by the last request, offered again for follow-ups.
+        self._last_groups: set[str] = set()
+        self._carry: set[str] = set()
 
     async def checked_context(self) -> str:
         """context(), with window titles dropped if the guard thinks they carry an attack."""
@@ -132,6 +140,11 @@ class Assistant:
         if situation and self._guard is not None and await self._guard.suspicious(situation):
             situation = "Window titles withheld: they looked like instructions aimed at JARVIS."
         lines = [situation]
+        if self._memory is not None:
+            try:
+                lines.append(await self._memory())
+            except Exception as exc:
+                logger.debug("Memory unavailable: {}", type(exc).__name__)
         if self._recent:
             lines.append("Recent actions, oldest first: " + " | ".join(self._recent))
         return "\n".join(line for line in lines if line)
@@ -243,6 +256,7 @@ class Assistant:
             return await self._switch_provider(conversation, choice)
         await self._state.transition(AppState.THINKING)
         self._did = set()
+        self._carry, self._last_groups = self._last_groups, set()
         self._failed = False
         self._blocked = False
         self._turn_context = await self.checked_context()
@@ -388,7 +402,8 @@ class Assistant:
         if not messages[-1:] or messages[-1].get("content") != text:
             messages.append({"role": "user", "content": text})
 
-        tools = [*self._registry.declarations(), LOOK_AT_SCREEN]
+        groups = groups_for(text, self._carry)
+        tools = [*self._registry.declarations(groups), LOOK_AT_SCREEN]
         for _round in range(self._max_tool_rounds):
             trim_old_windows(messages)
             result = await self._router.chat(messages, tools=tools)
@@ -396,6 +411,9 @@ class Assistant:
                 return result
             messages.append(result.message)
             for call in result.tool_calls:
+                spec = self._registry.get(call.name)
+                if spec is not None and spec.group != "core":
+                    self._last_groups.add(spec.group)
                 if call.name == LOOK_AT_SCREEN["function"]["name"]:
                     outcome = await self._look_tool(call, spoken)
                 else:

@@ -17,6 +17,7 @@ from loguru import logger
 from jarvis.agent.assistant import Assistant, ConfirmRequest
 from jarvis.app.config import VoiceSettings
 from jarvis.app.events import (
+    Announce,
     ChatEntry,
     ConversationChanged,
     EntryKind,
@@ -78,6 +79,7 @@ class AppController:
         bus.subscribe(PushToTalkPressed, self._on_ptt_pressed)
         bus.subscribe(PushToTalkReleased, self._on_ptt_released)
         bus.subscribe(WakeWordHeard, self._on_wake_word)
+        bus.subscribe(Announce, self._on_announce)
 
     @property
     def busy(self) -> bool:
@@ -237,6 +239,27 @@ class AppController:
         if spoken and reply.ok and self._voice.speak_replies and self._speaker.available:
             await self._move_to(AppState.SPEAKING)
             await self._speaker.speak(reply.text)
+
+    # --- things JARVIS brings up by itself ---
+
+    async def _on_announce(self, event: Announce) -> None:
+        if self._voice.speak_replies and self._speaker.available:
+            self._spawn(self._say_when_free(event.text))
+
+    async def _say_when_free(self, text: str, wait_s: float = 600.0) -> None:
+        """Say ``text`` once nothing else is going on (never over you or a reply)."""
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + wait_s
+        while self.busy or self._recorder.recording or self._state.state is not AppState.IDLE:
+            if loop.time() > deadline:
+                return
+            await asyncio.sleep(0.5)
+        self._active = asyncio.current_task()  # busy while speaking it
+        try:
+            await self._move_to(AppState.SPEAKING)
+            await self._speaker.speak(text)
+        finally:
+            await self._settle()
 
     # --- confirmations ---
 

@@ -109,6 +109,14 @@ python -m jarvis --hidden   # starts in the tray
 
 ![JARVIS working through a task list](docs/renders/16-plan-running.png)
 
+- **Remembers you.** Tell it "my sister is Ayşe" or "I live in Kochi" and it keeps that
+  on your PC (`keep.sqlite3`), uses it later, and forgets it when you ask.
+- **Reminders and timers.** "Remind me at 6 pm to call Mom", "set a 10 minute timer":
+  it says them out loud when due, even after a restart.
+- **Weather, news and web answers.** "Will it rain tomorrow?", "latest news on the
+  election", "what's the price of a PS5?": it reads the results and answers, saying
+  where it came from. "Keep an eye on news about SpaceX" checks once a day.
+- **Undo.** "Undo that" takes back JARVIS's own last file move, rename, copy or new folder.
 - **Works inside apps.** Ask "send Mom a WhatsApp message saying I'll be late" and
   JARVIS opens WhatsApp, reads its window (buttons, search box, chats, message box) with
   Windows' accessibility interface, then clicks and types step by step, checking the

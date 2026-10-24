@@ -263,6 +263,15 @@ class FileArea:
             raise FileAccessError(f"{path.name} is a program or script; JARVIS doesn't run those")
         return path
 
+    def remove_empty_folder(self, path: Path) -> None:
+        """Undo for a new folder: only while it is still empty (never anything inside)."""
+        self.check(path)
+        self._refuse_root(path)
+        if path.exists():
+            if any(path.iterdir()):
+                raise FileAccessError(f"{path.name} isn't empty any more, so it stays")
+            path.rmdir()
+
     def is_folder(self, raw: str) -> bool:
         try:
             return self.resolve(raw).is_dir()
