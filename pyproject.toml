@@ -21,6 +21,8 @@ dependencies = [
     "pynput>=1.8",
     "pywin32>=311; sys_platform == 'win32'",
     "uiautomation>=2.0.20; sys_platform == 'win32'",
+    "pycaw>=20240316; sys_platform == 'win32'",
+    "pypdf>=5.0",
 ]
 
 [project.optional-dependencies]
@@ -53,7 +55,7 @@ packages = ["jarvis", "tests"]
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["qasync", "qasync.*", "sounddevice", "pynput", "pynput.*", "win32event", "win32api", "win32clipboard", "uiautomation", "winerror", "win32com", "win32com.*", "pythoncom", "psutil", "pytestqt.*"]
+module = ["qasync", "qasync.*", "sounddevice", "pynput", "pynput.*", "win32event", "win32api", "win32clipboard", "uiautomation", "pycaw", "pycaw.*", "comtypes", "pypdf", "winerror", "win32com", "win32com.*", "pythoncom", "psutil", "pytestqt.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -107,7 +107,9 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     store = HistoryStore(database_file())
     from jarvis.agent.background import Background
     from jarvis.storage.keep import Keep, memory_prompt
+    from jarvis.tools.system_ctl import WindowsSystem
     from jarvis.tools.undo import UndoJournal
+    from jarvis.tools.windows import WindowsWindows
 
     keep = Keep(keep_file())
     desktop = WindowsDesktop()
@@ -120,7 +122,15 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     # Reads and operates app windows (UI Automation) for multi-step tasks inside apps.
     ui = WindowsUi(desktop.previous_window_handle, desktop.press, desktop.type_text)
     registry = build_registry(
-        settings.tools, desktop, installed, ui=ui, undo=UndoJournal(), keep=keep, http=client
+        settings.tools,
+        desktop,
+        installed,
+        ui=ui,
+        undo=UndoJournal(),
+        keep=keep,
+        http=client,
+        windows=WindowsWindows(),
+        system=WindowsSystem(),
     )
 
     hotkey_label = "+".join(

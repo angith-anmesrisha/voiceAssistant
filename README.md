@@ -116,7 +116,13 @@ python -m jarvis --hidden   # starts in the tray
 - **Weather, news and web answers.** "Will it rain tomorrow?", "latest news on the
   election", "what's the price of a PS5?": it reads the results and answers, saying
   where it came from. "Keep an eye on news about SpaceX" checks once a day.
-- **Undo.** "Undo that" takes back JARVIS's own last file move, rename, copy or new folder.
+- **Undo.** "Undo that" takes back JARVIS's own last file move, rename, copy, new folder
+  or file, desktop tidy-up, or volume, brightness or wallpaper change.
+- **Documents and your PC.** "Summarise the PDF in my Downloads", "save these notes to
+  my desktop", "tidy up my desktop", "set the volume to 30", "dim the screen", "make
+  space.png my wallpaper", "close Spotify". If an app is already open it is brought to
+  the front instead of opened twice, and JARVIS only says an app opened once its
+  window has actually appeared.
 - **Works inside apps.** Ask "send Mom a WhatsApp message saying I'll be late" and
   JARVIS opens WhatsApp, reads its window (buttons, search box, chats, message box) with
   Windows' accessibility interface, then clicks and types step by step, checking the
@@ -136,7 +142,7 @@ python -m jarvis --hidden   # starts in the tray
 | Level | Examples | Behaviour |
 |---|---|---|
 | Low | reading an app's window, clicking and typing to move around in it, time, system status, opening installed apps and games, trusted sites, web search, media keys, copy, listing, finding and opening files, creating folders, the clipboard | runs directly |
-| Medium | sending a message, clicking Send/Pay/Delete/Call in an app, typing text, paste, undo, other key combinations, copying, moving or renaming files, deleting a file, untrusted sites, lock, sleep | asks out loud: say yes or no (or click) |
+| Medium | sending a message, clicking Send/Pay/Delete/Call in an app, typing text, paste, undo, other key combinations, copying, moving or renaming files, deleting a file, tidying the desktop, untrusted sites, lock, sleep | asks out loud: say yes or no (or click) |
 | High | deleting a folder, shutdown or restart (60 s delay, cancellable) | you must type CONFIRM |
 | Blocked | shell commands, running programs or scripts from files, system folders, the registry and system settings, Win+R, Win+X, Ctrl+Alt+Del | no such tool exists, or refused |
 

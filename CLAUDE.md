@@ -8,7 +8,7 @@ working rules and safety rules still apply where they don't conflict.
 - Plan first, build, run ruff/mypy/pytest, give a manual test checklist, then wait for the
   owner to confirm on Windows.
 - Push to `main` (owner's choice, 2026-10-24: `main` is JARVIS now; the old Wisp/Hitodama
-  main is tagged `old-main`). Never commit secrets.
+  main is kept as the branch `old-main`). Never commit secrets.
 - Verify model names and API shapes against provider docs before use. Model names live in
   config only.
 - Every PC action is a tool in `jarvis/tools/builtin.py` with a `Risk`. There is no shell or
@@ -51,7 +51,12 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   package on one COM thread; `format_snapshot`, `blocked_reason`, `click_risk`), `shortcuts.py` (`SHORTCUTS` name → keys/risk/what, `parse_combo`
   refuses Win+R/Win+X/Ctrl+Alt+Del), `undo.py` (`UndoJournal`: each change records its own reverse), `web.py` (Open-Meteo
   weather, Google News RSS, DuckDuckGo HTML results), `personal.py` (memory, reminder,
-  weather, look_up and watch_topic tools), `builtin.py` (the tool set; `ToolSpec.group`).
+  weather, look_up and watch_topic tools), `windows.py` (`WindowsWindows`: EnumWindows,
+  raise, polite WM_CLOSE; never JARVIS or the shell), `system_ctl.py` (`WindowsSystem`:
+  volume via pycaw, brightness via WMI, wallpaper via SystemParametersInfo),
+  `documents.py` (`read_text`: text, docx, xlsx, pptx, pdf via pypdf), `pc.py`
+  (read_document, save_text, organize_desktop, close_app, set_volume/brightness/
+  wallpaper, all undoable), `builtin.py` (the tool set; `ToolSpec.group`).
 - `agent/`: `commands.py` ("use Gemini from now on" → provider switch, no model call),
   `prompts.py` (one system prompt; `wants_screen` regex; `context` block marked as
   information), `context.py` (`situation`: active window, other open windows, AI choice),
@@ -121,7 +126,14 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   facts plus an index of the other keys (by category, round robin), marked as facts, not
   instructions. Nothing is deleted automatically.
 - Undo (`undo_last`, LOW): reverses JARVIS's own last move/rename/copy (copy → Recycle
-  Bin)/new folder (only while empty), session only, 30 steps.
+  Bin)/new folder (only while empty)/new text file (→ Recycle Bin)/desktop tidy-up (one
+  step)/volume, mute, brightness or wallpaper change, session only, 30 steps.
+- `open_app` raises an already-open window instead of launching again, and after
+  launching waits up to 8 s for a window, so the reply says whether it really appeared.
+  `close_app` sends WM_CLOSE (like the X) and reports windows still open (unsaved work).
+- `save_text` creates new text files only (.txt/.md/.csv/.json/...), never overwrites.
+  `organize_desktop` (MEDIUM) moves loose desktop files into type folders; shortcuts,
+  folders and name clashes stay put.
 - Reminders live in `keep.sqlite3`, not Task Scheduler; `Background` checks every 10 s,
   publishes a ChatEntry (mode "reminder") and `Announce`; the controller speaks
   announcements only when IDLE and not recording (busy while speaking). Missed ones say

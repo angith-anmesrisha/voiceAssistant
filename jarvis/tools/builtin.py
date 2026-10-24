@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any
 from urllib.parse import quote_plus, urlparse
@@ -13,11 +14,15 @@ from jarvis.storage.keep import Keep
 from jarvis.tools.apps import AppIndex
 from jarvis.tools.desktop import Desktop, DesktopUnsupportedError
 from jarvis.tools.files import FileAccessError, FileArea, default_area
+from jarvis.tools.pc import register_pc_tools
 from jarvis.tools.personal import register_personal_tools
 from jarvis.tools.registry import Risk, ToolRegistry, ToolResult, ToolSpec
 from jarvis.tools.shortcuts import SHORTCUTS, KeyComboError, parse_combo
+from jarvis.tools.system_ctl import SystemControl
 from jarvis.tools.ui import UiDriver, UiError, app_label, click_risk, format_snapshot
 from jarvis.tools.undo import UndoJournal
+from jarvis.tools.windows import WindowControl
+from jarvis.tools.windows import find as find_windows
 
 SEARCH_ENGINES = {
     "google": "https://www.google.com/search?q={}",
@@ -59,6 +64,8 @@ def build_registry(
     undo: UndoJournal | None = None,
     keep: Keep | None = None,
     http: httpx.AsyncClient | None = None,
+    windows: WindowControl | None = None,
+    system: SystemControl | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     journal = undo if undo is not None else UndoJournal()
@@ -128,18 +135,39 @@ def build_registry(
 
     # --- opening things ---
 
-    def open_app(name: str) -> ToolResult:
-        name = name.strip()
+    def launch_app(name: str) -> tuple[ToolResult, str]:
         target = apps.get(name.lower())
         if target is not None:
-            return _safe(f"open {name}", lambda: desktop.launch(target))
+            return _safe(f"open {name}", lambda: desktop.launch(target)), name
         # Otherwise anything installed, as listed in the Start menu.
         app, close = installed.find(name)
         if app is None:
             hint = f" Closest installed: {', '.join(close)}." if close else ""
-            return ToolResult(False, f"{name} isn't installed on this PC.{hint}")
+            return ToolResult(False, f"{name} isn't installed on this PC.{hint}"), name
         found = app
-        return _safe(f"open {found.name}", lambda: desktop.open_installed(found))
+        return _safe(f"open {found.name}", lambda: desktop.open_installed(found)), found.name
+
+    async def open_app(name: str) -> ToolResult:
+        name = name.strip()
+        if windows is None:
+            return launch_app(name)[0]
+        # Already open: bring it to the front instead of starting a second copy.
+        running = await asyncio.to_thread(find_windows, windows, name)
+        if running and windows.raise_window(running[0]):
+            return ToolResult(True, f"{name} was already open; brought it to the front.")
+        result, shown = launch_app(name)
+        if not result.ok:
+            return result
+        # Say what was seen, not what was attempted.
+        for _ in range(16):
+            await asyncio.sleep(0.5)
+            if await asyncio.to_thread(find_windows, windows, shown) or (
+                shown != name and await asyncio.to_thread(find_windows, windows, name)
+            ):
+                return ToolResult(True, f"Opened {shown}; its window is up.")
+        return ToolResult(
+            True, f"Asked Windows to open {shown}, but its window hasn't appeared yet."
+        )
 
     def open_url(url: str) -> ToolResult:
         parsed = urlparse(url.strip())
@@ -470,6 +498,7 @@ def build_registry(
 
     if ui is not None:
         _register_ui_tools(registry, settings, ui)
+    register_pc_tools(registry, area, journal, windows, system)
     register_personal_tools(
         registry, keep, http, home_place=settings.home_place, news_locale=settings.news_locale
     )
