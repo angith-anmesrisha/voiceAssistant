@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import Coroutine
+from collections.abc import Awaitable, Callable, Coroutine
 from typing import Any, Protocol
 
 from loguru import logger
 
-from jarvis.agent.assistant import Assistant
+from jarvis.agent.assistant import Assistant, ConfirmRequest
 from jarvis.app.config import VoiceSettings
 from jarvis.app.events import (
     ChatEntry,
@@ -28,11 +28,14 @@ from jarvis.app.events import (
 )
 from jarvis.app.state import AppState, InvalidTransitionError, StateMachine
 from jarvis.providers.router import AllProvidersFailedError, ProviderRouter
+from jarvis.tools.registry import Risk
 from jarvis.voice.audio_io import AudioDeviceError, Recorder
+from jarvis.voice.confirm import parse_yes_no, spoken_question
 from jarvis.voice.local_stt import DISPLAY_NAME as LOCAL_STT_NAME
 from jarvis.voice.tts import Speaker
 
 _MIN_RECORDING_S = 0.4
+_ANSWER_WAIT_S = 6.0  # silence before a spoken confirmation counts as no
 
 
 class LocalTranscriber(Protocol):
@@ -69,6 +72,9 @@ class AppController:
         # A wake-word conversation: after each reply JARVIS listens again for a while,
         # so follow-ups need no wake word. Silence, typing or a mic problem ends it.
         self._conversation = False
+        # Confirmation buttons in the window (set by main); voice asks alongside them.
+        self._ui_ask: Callable[[ConfirmRequest], Awaitable[bool]] | None = None
+        self._ui_dismiss: Callable[[bool], None] | None = None
         bus.subscribe(PushToTalkPressed, self._on_ptt_pressed)
         bus.subscribe(PushToTalkReleased, self._on_ptt_released)
         bus.subscribe(WakeWordHeard, self._on_wake_word)
@@ -231,6 +237,104 @@ class AppController:
         if spoken and reply.ok and self._voice.speak_replies and self._speaker.available:
             await self._move_to(AppState.SPEAKING)
             await self._speaker.speak(reply.text)
+
+    # --- confirmations ---
+
+    def set_confirm_ui(
+        self, ask: Callable[[ConfirmRequest], Awaitable[bool]], dismiss: Callable[[bool], None]
+    ) -> None:
+        self._ui_ask, self._ui_dismiss = ask, dismiss
+
+    async def confirm(self, request: ConfirmRequest) -> bool:
+        """Ask before a risky step. Medium risk is asked out loud too; the first answer wins."""
+        ui: asyncio.Future[bool] | None = None
+        if self._ui_ask is not None:
+            ui = asyncio.ensure_future(self._ui_ask(request))
+        aloud = (
+            request.risk < Risk.HIGH
+            and self._voice.voice_confirm
+            and self._speaker.available
+            and not self._recorder.recording
+        )
+        if not aloud:
+            return await ui if ui is not None else False
+        voice = asyncio.ensure_future(self._ask_aloud(request.description))
+        waiting: set[asyncio.Future[Any]] = {voice} if ui is None else {voice, ui}
+        done, _pending = await asyncio.wait(waiting, return_when=asyncio.FIRST_COMPLETED)
+        if ui is not None and ui in done:
+            voice.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await voice
+            return ui.result()
+        answer = voice.result()
+        if answer is None:  # no microphone or speech-to-text: the buttons decide
+            return await ui if ui is not None else False
+        if self._ui_dismiss is not None:
+            self._ui_dismiss(answer)
+        return answer
+
+    async def _ask_aloud(self, description: str) -> bool | None:
+        """Ask, listen, and read a yes or no. None if JARVIS can't hear an answer at all."""
+        resume = self._state.state
+        question = spoken_question(description)
+        try:
+            for attempt in range(2):
+                await self._move_to(AppState.SPEAKING)
+                await self._speaker.speak(question)
+                heard = await self._hear_answer()
+                if heard is None:
+                    return None
+                answer = parse_yes_no(heard, asked=question)
+                if answer is not None:
+                    await self._bus.publish(
+                        UserNotice("Confirmation", "You said yes." if answer else "You said no.")
+                    )
+                    return answer
+                if not heard.strip() or attempt == 1:
+                    break
+                question = "Sorry, was that a yes or a no?"
+            await self._move_to(AppState.SPEAKING)
+            await self._speaker.speak("I'll take that as a no.")
+            return False
+        finally:
+            if self._recorder.recording:
+                self._cancel_max_timer()
+                self._recorder.stop()
+            if self._speaker.speaking:
+                self._speaker.stop()
+            if self._state.state in (AppState.SPEAKING, AppState.LISTENING):
+                await self._move_to(AppState.THINKING if resume is not AppState.IDLE else resume)
+
+    async def _hear_answer(self) -> str | None:
+        """Record one hands-free answer and turn it into text ("" if nothing was said)."""
+        loop = asyncio.get_running_loop()
+        finished: asyncio.Future[None] = loop.create_future()
+
+        def done() -> None:
+            if not finished.done():
+                finished.set_result(None)
+
+        try:
+            self._recorder.start(done, no_speech_s=_ANSWER_WAIT_S)
+        except AudioDeviceError:
+            return None
+        await self._move_to(AppState.LISTENING)
+        with contextlib.suppress(TimeoutError):
+            await asyncio.wait_for(finished, timeout=_ANSWER_WAIT_S + 10)
+        heard_speech = self._recorder.heard_speech
+        wav = self._recorder.stop()
+        await self._move_to(AppState.THINKING)
+        if not heard_speech or self._recorder.duration_s(wav) < _MIN_RECORDING_S:
+            return ""
+        try:
+            return (await self._router.transcribe(wav)).text
+        except AllProvidersFailedError:
+            pass
+        local = self._local_stt
+        if local is not None and local.available:
+            with contextlib.suppress(Exception):
+                return await local.transcribe(wav)
+        return None
 
     def stop_speaking(self) -> None:
         self._speaker.stop()

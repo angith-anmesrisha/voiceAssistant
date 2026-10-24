@@ -132,7 +132,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         registry,
         bus,
         state,
-        confirm=window.confirm,
+        confirm=lambda request: controller.confirm(request),
         capture_screen=window.capture_screen,
         history_messages=settings.history_messages,
         max_tool_rounds=settings.tools.max_tool_rounds,
@@ -149,6 +149,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     controller = AppController(
         bus, state, assistant, router, recorder, speaker, settings.voice, WindowsDictation()
     )
+    controller.set_confirm_ui(window.confirm, window.confirm_overlay.settle)
 
     from jarvis.app import keys
     from jarvis.ui.widgets.keys import KeyField

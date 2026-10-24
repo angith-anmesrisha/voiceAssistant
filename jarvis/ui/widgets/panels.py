@@ -260,6 +260,10 @@ class ConfirmOverlay(QWidget):
     def _sync(self) -> None:
         self.allow.setEnabled(self._risk < Risk.HIGH or self.typed.text().strip() == "CONFIRM")
 
+    def settle(self, allowed: bool) -> None:
+        """Answered some other way (out loud): close the card with that answer."""
+        self._finish(allowed)
+
     def _finish(self, allowed: bool) -> None:
         self.hide()
         if self._future is not None and not self._future.done():

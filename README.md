@@ -128,7 +128,7 @@ python -m jarvis --hidden   # starts in the tray
 | Level | Examples | Behaviour |
 |---|---|---|
 | Low | reading an app's window, clicking and typing to move around in it, time, system status, opening installed apps and games, trusted sites, web search, media keys, copy, listing, finding and opening files, creating folders, the clipboard | runs directly |
-| Medium | sending a message, clicking Send/Pay/Delete/Call in an app, typing text, paste, undo, other key combinations, copying, moving or renaming files, deleting a file, untrusted sites, lock, sleep | asks first |
+| Medium | sending a message, clicking Send/Pay/Delete/Call in an app, typing text, paste, undo, other key combinations, copying, moving or renaming files, deleting a file, untrusted sites, lock, sleep | asks out loud: say yes or no (or click) |
 | High | deleting a folder, shutdown or restart (60 s delay, cancellable) | you must type CONFIRM |
 | Blocked | shell commands, running programs or scripts from files, system folders, the registry and system settings, Win+R, Win+X, Ctrl+Alt+Del | no such tool exists, or refused |
 

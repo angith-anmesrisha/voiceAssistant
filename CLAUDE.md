@@ -57,7 +57,7 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   history, screen fast path, otherwise a tool loop with tools + `look_at_screen`,
   confirmations).
 - `voice/`: `audio_io.py` (mic → WAV recorder, `EndOfSpeech` for hands-free), `tts.py`
-  (SAPI on its own thread), `hotkeys.py` (global push-to-talk; Windows hook swallows the
+  (SAPI on its own thread), `confirm.py` (spoken yes/no), `hotkeys.py` (global push-to-talk; Windows hook swallows the
   chord's main key), `local_stt.py` (offline SAPI dictation fallback), `wake_word.py`
   (offline SAPI command grammar for "Jarvis").
 - `controller.py`: glues UI, voice, and assistant; owns busy/listening.
@@ -166,7 +166,12 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   for that long, typing, a too-short clip or a mic error ends it (`ConversationChanged`).
   The window keeps the reply card up and shows "STILL LISTENING" meanwhile. Push-to-talk
   doesn't start a conversation.
-- Medium risk asks Yes/No; High risk requires typing CONFIRM. Shutdown/restart run with a
+- Medium risk asks Yes/No out loud (owner's ask): `AppController.confirm` speaks
+  `spoken_question(description)`, records one hands-free answer (6 s of silence = no),
+  `parse_yes_no` (any no wins; its own question echoed back isn't an answer), asks once
+  more if unclear, then takes it as no. The Yes/No buttons stay up and the first answer
+  wins; with no mic or speech-to-text the buttons decide. `voice.voice_confirm` turns it
+  off. High risk requires typing CONFIRM. Shutdown/restart run with a
   60 s delay and can be cancelled.
 - Screen, web, and file text is treated as information, never instructions (in every prompt).
 - UI follows the owner's reference video: charcoal grid HUD, particle globe + clock when

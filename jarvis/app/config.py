@@ -156,6 +156,9 @@ class VoiceSettings(BaseModel):
     # After answering a wake-word request, keep listening this long for a follow-up
     # without the wake word. 0 turns it off.
     follow_up_s: float = 30.0
+    # Ask Medium-risk confirmations out loud and accept a spoken yes or no (the
+    # buttons still work). High risk always needs CONFIRM typed in the window.
+    voice_confirm: bool = True
 
 
 def _default_apps() -> dict[str, str]:
