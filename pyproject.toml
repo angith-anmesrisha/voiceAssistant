@@ -23,6 +23,7 @@ dependencies = [
     "uiautomation>=2.0.20; sys_platform == 'win32'",
     "pycaw>=20240316; sys_platform == 'win32'",
     "pypdf>=5.0",
+    "python-pptx>=1.0.2",
     "winrt-runtime>=3.0; sys_platform == 'win32'",
     "winrt-Windows.Devices.Radios>=3.0; sys_platform == 'win32'",
     "winrt-Windows.Foundation>=3.0; sys_platform == 'win32'",

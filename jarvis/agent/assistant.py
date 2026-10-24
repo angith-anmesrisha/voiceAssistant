@@ -40,6 +40,7 @@ from jarvis.storage.db import HistoryStore
 from jarvis.storage.memory import Memory
 from jarvis.tools.plugins import is_plugin_tool
 from jarvis.tools.registry import ArgumentError, Risk, ToolRegistry, ToolResult, validate_args
+from jarvis.tools.slides import DeckRequest, deck_command
 from jarvis.voice.spoken_text import without_thinking
 
 
@@ -311,6 +312,9 @@ class Assistant:
         whatsapp = self._whatsapp_request(text)
         if whatsapp is not None:
             return await self._whatsapp(conversation, whatsapp)
+        deck = deck_command(text) if self._registry.get("make_presentation") else None
+        if deck is not None:
+            return await self._presentation(conversation, shown, deck)
         await self._state.transition(AppState.THINKING)
         self._did = set()
         self._carry, self._last_groups = self._last_groups, set()
@@ -363,6 +367,40 @@ class Assistant:
         )
         self._keep(shown, reply)
         return Reply(reply, ok=True, provider=result.provider, model=result.model)
+
+    async def _presentation(self, conversation: int, shown: str, request: DeckRequest) -> Reply:
+        """A slide deck: the tool runs directly (its own free model writes the slides)."""
+        await self._state.transition(AppState.THINKING)
+        self._did = set()
+        args: dict[str, Any] = {"topic": request.topic, "slides": request.slides}
+        if request.source_file:
+            args["source_file"] = request.source_file
+        try:
+            result = await self._run_tool(ToolCall("deck", "make_presentation", args))
+        finally:
+            if self._state.state in (AppState.THINKING, AppState.ACTING):
+                await self._state.transition(AppState.IDLE)
+        reply = result.summary
+        # Labelled with the model that really wrote the slides (none if it failed).
+        model = str(result.data.get("model", "")) or None
+        provider = str(result.data.get("provider", "")) or None
+        await self._store.add_message(
+            conversation,
+            {"role": "assistant", "content": reply},
+            provider=provider,
+            model=model,
+            mode="slides",
+        )
+        await self._emit(
+            EntryKind.ASSISTANT,
+            reply,
+            provider=provider,
+            model=model,
+            mode="slides",
+            failed=not result.ok,
+        )
+        self._keep(shown, reply)
+        return Reply(reply, ok=True)
 
     def _whatsapp_request(self, text: str) -> WhatsAppRequest | None:
         """A WhatsApp message to send without asking a model (it needs none)."""

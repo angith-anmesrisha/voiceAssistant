@@ -315,6 +315,29 @@ class MemorySettings(BaseModel):
     hindsight_bank: str = "jarvis"
 
 
+class SlideSettings(BaseModel):
+    """PowerPoint decks ("make a 15 slide ppt on ..."), written by free models only."""
+
+    # Free OpenRouter models, best first (ids must end in ":free"; others are ignored).
+    # The free list changes often: a model that's gone is skipped.
+    models: list[str] = Field(
+        default_factory=lambda: [
+            "thinkingmachines/inkling:free",
+            "nvidia/nemotron-3-ultra-550b-a55b:free",
+            "qwen/qwen3.8-27b:free",
+            "nvidia/nemotron-3-super-120b-a12b:free",
+            "openrouter/free",
+        ]
+    )
+    # Groq's free tier, for short topic decks when OpenRouter can't ("" = never).
+    groq_model: str = "openai/gpt-oss-120b"
+    timeout_s: float = 240.0
+    max_slides: int = Field(default=30, ge=3, le=60)
+    # Empty = Documents/JARVIS Presentations.
+    folder: str = ""
+    open_when_done: bool = True
+
+
 class Settings(BaseModel):
     log_level: str = "INFO"
     history_messages: int = 20
@@ -325,6 +348,7 @@ class Settings(BaseModel):
     routines: RoutineSettings = Field(default_factory=RoutineSettings)
     dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
+    slides: SlideSettings = Field(default_factory=SlideSettings)
 
 
 def load_settings(path: Path | None = None) -> Settings:

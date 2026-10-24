@@ -47,6 +47,8 @@ _AGENT = (
     "'documents/Projects/notes.txt'); for copy and paste inside apps, use press_shortcut. "
     "To send a WhatsApp message, call send_whatsapp with the contact and the message "
     "(one step; don't use read_ui for it). "
+    "To make a PowerPoint deck, call make_presentation (source_file 'upload' when the user "
+    "will give a file; don't open PowerPoint for it). "
     "To do something else inside an app (send a message, search, fill in a form, pick from a "
     "list), open it, call read_ui to see its controls, then click_element and type_into "
     "by number. Each returns the window afterwards: check it, and keep going step by step "

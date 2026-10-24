@@ -11,12 +11,15 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
+from pathlib import Path
 
 from loguru import logger
 from PySide6.QtCore import QBuffer, QByteArray, QIODevice, QRect, Qt, QTimer
 from PySide6.QtGui import (
     QCloseEvent,
     QColor,
+    QDragEnterEvent,
+    QDropEvent,
     QGuiApplication,
     QImage,
     QImageWriter,
@@ -24,7 +27,7 @@ from PySide6.QtGui import (
     QMouseEvent,
     QPainter,
 )
-from PySide6.QtWidgets import QGraphicsOpacityEffect, QHBoxLayout, QWidget
+from PySide6.QtWidgets import QFileDialog, QGraphicsOpacityEffect, QHBoxLayout, QWidget
 
 from jarvis.agent.assistant import ConfirmRequest, plan_lines
 from jarvis.app.events import (
@@ -150,6 +153,11 @@ class MainWindow(HudBackdrop):
         super().__init__()
         # Esc that no overlay used: stop JARVIS (set by main).
         self.on_escape: Callable[[], None] | None = None
+        # A file dropped on the window ("upload"): set by main.
+        self.on_file_dropped: Callable[[Path], None] | None = None
+        self._picking: asyncio.Future[Path | None] | None = None
+        self._picker: QFileDialog | None = None
+        self.setAcceptDrops(True)
         self.setWindowTitle("JARVIS")
         self.setMinimumSize(1100, 700)
         self.resize(1360, 840)
@@ -746,6 +754,76 @@ class MainWindow(HudBackdrop):
         self.confirm_overlay.setGeometry(self.rect())
         self.keys_overlay.setGeometry(self.rect())
         self.details.setGeometry(self.rect())
+
+    # --- files given to JARVIS ("upload") ---
+
+    @staticmethod
+    def _dropped_file(event: QDragEnterEvent | QDropEvent) -> Path | None:
+        for url in event.mimeData().urls():
+            if url.isLocalFile():
+                path = Path(url.toLocalFile())
+                if path.is_file():
+                    return path
+        return None
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
+        if self._dropped_file(event) is not None:
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802
+        path = self._dropped_file(event)
+        if path is None:
+            event.ignore()
+            return
+        event.acceptProposedAction()
+        if self._picking is not None and not self._picking.done():
+            self._picking.set_result(path)  # dropped while the picker was open
+            if self._picker is not None:
+                self._picker.close()
+            return
+        if self.on_file_dropped is not None:
+            self.on_file_dropped(path)
+
+    async def pick_file(self, title: str = "Choose a file for JARVIS") -> Path | None:
+        """Ask for a file: a file picker, or a file dropped on the window meanwhile."""
+        if self._picking is not None and not self._picking.done():
+            return await asyncio.shield(self._picking)
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[Path | None] = loop.create_future()
+        self._picking = future
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
+        dialog = QFileDialog(self, title, str(Path.home() / "Downloads"))
+        dialog.setFileMode(QFileDialog.FileMode.ExistingFile)
+        dialog.setNameFilters(
+            [
+                "Documents (*.pdf *.docx *.pptx *.xlsx *.txt *.md *.csv)",
+                "All files (*)",
+            ]
+        )
+
+        def chosen(name: str) -> None:
+            if not future.done():
+                future.set_result(Path(name) if name else None)
+
+        def closed(_result: int) -> None:
+            if not future.done():
+                future.set_result(None)
+
+        dialog.fileSelected.connect(chosen)
+        dialog.finished.connect(closed)
+        self._picker = dialog
+        dialog.open()
+        try:
+            return await future
+        finally:
+            self._picker = None
+            if dialog.isVisible():
+                dialog.close()
+            dialog.deleteLater()
 
     def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802
         if event.key() == Qt.Key.Key_Escape and self.on_escape is not None:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,7 @@ from jarvis.tools.pc import register_pc_tools
 from jarvis.tools.personal import register_personal_tools
 from jarvis.tools.registry import Risk, ToolRegistry, ToolResult, ToolSpec
 from jarvis.tools.shortcuts import SHORTCUTS, KeyComboError, combo_risk, parse_combo
+from jarvis.tools.slides import DeckWriter, PickFn, register_slide_tools
 from jarvis.tools.steam import SteamGame
 from jarvis.tools.system_ctl import SystemControl
 from jarvis.tools.ui import (
@@ -77,6 +79,15 @@ def _keys_risk(keys: str) -> Risk:
         return Risk.LOW  # refused when run, so nothing to confirm
 
 
+@dataclass(frozen=True, slots=True)
+class SlideTools:
+    writer: DeckWriter
+    folder: Path
+    pick_file: PickFn | None = None
+    open_when_done: bool = True
+    max_slides: int = 30
+
+
 def build_registry(
     settings: ToolSettings,
     desktop: Desktop,
@@ -93,6 +104,7 @@ def build_registry(
     describe_image: DescribeFn | None = None,
     code_folder: Path | None = None,
     memory: Memory | None = None,
+    slides: SlideTools | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     journal = undo if undo is not None else UndoJournal()
@@ -538,6 +550,16 @@ def build_registry(
         news_locale=settings.news_locale,
         memory=memory,
     )
+    if slides is not None:
+        register_slide_tools(
+            registry,
+            slides.writer,
+            area,
+            slides.folder,
+            pick_file=slides.pick_file,
+            open_file=desktop.open_path if slides.open_when_done else None,
+            max_slides=slides.max_slides,
+        )
     if http is not None:
         register_live_tools(
             registry, http, keep, locale=settings.news_locale, home_place=settings.home_place

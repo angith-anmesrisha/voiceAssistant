@@ -76,6 +76,10 @@ _GROUPS: dict[str, re.Pattern[str]] = {
         r"jokes?|funny|make me laugh|tell me about|who (is|was)|history of)\b",
         re.IGNORECASE,
     ),
+    "slides": re.compile(
+        r"\b(ppt|pptx|power ?point|presentations?|slides?|slide ?deck|deck|keynote)\b",
+        re.IGNORECASE,
+    ),
     "reminders": re.compile(
         r"\b(remind|reminder|reminders|timer|alarm|wake me|in \d+ (sec|second|min|minute|"
         r"hour)s?|at \d{1,2}(:\d\d)?\s*(am|pm)?|tomorrow|tonight|later|schedule|"

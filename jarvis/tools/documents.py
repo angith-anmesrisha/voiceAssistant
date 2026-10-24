@@ -102,7 +102,7 @@ def _pdf(path: Path, max_pages: int = 40) -> str:
     return "\n".join(pages)
 
 
-def read_text(path: Path, limit: int = MAX_CHARS) -> tuple[str, bool]:
+def read_text(path: Path, limit: int = MAX_CHARS, *, pdf_pages: int = 40) -> tuple[str, bool]:
     """The document's text (cut to ``limit`` characters) and whether it was cut."""
     if not path.is_file():
         raise DocumentError(f"{path.name} isn't a file")
@@ -119,7 +119,7 @@ def read_text(path: Path, limit: int = MAX_CHARS) -> tuple[str, bool]:
         elif suffix == ".pptx":
             text = _pptx(path)
         elif suffix == ".pdf":
-            text = _pdf(path)
+            text = _pdf(path, pdf_pages)
         else:
             raise DocumentError(f"JARVIS can't read {suffix or 'that kind of'} files yet")
     except (zipfile.BadZipFile, KeyError, ElementTree.ParseError) as exc:

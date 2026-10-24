@@ -78,6 +78,8 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   weather, look_up and watch_topic tools), `windows.py` (`WindowsWindows`: EnumWindows,
   raise, polite WM_CLOSE; never JARVIS or the shell), `system_ctl.py` (`WindowsSystem`:
   volume via pycaw, brightness via WMI, wallpaper via SystemParametersInfo),
+  `slides.py` (`deck_command` local parser, `DeckWriter`: free models only, `parse_deck`,
+  `make_presentation`), `deck_render.py` (python-pptx drawing: `THEMES`, `LAYOUTS`, `render`),
   `documents.py` (`read_text`: text, docx, xlsx, pptx, pdf via pypdf), `pc.py`
   (read_document, save_text, organize_desktop, close_app, set_volume/brightness/
   wallpaper, all undoable), `builtin.py` (the tool set; `ToolSpec.group`).
@@ -212,6 +214,18 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 - Undo (`undo_last`, LOW): reverses JARVIS's own last move/rename/copy (copy → Recycle
   Bin)/new folder (only while empty)/new text file (→ Recycle Bin)/desktop tidy-up (one
   step)/volume, mute, brightness or wallpaper change, session only, 30 steps.
+- PowerPoint decks (owner, 2026-10-24: "only use free models", "dont use bad models like
+  gemini"): `make_presentation` (LOW, group "slides") makes one JSON call (`DECK_PROMPT`,
+  `json_mode`) to `slides.models` on OpenRouter (inkling, nemotron-3-ultra, qwen3.8-27b,
+  nemotron-3-super, openrouter/free; `is_free`: ids ending ":free" or "openrouter/free",
+  anything else is dropped), then Groq `openai/gpt-oss-120b` only when the prompt is ≤5,500
+  chars (8K TPM). Never Gemini or Ollama. `parse_deck` cleans the JSON and downgrades a
+  layout missing its content to bullets; `deck_render` draws every slide from shapes on a
+  blank 16:9 layout (6 themes, 10 layouts, notes), `open("xb")` so it never overwrites.
+  Sources are read with `read_text` (400 PDF pages) and sampled by `excerpt` (12 segments,
+  120K chars). "Upload" = a file dropped on the window in the last 10 min, else a
+  QFileDialog. Clear requests go through `deck_command` without a chat model (mode
+  "slides"); the reply names the model that actually wrote the deck.
 - `open_app` raises an already-open window instead of launching again, and after
   launching waits up to 8 s for a window, so the reply says whether it really appeared.
   `close_app` sends WM_CLOSE (like the X) and reports windows still open (unsaved work).
@@ -411,6 +425,9 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   draw their own UI (games, some Electron/canvas apps) expose few controls, so the model
   falls back to `look_at_screen`. A long app task uses many tokens (Groq's free tier
   then hands over to the backup models).
+- The deck maker, the file picker and drag-and-drop are untested on Windows; OpenRouter's
+  free model list changes, so `slides.models` may need updating (`openrouter/free` is the
+  catch-all).
 - No settings window yet; edit `settings.json` in the data dir.
 - File tools, clipboard, the Recycle Bin call and window-title context are untested on
   real Windows. `press_keys`/`type_text` could still drive an address bar; both ask first

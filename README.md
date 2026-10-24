@@ -186,6 +186,15 @@ python -m jarvis --hidden   # starts in the tray
   space.png my wallpaper", "close Spotify". If an app is already open it is brought to
   the front instead of opened twice, and JARVIS only says an app opened once its
   window has actually appeared.
+- **PowerPoint decks, free models only.** "Make a 12 slide presentation on black holes",
+  or "make a 20 slide ppt for the pdf I'll upload": a file picker opens (or drop the file
+  on the JARVIS window first, then ask). The deck is written by a free OpenRouter model
+  (needs `OPENROUTER_API_KEY`, free at openrouter.ai/settings/keys; about 50 decks a day
+  without credit), with Groq's free GPT-OSS 120B as the backup for short topics. Never
+  Gemini, Ollama or a paid model. JARVIS draws it as a real .pptx (16:9, six themes,
+  title, section, cards, stats, timeline, comparison table, quote and closing slides,
+  speaker notes on every slide), saves it in Documents\JARVIS Presentations and opens it.
+  PDF, Word, PowerPoint, Excel, text and Markdown files can be the source.
 - **WhatsApp messages.** Ask "send Mom a WhatsApp message saying I'll be late": after
   one Yes, JARVIS brings WhatsApp to the front, searches for the chat (Ctrl+F), opens
   it, pastes the message and presses Enter. It stops if WhatsApp isn't the window in
@@ -270,7 +279,10 @@ otherwise). You can change provider priority, model names, timeouts and retries,
 apps, trusted sites, the hotkeys (`hotkeys.push_to_talk`, default ``alt+` ``;
 `hotkeys.dictation`, default ``alt+shift+` ``), the wake word (`voice.wake_word`,
 `voice.wake_phrases`, `voice.wake_min_confidence`: `low`, `normal` or `high`), how long it keeps listening for
-follow-ups (`voice.follow_up_s`, 0 to turn off) and the voice (see above). Conversation history is stored in
+follow-ups (`voice.follow_up_s`, 0 to turn off), the voice (see above) and the deck maker
+(`slides.models`: free OpenRouter models tried in order, ids ending in `:free` only;
+`slides.groq_model`; `slides.max_slides`, default 30; `slides.folder`;
+`slides.open_when_done`). Conversation history is stored in
 `%LOCALAPPDATA%\JARVIS\jarvis.sqlite3`; logs are in `%LOCALAPPDATA%\JARVIS\logs` and never
 contain your messages, audio or keys.
 

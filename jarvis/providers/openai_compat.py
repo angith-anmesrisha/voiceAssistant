@@ -274,6 +274,41 @@ class OpenAICompatibleProvider(Provider):
             message={"role": "assistant", "content": message.get("content") or ""},
         )
 
+    async def complete(
+        self,
+        model: str,
+        messages: list[Message],
+        *,
+        max_tokens: int,
+        timeout_s: float,
+        json_mode: bool = False,
+    ) -> ChatResult:
+        """One long answer from one named model, no tools (e.g. writing a slide deck)."""
+        body: dict[str, Any] = {"model": model, "messages": messages, "max_tokens": max_tokens}
+        if effort := self.reasoning_for(model):
+            body["reasoning_effort"] = effort
+        if json_mode:
+            body["response_format"] = {"type": "json_object"}
+        data = await self._post("chat/completions", json=body, timeout_s=timeout_s)
+        try:
+            choice = data["choices"][0]
+            content = str(choice["message"].get("content") or "").strip()
+        except (KeyError, IndexError, TypeError, AttributeError) as exc:
+            raise ProviderError(
+                self.display_name, ErrorKind.UNAVAILABLE, "reply had no message"
+            ) from exc
+        if choice.get("finish_reason") == "length":
+            raise ProviderError(
+                self.display_name, ErrorKind.UNAVAILABLE, f"{model} ran out of room mid-answer"
+            )
+        return ChatResult(
+            provider=self.display_name,
+            model=str(data.get("model") or model),
+            content=content,
+            tool_calls=[],
+            message={"role": "assistant", "content": content},
+        )
+
     def adopt(self, model: str) -> None:
         self._cooling.pop(model, None)
         self._dead.discard(model)

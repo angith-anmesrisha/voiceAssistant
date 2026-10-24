@@ -84,3 +84,12 @@ def documents_dir() -> Path:
         except Exception:
             pass
     return Path.home() / "Documents"
+
+
+def presentations_dir(configured: str = "") -> Path:
+    """Where new decks go: ``slides.folder``, else Documents/JARVIS Presentations."""
+    if configured.strip():
+        return Path(os.path.expandvars(configured.strip())).expanduser()
+    if os.environ.get("JARVIS_DATA_DIR"):
+        return data_dir() / "presentations"
+    return documents_dir() / "JARVIS Presentations"

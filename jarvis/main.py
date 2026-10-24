@@ -7,6 +7,9 @@ import asyncio
 import contextlib
 import signal
 import sys
+import time
+from collections.abc import Awaitable, Callable
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import qasync
@@ -41,6 +44,7 @@ if TYPE_CHECKING:
     from jarvis.storage.db import HistoryStore
     from jarvis.storage.keep import Keep
     from jarvis.storage.memory import Memory
+    from jarvis.tools.builtin import SlideTools
 
 
 def _parse_args(argv: list[str]) -> argparse.Namespace:
@@ -150,6 +154,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         describe_image=lambda photo, question: _describe_photo(router, photo, question),
         code_folder=code_dir() if settings.tools.code_runner else None,
         memory=memory,
+        slides=_slide_tools(settings, router, lambda: pick_upload(), bus, spawn),
     )
 
     hotkey_label = "+".join(
@@ -278,6 +283,24 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
 
     # Esc in JARVIS's window stops it (only there: Esc belongs to every other app).
     window.on_escape = lambda: spawn(stop_jarvis())
+
+    # Files given to JARVIS ("upload"): dropped on the window, or picked when asked.
+    dropped: list[tuple[Path, float]] = []
+
+    async def pick_upload() -> Path | None:
+        if dropped and time.monotonic() - dropped[-1][1] < 600:
+            return dropped.pop()[0]
+        return await window.pick_file("Choose the file for JARVIS")
+
+    def on_drop(path: Path) -> None:
+        dropped[:] = [(path, time.monotonic())]
+        notice = UserNotice(
+            "File received",
+            f"Got {path.name}. Now say what to do with it, e.g. “make a 15 slide ppt from it”.",
+        )
+        spawn(bus.publish(notice))
+
+    window.on_file_dropped = on_drop
 
     tray = Tray(
         bus,
@@ -588,6 +611,36 @@ def _routines(
             )
         )
     return jobs
+
+
+def _slide_tools(
+    settings: Settings,
+    router: ProviderRouter,
+    pick_file: Callable[[], Awaitable[Path | None]],
+    bus: Any,
+    spawn: Callable[[Any], Any],
+) -> SlideTools:
+    """PowerPoint decks, written only by free models (OpenRouter's, then Groq's)."""
+    from jarvis.app.paths import presentations_dir
+    from jarvis.tools.builtin import SlideTools
+    from jarvis.tools.slides import DeckWriter
+
+    plan = settings.slides
+    writer = DeckWriter(
+        router.provider("openrouter"),
+        router.provider("groq"),
+        plan.models,
+        groq_model=plan.groq_model,
+        timeout_s=plan.timeout_s,
+        notify=lambda text: spawn(bus.publish(UserNotice("Slides", text))),
+    )
+    return SlideTools(
+        writer,
+        presentations_dir(plan.folder),
+        pick_file=pick_file,
+        open_when_done=plan.open_when_done,
+        max_slides=plan.max_slides,
+    )
 
 
 def _long_memory(settings: Settings, client: httpx.AsyncClient) -> Memory | None:
