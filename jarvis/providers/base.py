@@ -130,3 +130,16 @@ class Provider(ABC):
 
     @abstractmethod
     async def transcribe(self, wav: bytes) -> Transcription: ...
+
+    # --- self-test ("test the AI providers") ---
+
+    def diagnostic_models(self) -> list[str]:
+        """Chat models to test, in order (the one in use first)."""
+        return [self.model_for(Capability.CHAT)]
+
+    async def ping(self, model: str, prompt: str, timeout_s: float) -> ChatResult:
+        """One tiny request to one model, no tools and no fallback."""
+        return await self.chat([{"role": "user", "content": prompt}])
+
+    def adopt(self, model: str) -> None:  # noqa: B027 (optional hook)
+        """Use ``model`` for chat from now on (it just passed the self-test)."""

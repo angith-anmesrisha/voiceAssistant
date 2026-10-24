@@ -89,20 +89,26 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   `reasoning_effort: "none"`), then `openai/gpt-oss-120b` ("low") and
   `llama-3.3-70b-versatile` (no reasoning field) for chat when qwen is rate-limited; STT
   `whisper-large-v3-turbo` with `verbose_json`, dropping segments with no_speech_prob ≥ 0.6
-  or avg_logprob ≤ -1 (Whisper invents "I'm going to go." from silence). Gemini
-  `gemini-3.8-flash` ("low"), then 3.5 Flash-Lite, 3.6 Flash, 2.5 Flash ("none" only
-  there): 2.5 was timing out/overloaded and is legacy-limited. Every request sends
+  or avg_logprob ≤ -1 (Whisper invents "I'm going to go." from silence). Gemini (the
+  backup, so fast first) `gemini-3.5-flash-lite` ("low"), then 3.8 Flash (timed out on the
+  owner's key in the self-test), 3.6 Flash, 2.5 Flash ("none" only there; legacy access).
+  `qwen3.5:latest` is the 9B (~7 GB) and took 33 s for "OK" on the owner's Iris Xe
+  laptop; `qwen3.5:4b` is the suggested faster local model. Every request sends
   `max_tokens` (`max_output_tokens`, 2048): without it Groq counted the model's full output
   limit against 8K TPM and answered 429 every time. Tool text is kept small (no shortcut
   catalogue, path help once in the prompt): ~2.3K tokens.
 - Model fallback inside a provider: 404/"model not found" → model dropped for the session;
-  429 → model cools down 60 s; 503 → next model now; timeout, auth, billing, bad request →
+  429 → model cools down 60 s; timeout → model cools down 5 min (and the router moves on);
+  503 → next model now; timeout, auth, billing, bad request →
   raise (the router moves to the next provider). An error naming several models lists each.
   Replies cut off at the limit (`finish_reason: length`) end with "…".
 - Diagnostics: "test the AI providers" / "run diagnostics" (or the TEST AI PROVIDERS button)
-  probes each provider and sends "Reply with just the word OK." (no retries, no fallback),
-  then reports each one's model and time, or its exact error and whose side it is on
-  (`Diagnosis.blame`: account, service, network, setup, jarvis).
+  probes each provider and pings its models in turn ("Reply with just the word OK.", 30 s
+  each, no tools) until one answers; that model is adopted for chat. Stops early on
+  auth/billing errors. Reports model and time, or each model's exact error and whose side
+  it is on (`Diagnosis.blame`: account, service, network, setup, jarvis).
+- settings.json may override single provider fields (`{"providers": {"ollama":
+  {"chat_model": "qwen3.5:4b"}}}`); the rest is filled from the defaults.
 - Prompt Guard (owner asked for `meta-llama/llama-prompt-guard-2-86m` on Groq): it is a
   classifier, not a chat model, so it screens text, never answers. `providers.groq.
   guard_model`/`guard_threshold` (0.8). Results of `UNTRUSTED_TOOLS` (clipboard, folder

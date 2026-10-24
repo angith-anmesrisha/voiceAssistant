@@ -37,6 +37,7 @@ _ERROR_STATE = {
 
 
 _PING = "Reply with just the word OK."
+_PING_TIMEOUT_S = 30.0  # longer than a normal request: this is to find out, not to chat
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,6 +48,7 @@ class Diagnosis:
     ms: int
     detail: str  # the reply, or the provider's exact error
     blame: str  # "" | "account" | "service" | "network" | "setup" | "jarvis"
+    tried: tuple[tuple[str, str], ...] = ()  # (model, error) for models that failed
 
 
 def _blame(error: ProviderError) -> str:
@@ -240,24 +242,38 @@ class ProviderRouter:
         """Send a tiny request to every provider (no retries, no fallback) and report."""
 
         async def check(provider: Provider) -> Diagnosis:
+            name = provider.display_name
             status = await provider.probe()
             self._set_status(provider.name, status)
             if status.state in (ProviderState.NO_KEY, ProviderState.DISABLED):
-                return Diagnosis(provider.display_name, "", False, 0, status.detail, "setup")
+                return Diagnosis(name, "", False, 0, status.detail, "setup")
             if status.state is ProviderState.OFFLINE and provider.name == "ollama":
-                return Diagnosis(provider.display_name, "", False, 0, status.detail, "setup")
-            started = time.perf_counter()
-            try:
-                result = await provider.chat([{"role": "user", "content": _PING}])
-            except ProviderError as exc:
+                return Diagnosis(name, "", False, 0, status.detail, "setup")
+            # Each model in turn until one answers: a key can work with one model and not
+            # another, and the one that works is used from then on.
+            tried: list[tuple[str, str]] = []
+            last: ProviderError | None = None
+            for model in provider.diagnostic_models():
+                started = time.perf_counter()
+                try:
+                    result = await provider.ping(model, _PING, _PING_TIMEOUT_S)
+                except ProviderError as exc:
+                    tried.append((model, exc.message))
+                    last = exc
+                    if exc.kind in (ErrorKind.AUTH, ErrorKind.NO_KEY) or any(
+                        code in exc.message for code in ("FAILED_PRECONDITION", "PERMISSION")
+                    ):
+                        break  # the key or account is the problem: no model will work
+                    continue
+                except Exception as exc:  # a bug on our side: say so
+                    return Diagnosis(name, model, False, 0, type(exc).__name__, "jarvis")
                 ms = int((time.perf_counter() - started) * 1000)
-                model = provider.model_for(Capability.CHAT)
-                return Diagnosis(provider.display_name, model, False, ms, exc.message, _blame(exc))
-            except Exception as exc:  # a bug on our side: say so
-                return Diagnosis(provider.display_name, "", False, 0, type(exc).__name__, "jarvis")
-            ms = int((time.perf_counter() - started) * 1000)
-            self._set_status(provider.name, ProviderStatus(ProviderState.READY, latency_ms=ms))
-            return Diagnosis(provider.display_name, result.model, True, ms, result.content, "")
+                provider.adopt(model)
+                self._set_status(provider.name, ProviderStatus(ProviderState.READY, latency_ms=ms))
+                return Diagnosis(name, result.model, True, ms, result.content, "", tuple(tried))
+            assert last is not None
+            model, detail = tried[-1] if len(tried) == 1 else ("", last.message)
+            return Diagnosis(name, model, False, 0, detail, _blame(last), tuple(tried))
 
         providers = [self._providers[name] for name in self._priority]
         return list(await asyncio.gather(*(check(p) for p in providers)))

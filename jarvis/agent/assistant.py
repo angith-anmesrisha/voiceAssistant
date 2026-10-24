@@ -393,15 +393,20 @@ _BLAME = {
 def diagnosis_report(results: list[Diagnosis]) -> str:
     lines = ["I sent each AI a one-word test."]
     for r in results:
+        failed = "; ".join(f"{model}: {error}" for model, error in r.tried)
         if r.ok:
             seconds = f"{r.ms / 1000:.1f} s"
-            lines.append(f"{r.provider}: working ({r.model}, answered in {seconds}).")
+            line = f"{r.provider}: working ({r.model}, answered in {seconds})."
+            if failed:
+                line += f" Using it from now on, because {failed}."
+            lines.append(line)
             continue
-        where = f" with {r.model}" if r.model else ""
-        lines.append(
-            f"{r.provider}: not working{where}. It said: {r.detail}. "
-            + _BLAME.get(r.blame, "").format(p=r.provider)
-        )
+        if len(r.tried) > 1:
+            said = f"none of its models answered ({failed})"
+        else:
+            where = f" with {r.model}" if r.model else ""
+            said = f"not working{where}. It said: {r.detail}"
+        lines.append(f"{r.provider}: {said}. " + _BLAME.get(r.blame, "").format(p=r.provider))
     if not any(r.ok for r in results):
         lines.append("None of them answered, so I can't reply to requests until one works.")
     return "\n".join(lines)

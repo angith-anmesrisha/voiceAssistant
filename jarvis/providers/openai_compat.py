@@ -111,6 +111,7 @@ _MODEL_GONE = (
 
 
 _COOL_DOWN_S = 60.0
+_SLOW_COOL_DOWN_S = 300.0
 
 
 def _combined(provider: str, errors: list[tuple[str, ProviderError]]) -> ProviderError:
@@ -237,6 +238,42 @@ class OpenAICompatibleProvider(Provider):
     def reasoning_for(self, model: str) -> str:
         return self.settings.reasoning_effort
 
+    def diagnostic_models(self) -> list[str]:
+        names = [
+            self.model_for(Capability.CHAT),
+            self.configured_model(Capability.CHAT),
+            *self.fallbacks_for(Capability.CHAT),
+        ]
+        return list(dict.fromkeys(n for n in names if n))
+
+    async def ping(self, model: str, prompt: str, timeout_s: float) -> ChatResult:
+        body: dict[str, Any] = {
+            "model": model,
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": 64,
+        }
+        if effort := self.reasoning_for(model):
+            body["reasoning_effort"] = effort
+        data = await self._post("chat/completions", json=body, timeout_s=timeout_s)
+        try:
+            message = data["choices"][0]["message"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise ProviderError(
+                self.display_name, ErrorKind.UNAVAILABLE, "reply had no message"
+            ) from exc
+        return ChatResult(
+            provider=self.display_name,
+            model=str(data.get("model") or model),
+            content=(message.get("content") or "").strip(),
+            tool_calls=[],
+            message={"role": "assistant", "content": message.get("content") or ""},
+        )
+
+    def adopt(self, model: str) -> None:
+        self._cooling.pop(model, None)
+        self._dead.discard(model)
+        self._use_model(Capability.CHAT, model)
+
     def outgoing(self, messages: list[Message]) -> list[Message]:
         """Messages as this provider accepts them."""
         return strip_extra_content(messages)
@@ -254,14 +291,16 @@ class OpenAICompatibleProvider(Provider):
 
     # --- HTTP ---
 
-    async def _post(self, path: str, **kwargs: Any) -> dict[str, Any]:
+    async def _post(
+        self, path: str, *, timeout_s: float | None = None, **kwargs: Any
+    ) -> dict[str, Any]:
         if (reason := self.missing_config()) is not None:
             raise ProviderError(self.display_name, ErrorKind.NO_KEY, reason)
         try:
             response = await self._client.post(
                 self._url(path),
                 headers=self._headers(),
-                timeout=self.settings.timeout_s,
+                timeout=timeout_s or self.settings.timeout_s,
                 **kwargs,
             )
         except httpx.TimeoutException as exc:
@@ -354,6 +393,11 @@ class OpenAICompatibleProvider(Provider):
                     self._dead.add(model)  # this account can't use it: never again
                 elif exc.kind is ErrorKind.QUOTA:
                     self._cooling[model] = time.monotonic() + _COOL_DOWN_S
+                elif exc.kind is ErrorKind.TIMEOUT:
+                    # Too slow now: start the next requests on another model, and let the
+                    # router try the next provider for this one.
+                    self._cooling[model] = time.monotonic() + _SLOW_COOL_DOWN_S
+                    raise _combined(self.display_name, errors) from exc
                 elif exc.kind is not ErrorKind.UNAVAILABLE:
                     # Key, billing or a bad request: another model won't help. A timeout
                     # already cost the user 20 s: let the router try the next provider.

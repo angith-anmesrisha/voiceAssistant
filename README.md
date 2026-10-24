@@ -39,6 +39,10 @@ More renders (listening, thinking, speaking, executing, confirmations, offline) 
    isn't installed, any other installed model that can see images is used for the screen.
    If local replies stop mid-sentence, give Ollama more room: set the user environment
    variable `OLLAMA_CONTEXT_LENGTH` to `8192` and restart Ollama.
+   `qwen3.5:latest` is the 9B model (about 7 GB). On a laptop without a graphics card,
+   `qwen3.5:4b` answers several times faster: run `ollama pull qwen3.5:4b`, then put this
+   in `%LOCALAPPDATA%\JARVIS\settings.json`:
+   `{"providers": {"ollama": {"chat_model": "qwen3.5:4b", "vision_model": "qwen3.5:4b"}}}`
 
 ## Run
 
@@ -74,7 +78,8 @@ python -m jarvis --hidden   # starts in the tray
   who it's asking ("Groq didn't answer, asking Gemini…"), and a note says why a backup
   answered.
 - **Something not answering?** Say or type "test the AI providers", or press TEST AI
-  PROVIDERS in the details panel. Each AI gets a one-word request, and JARVIS tells you
+  PROVIDERS in the details panel. Each AI gets a one-word request (each of its models in
+  turn, until one answers; that one is used from then on), and JARVIS tells you
   exactly what each one said back and whether the problem is on your account (key, quota,
   billing), on their servers, your network, or JARVIS.
 - If a command **can't be carried out** (a tool fails, you decline it, JARVIS says it

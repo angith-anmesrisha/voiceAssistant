@@ -9,9 +9,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import Any
 
 from loguru import logger
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from jarvis.app.paths import settings_file
 
@@ -72,17 +73,14 @@ def _gemini() -> ProviderSettings:
     return ProviderSettings(
         base_url="https://generativelanguage.googleapis.com/v1beta/openai",
         api_key_env="GEMINI_API_KEY",
-        # The owner asked for 2.5 models. ai.google.dev/gemini-api/docs/deprecations
-        # (2026-10-23): still served, but only to accounts that used 2.5 before; if yours
-        # reports the model missing, set these back to "gemini-3.8-flash".
-        # Current stable Flash (ai.google.dev/gemini-api/docs/models, 2026-10-23). 2.5 is
-        # only served to accounts that used it before and was timing out/overloaded, so it
-        # is the last fallback now. A model that is busy, slow, rate-limited or missing for
-        # this key is skipped for the next one automatically.
-        chat_model="gemini-3.8-flash",
-        vision_model="gemini-3.8-flash",
-        stt_model="gemini-3.8-flash",
-        fallback_models=["gemini-3.5-flash-lite", "gemini-3.6-flash", "gemini-2.5-flash"],
+        # Gemini is the backup, so it should answer fast: 3.5 Flash-Lite is Google's fastest
+        # current model (ai.google.dev/gemini-api/docs/models, 2026-10-24), then 3.8 Flash
+        # (timed out on the owner's key), 3.6 Flash, and 2.5 Flash (legacy access only).
+        # A model that is slow, busy, rate-limited or missing for the key is skipped.
+        chat_model="gemini-3.5-flash-lite",
+        vision_model="gemini-3.5-flash-lite",
+        stt_model="gemini-3.5-flash-lite",
+        fallback_models=["gemini-3.8-flash", "gemini-3.6-flash", "gemini-2.5-flash"],
         # "none" disables thinking on 2.5 Flash; 3.x models get "low" (they can't turn it off).
         reasoning_effort="none",
     )
@@ -114,6 +112,18 @@ class ProvidersConfig(BaseModel):
     ollama: ProviderSettings = Field(default_factory=_ollama)
     # How often to re-check network and provider availability.
     probe_interval_s: float = 20.0
+
+    @model_validator(mode="before")
+    @classmethod
+    def _fill_in_defaults(cls, data: Any) -> Any:
+        """Let settings.json change just one field, e.g. {"ollama": {"chat_model": ...}}."""
+        if isinstance(data, dict):
+            data = dict(data)
+            for name, default in (("groq", _groq), ("gemini", _gemini), ("ollama", _ollama)):
+                part = data.get(name)
+                if isinstance(part, dict):
+                    data[name] = {**default().model_dump(), **part}
+        return data
 
     def get(self, name: str) -> ProviderSettings:
         settings = getattr(self, name, None)

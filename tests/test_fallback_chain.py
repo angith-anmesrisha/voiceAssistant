@@ -115,10 +115,10 @@ async def test_gemini_switches_to_a_model_the_key_can_use(
     def handler(request: httpx.Request) -> httpx.Response:
         body = json.loads(request.content)
         sent.append(body)
-        if body["model"] == "gemini-3.8-flash":
-            message = "models/gemini-3.8-flash is not found for API version v1main"
-            return httpx.Response(404, json=[{"error": {"message": message}}])
         if body["model"] == "gemini-3.5-flash-lite":
+            message = "models/gemini-3.5-flash-lite is not found for API version v1main"
+            return httpx.Response(404, json=[{"error": {"message": message}}])
+        if body["model"] == "gemini-3.8-flash":
             return httpx.Response(503, json=[{"error": {"message": "The model is overloaded."}}])
         return reply("Hello.", model=body["model"])
 
@@ -127,10 +127,10 @@ async def test_gemini_switches_to_a_model_the_key_can_use(
     )["gemini"]
     monkeypatch.setenv("GEMINI_API_KEY", "k")
     result = await gemini.chat([{"role": "user", "content": "hi"}])
-    # 3.8 Flash missing for this key, 3.5 Flash-Lite overloaded: 3.6 Flash answers.
+    # 3.5 Flash-Lite missing for this key, 3.8 Flash overloaded: 3.6 Flash answers.
     assert [b["model"] for b in sent] == [
-        "gemini-3.8-flash",
         "gemini-3.5-flash-lite",
+        "gemini-3.8-flash",
         "gemini-3.6-flash",
     ]
     assert result.model == "gemini-3.6-flash"
@@ -143,7 +143,7 @@ async def test_gemini_switches_to_a_model_the_key_can_use(
 
 async def test_gemini_probe_picks_an_available_model(monkeypatch: pytest.MonkeyPatch) -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        ids = ["models/gemini-3.5-flash-lite", "models/gemini-3.6-flash"]
+        ids = ["models/gemini-3.8-flash", "models/gemini-3.6-flash"]
         return httpx.Response(200, json={"data": [{"id": i} for i in ids]})
 
     monkeypatch.setenv("GEMINI_API_KEY", "k")
@@ -152,8 +152,8 @@ async def test_gemini_probe_picks_an_available_model(monkeypatch: pytest.MonkeyP
     )["gemini"]
     status = await gemini.probe()
     assert status.state is ProviderState.READY
-    assert gemini.model_for(Capability.CHAT) == "gemini-3.5-flash-lite"
-    assert gemini.model_for(Capability.STT) == "gemini-3.5-flash-lite"
+    assert gemini.model_for(Capability.CHAT) == "gemini-3.8-flash"
+    assert gemini.model_for(Capability.STT) == "gemini-3.8-flash"
 
 
 async def test_thought_signatures_survive_only_where_understood(
@@ -301,7 +301,12 @@ async def test_a_timeout_does_not_try_every_model(monkeypatch: pytest.MonkeyPatc
     )["gemini"]
     with pytest.raises(Exception, match="timed out"):
         await gemini.chat([{"role": "user", "content": "hi"}])
-    assert sent == ["gemini-3.8-flash"]  # the next provider gets a turn instead
+    assert sent == ["gemini-3.5-flash-lite"]  # the next provider gets a turn instead
+    # ... and the slow model waits five minutes: the next request starts on another one.
+    sent.clear()
+    with pytest.raises(Exception, match="timed out"):
+        await gemini.chat([{"role": "user", "content": "again"}])
+    assert sent == ["gemini-3.8-flash"]
 
 
 @pytest.mark.parametrize(
@@ -344,7 +349,8 @@ async def test_diagnostics_report_says_whose_side(monkeypatch: pytest.MonkeyPatc
         ("Ollama", True, ""),
     ]
     text = diagnosis_report(results)
-    assert "Groq: not working" in text and "Rate limit reached" in text
+    assert "Groq: none of its models answered" in text and "Rate limit reached" in text
+    assert "llama-3.3-70b-versatile: HTTP 429" in text  # every Groq model was tried
     assert "your Gemini account, not JARVIS" in text
     assert "Ollama: working (qwen3.5:latest" in text
 
@@ -363,3 +369,49 @@ def test_whisper_guesses_on_silence_are_dropped() -> None:
     }
     assert heard_text(speech) == "Open Spotify."
     assert heard_text({"text": " plain "}) == "plain"
+
+
+async def test_self_test_finds_a_gemini_model_that_answers(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from jarvis.agent.assistant import diagnosis_report
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/models"):
+            return httpx.Response(200, json={"data": []})
+        host = request.url.host
+        if host == "localhost":
+            raise httpx.ConnectError("refused")
+        if "groq" in host:
+            return reply("OK", model="qwen/qwen3.8-27b")
+        model = json.loads(request.content)["model"]
+        if model == "gemini-3.5-flash-lite":
+            raise httpx.ReadTimeout("slow")
+        return reply("OK", model=model)
+
+    router = rig(handler, monkeypatch)
+    results = await router.diagnose()
+    gemini = results[1]
+    assert gemini.ok and gemini.model == "gemini-3.8-flash"
+    assert gemini.tried == (("gemini-3.5-flash-lite", "timed out"),)
+    provider = router.provider("gemini")
+    assert provider is not None
+    assert provider.model_for(Capability.CHAT) == "gemini-3.8-flash"  # used from now on
+    text = diagnosis_report(results)
+    assert "Gemini: working (gemini-3.8-flash" in text
+    assert "because gemini-3.5-flash-lite: timed out" in text
+
+
+def test_settings_can_change_just_the_local_model(tmp_path: Any) -> None:
+    from jarvis.app.config import load_settings
+
+    path = tmp_path / "settings.json"
+    path.write_text(
+        json.dumps(
+            {"providers": {"ollama": {"chat_model": "qwen3.5:4b", "vision_model": "qwen3.5:4b"}}}
+        )
+    )
+    settings = load_settings(path)
+    assert settings.providers.ollama.chat_model == "qwen3.5:4b"
+    assert settings.providers.ollama.base_url == "http://localhost:11434/v1"  # kept
+    assert settings.providers.groq.chat_model == "qwen/qwen3.8-27b"
