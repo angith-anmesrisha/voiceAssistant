@@ -11,7 +11,7 @@ from typing import Any
 
 from loguru import logger
 
-from jarvis.agent.commands import AUTO, diagnose_command, provider_command
+from jarvis.agent.commands import AUTO, diagnose_command, pair_command, provider_command
 from jarvis.agent.guard import PromptGuard
 from jarvis.agent.planner import (
     Task,
@@ -110,6 +110,7 @@ class Assistant:
         situation: Callable[[], str] | None = None,
         guard: PromptGuard | None = None,
         memory: Callable[[], Awaitable[str]] | None = None,
+        on_pair: Callable[[], Awaitable[tuple[str, str]]] | None = None,
     ) -> None:
         self._router = router
         self._store = store
@@ -124,6 +125,7 @@ class Assistant:
         self._situation = situation
         self._guard = guard
         self._memory = memory
+        self._on_pair = on_pair  # -> (shown, spoken)
         self._turn_context = ""
         self._blocked = False
         # What JARVIS did lately (this session), so "undo that" or "do it again" make sense.
@@ -257,6 +259,10 @@ class Assistant:
         await self._store.add_message(conversation, {"role": "user", "content": shown})
         if diagnose_command(text):
             return await self._diagnose(conversation)
+        if self._on_pair is not None and pair_command(text):
+            shown_pairing, said = await self._on_pair()
+            await self._emit(EntryKind.ASSISTANT, shown_pairing, mode="phone")
+            return Reply(said, ok=True)
         choice = provider_command(text)
         if choice is not None:
             return await self._switch_provider(conversation, choice)

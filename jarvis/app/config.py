@@ -220,6 +220,12 @@ class ToolSettings(BaseModel):
     plugins: bool = True
 
 
+class DashboardSettings(BaseModel):
+    """The phone dashboard, off until a phone is paired ("pair my phone")."""
+
+    port: int = Field(default=8765, ge=1024, le=65535)
+
+
 class RoutineSettings(BaseModel):
     """Things JARVIS brings up by itself. Each can be turned off."""
 
@@ -247,6 +253,7 @@ class Settings(BaseModel):
     voice: VoiceSettings = Field(default_factory=VoiceSettings)
     tools: ToolSettings = Field(default_factory=ToolSettings)
     routines: RoutineSettings = Field(default_factory=RoutineSettings)
+    dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
 
 
 def load_settings(path: Path | None = None) -> Settings:

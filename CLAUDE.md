@@ -90,6 +90,12 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   site name, paths → file name, lines → sentences), `confirm.py` (spoken yes/no), `hotkeys.py` (global push-to-talk; Windows hook swallows the
   chord's main key), `local_stt.py` (offline SAPI dictation fallback), `wake_word.py`
   (offline SAPI command grammar for "Jarvis").
+- `remote/`: `dashboard.py` (`Dashboard`: asyncio HTTP server on `dashboard.port` 8765,
+  started by "pair my phone"/tray or at launch once paired; 6-digit code, 10 min, 5 tries,
+  one use; 32-byte token cookie, SHA-256 stored in `dashboard_tokens` (max 5); POSTs need
+  `X-Jarvis: 1`; GET /, GET /state, POST /pair, /ask, /unpair; bodies ≤8 KB), `page.py`
+  (one page, textContent only). Pairing is a local command, so the code never reaches an
+  AI or the history.
 - `controller.py`: glues UI, voice, and assistant; owns busy/listening.
 - `ui/`: `theme.py`, `main_window.py` (HUD stage, tweens, layout), `tray.py`, `icons.py`,
   `widgets/`: `orb.py` (particle globe when idle, morphs into the glowing ring), `stage.py`

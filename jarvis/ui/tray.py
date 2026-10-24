@@ -17,7 +17,12 @@ from jarvis.ui.icons import app_icon
 
 class Tray:
     def __init__(
-        self, bus: EventBus, show_window: Callable[[], None], window_visible: Callable[[], bool]
+        self,
+        bus: EventBus,
+        show_window: Callable[[], None],
+        window_visible: Callable[[], bool],
+        on_pair: Callable[[], None] | None = None,
+        on_unpair: Callable[[], None] | None = None,
     ):
         self._bus = bus
         self._window_visible = window_visible
@@ -39,6 +44,12 @@ class Tray:
         self._menu.addSeparator()
         self._menu.addAction(show)
         self._menu.addAction(self._autostart)
+        for label, callback in (("Pair a phone…", on_pair), ("Unpair phones", on_unpair)):
+            if callback is not None:
+                action = QAction(label)
+                action.triggered.connect(callback)
+                self._actions.append(action)
+                self._menu.addAction(action)
         self._menu.addAction(quit_action)
         self._icon.setContextMenu(self._menu)
         self._icon.setToolTip(f"{APP_NAME} {__version__}")

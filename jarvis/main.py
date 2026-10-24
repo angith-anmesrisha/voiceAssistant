@@ -17,6 +17,8 @@ from PySide6.QtWidgets import QApplication
 from jarvis import APP_NAME, __version__
 from jarvis.app.config import Settings, load_settings, save_choice
 from jarvis.app.events import (
+    ChatEntry,
+    EntryKind,
     EventBus,
     NoticeLevel,
     ProvidersChanged,
@@ -178,6 +180,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         ),
         guard=guard,
         memory=lambda: _memory(keep, memory_prompt),
+        on_pair=lambda: _pair_phone(dashboard),
     )
     speaker = Speaker(
         settings.voice.tts_voice,
@@ -234,7 +237,6 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     )
 
     # Restore the last conversation into the panel.
-    from jarvis.app.events import ChatEntry, EntryKind
 
     conversation = await assistant.conversation_id()
     for message in await store.messages(conversation, limit=60):
@@ -244,7 +246,26 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
                 ChatEntry(kind, message.content, message.provider, message.model, message.mode)
             )
 
-    tray = Tray(bus, show_window=window.show_and_raise, window_visible=window.isVisible)
+    from jarvis.remote.dashboard import Dashboard
+
+    dashboard = Dashboard(bus, keep, controller.submit, port=settings.dashboard.port)
+
+    async def pair_from_tray() -> None:
+        shown, _said = await _pair_phone(dashboard)
+        window.show_and_raise()
+        await bus.publish(ChatEntry(EntryKind.ASSISTANT, shown, mode="phone"))
+
+    async def unpair_from_tray() -> None:
+        await dashboard.unpair_all()
+        await bus.publish(UserNotice("Phone", "Every paired phone was forgotten."))
+
+    tray = Tray(
+        bus,
+        show_window=window.show_and_raise,
+        window_visible=window.isVisible,
+        on_pair=lambda: spawn(pair_from_tray()),
+        on_unpair=lambda: spawn(unpair_from_tray()),
+    )
     tray.show()
     if not args.hidden:
         window.show()
@@ -290,6 +311,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
 
     background = Background(bus, keep, jobs=_routines(settings, keep, store, router, client))
     background.start()
+    spawn(_start_dashboard(dashboard, bus))
     if settings.tools.plugins:
         spawn(_load_plugins(bus, registry, keep, controller))
     spawn(asyncio.to_thread(installed.refresh))  # so "open Valorant" is instant later
@@ -316,6 +338,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         desktop.stop_tracking()
         ui.close()
         await background.stop()
+        await dashboard.stop()
         await controller.shutdown()
         tray.hide()
         window.quitting = True
@@ -370,6 +393,31 @@ def run(argv: list[str] | None = None) -> int:
     logger.info("{} exited cleanly", APP_NAME)
     logger.complete()
     return 0
+
+
+async def _pair_phone(dashboard: Any) -> tuple[str, str]:
+    """Start the dashboard if needed and show a one-time code (never sent to an AI)."""
+    try:
+        code = await dashboard.pair()
+    except OSError as exc:
+        message = f"The phone dashboard couldn't start ({exc.strerror or exc})."
+        return message, message
+    spaced = " ".join(code)
+    shown = (
+        f"On your phone, on the same Wi-Fi, open {dashboard.address} and enter {code}. "
+        "The code works once, for 10 minutes. (Windows may ask whether JARVIS can use "
+        "private networks: allow it.)"
+    )
+    return shown, f"The address is on screen. Your code is {spaced}."
+
+
+async def _start_dashboard(dashboard: Any, bus: Any) -> None:
+    try:
+        await dashboard.start_if_paired()
+    except OSError as exc:
+        await bus.publish(
+            UserNotice("Phone", f"The phone dashboard couldn't start ({exc.strerror or exc}).")
+        )
 
 
 async def _load_plugins(bus: Any, registry: Any, keep: Any, controller: Any) -> None:

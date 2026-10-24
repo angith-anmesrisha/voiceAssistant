@@ -129,6 +129,18 @@ python -m jarvis --hidden   # starts in the tray
 - **Feels responsive.** A spoken request that takes a moment gets a quick "On it.", it
   won't mistake its own voice for you during a conversation, and "Start with Windows"
   in the tray menu starts it quietly in the tray when you sign in.
+- **Power tools, each asking first.** "Switch to dark mode", "turn Wi-Fi off". "Use
+  Python to work out…": JARVIS writes a short program, shows it, and runs it only after
+  you type CONFIRM, in its own folder (`%LOCALAPPDATA%\JARVIS\code`), for 30 seconds at
+  most, without your API keys, and never one that starts programs or deletes files.
+- **Plugins.** Drop a `.py` file into `%LOCALAPPDATA%\JARVIS\plugins` to give JARVIS a
+  new tool (see `jarvis/tools/plugins.py` for the three-line format). A new or changed
+  file is shown to you and loads only after you type CONFIRM.
+- **Phone dashboard.** Say "pair my phone" (or Pair a phone… in the tray menu), open the
+  address it shows on your phone (same Wi-Fi) and enter the one-time code. Then you can
+  follow what JARVIS is doing and send it requests from the phone. It's off until you
+  pair, risky steps are still confirmed on the PC, and Unpair phones in the tray turns
+  it off again.
 - **Undo.** "Undo that" takes back JARVIS's own last file move, rename, copy, new folder
   or file, desktop tidy-up, or volume, brightness or wallpaper change.
 - **Documents and your PC.** "Summarise the PDF in my Downloads", "save these notes to
