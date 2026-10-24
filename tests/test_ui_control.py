@@ -136,7 +136,7 @@ def test_snapshot_text_is_compact_and_cut_to_size() -> None:
 
 
 async def test_read_click_and_type() -> None:
-    ui = FakeUi(CHATS, SEARCHED)
+    ui = FakeUi(CHATS, SEARCHED, CHAT_OPEN)
     tools = tools_with(ui)
     read = await run(tools, "read_ui", window="WhatsApp")
     assert read.ok and ui.calls[0] == ("read", "WhatsApp")
@@ -146,6 +146,19 @@ async def test_read_click_and_type() -> None:
     assert '= "Mom"' in typed.data["window"]  # the window afterwards, to check
     clicked = await run(tools, "click_element", id=2)
     assert clicked.ok and clicked.summary == "Clicked “Mom, Dinner at 8?” in WhatsApp."
+    assert typed.data["typed_check"] == "seen" and "effect" not in clicked.data
+
+
+async def test_actions_that_change_nothing_are_called_out() -> None:
+    ui = FakeUi(CHATS)  # the window never changes
+    tools = tools_with(ui)
+    await run(tools, "read_ui")
+    clicked = await run(tools, "click_element", id=2)
+    assert clicked.data["effect"] == "no visible change"
+    assert "looks the same as before" in clicked.summary
+    typed = await run(tools, "type_into", id=1, text="Arjun")
+    assert typed.data["typed_check"] == "not seen"
+    assert "can't see the typed text" in typed.summary
 
 
 async def test_ui_risks_and_descriptions() -> None:

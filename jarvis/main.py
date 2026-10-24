@@ -199,8 +199,16 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         Microphone(settings.voice.input_sample_rate, device=settings.voice.input_device),
         settings.voice.input_sample_rate,
     )
+    from jarvis.voice.whistle import OfflineStt, WhistleStt
+
+    # Offline speech-to-text, used when no online provider can hear: Whistle if
+    # installed (pip install cactus-needle), then Windows' own dictation.
+    offline_stt = OfflineStt(
+        ([WhistleStt(router.vocabulary_words)] if settings.voice.whistle else [])
+        + [WindowsDictation()]
+    )
     controller = AppController(
-        bus, state, assistant, router, recorder, speaker, settings.voice, WindowsDictation()
+        bus, state, assistant, router, recorder, speaker, settings.voice, offline_stt
     )
     controller.set_confirm_ui(
         window.confirm, window.confirm_overlay.settle, bring_forward=window.show_and_raise
@@ -286,6 +294,16 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     loop = asyncio.get_running_loop()
     hotkeys = GlobalHotkeys(bus, loop)
     hotkeys.add_hold(settings.hotkeys.push_to_talk, PushToTalkPressed(), PushToTalkReleased())
+    if settings.hotkeys.dictation.strip():
+        from jarvis.app.events import DictationPressed, DictationReleased
+        from jarvis.voice.dictation import Dictation, Foreground
+
+        def foreground() -> Foreground | None:
+            found = desktop.foreground()
+            return Foreground(*found) if found is not None else None
+
+        controller.set_dictation(Dictation(desktop, foreground).paste)
+        hotkeys.add_hold(settings.hotkeys.dictation, DictationPressed(), DictationReleased())
     if not hotkeys.start():
         await bus.publish(
             UserNotice(
@@ -547,7 +565,12 @@ def _routines(
         )
         return [q for q in found if isinstance(q, live.Quote)]
 
-    jobs: list[Job] = [TopicWatch(keep, topic_news, quiet_hours)]
+    from jarvis.voice.vocabulary import VocabularyRefresh
+
+    jobs: list[Job] = [
+        TopicWatch(keep, topic_news, quiet_hours),
+        VocabularyRefresh(keep, settings.voice.custom_words, router.set_vocabulary),
+    ]
     if plan.briefing:
         jobs.append(
             Briefing(keep, weather, headlines, markets=markets if plan.briefing_markets else None)

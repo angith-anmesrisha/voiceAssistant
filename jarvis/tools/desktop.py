@@ -107,6 +107,27 @@ class WindowsDesktop:
         time.sleep(0.15)
         return ok
 
+    def foreground(self) -> tuple[str, str, bool] | None:
+        """(process name, title, is JARVIS) of the window in front right now."""
+        if sys.platform != "win32":
+            return None
+        import psutil
+
+        user32 = ctypes.windll.user32  # type: ignore[attr-defined,unused-ignore]
+        hwnd = user32.GetForegroundWindow()
+        if not hwnd:
+            return None
+        pid = ctypes.c_ulong()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        length = user32.GetWindowTextLengthW(hwnd)
+        buffer = ctypes.create_unicode_buffer(length + 1)
+        user32.GetWindowTextW(hwnd, buffer, length + 1)
+        try:
+            process = str(psutil.Process(pid.value).name())
+        except Exception:
+            process = ""
+        return process, str(buffer.value), pid.value == os.getpid()
+
     def active_window_title(self) -> str:
         """Title of the window the user was in before talking to JARVIS."""
         if sys.platform != "win32" or not self._previous_hwnd:

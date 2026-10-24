@@ -92,6 +92,16 @@ class PushToTalkReleased(Event):
 
 
 @dataclass(frozen=True, slots=True)
+class DictationPressed(Event):
+    """The dictation hotkey went down: record, then type the words where the cursor is."""
+
+
+@dataclass(frozen=True, slots=True)
+class DictationReleased(Event):
+    pass
+
+
+@dataclass(frozen=True, slots=True)
 class WakeWordHeard(Event):
     """Someone said the wake word: listen hands-free until they go quiet."""
 

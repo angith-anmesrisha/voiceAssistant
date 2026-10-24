@@ -27,7 +27,14 @@ from jarvis.tools.registry import Risk, ToolRegistry, ToolResult, ToolSpec
 from jarvis.tools.shortcuts import SHORTCUTS, KeyComboError, combo_risk, parse_combo
 from jarvis.tools.steam import SteamGame
 from jarvis.tools.system_ctl import SystemControl
-from jarvis.tools.ui import UiDriver, UiError, app_label, click_risk, format_snapshot
+from jarvis.tools.ui import (
+    UiDriver,
+    UiError,
+    UiSnapshot,
+    app_label,
+    click_risk,
+    format_snapshot,
+)
 from jarvis.tools.undo import UndoJournal
 from jarvis.tools.windows import WindowControl
 from jarvis.tools.windows import find as find_windows
@@ -596,15 +603,38 @@ def build_registry(
 
 
 def _register_ui_tools(registry: ToolRegistry, settings: ToolSettings, ui: UiDriver) -> None:
-    """Look at an app window's controls and operate them (computer use, by element id)."""
+    """Look at an app window's controls and operate them (computer use, by element id).
 
-    async def after(done: str) -> ToolResult:
+    Each action reports what changed (an idea from trycua/cua, MIT, reimplemented): a
+    click that left the window exactly as it was, or typing that doesn't show up in the
+    field, is said, so the model checks instead of carrying on blind."""
+    seen: list[UiSnapshot] = []  # the latest reading, to compare against
+
+    def remember(snapshot: UiSnapshot) -> None:
+        seen[:] = [snapshot]
+
+    async def after(done: str, typed: str = "") -> ToolResult:
         """What was done, plus the window as it looks now, so the model can check it."""
+        before = seen[0] if seen else None
         try:
             snapshot = await ui.refresh()
         except UiError as exc:
             return ToolResult(True, f"{done} The window can't be read now ({exc}).")
-        return ToolResult(True, done, {"window": format_snapshot(snapshot)})
+        remember(snapshot)
+        data: dict[str, Any] = {"window": format_snapshot(snapshot)}
+        if before is not None and before.elements == snapshot.elements:
+            data["effect"] = "no visible change"
+            done += (
+                " The window looks the same as before; if nothing happened, read it again, "
+                "try another element, or look at the screen."
+            )
+        if typed:
+            wanted = typed.strip().casefold()[:30]
+            shown = any(wanted in e.value.casefold() for e in snapshot.elements if e.value)
+            data["typed_check"] = "seen" if shown else "not seen"
+            if not shown:
+                done += " I can't see the typed text in any field now; check before going on."
+        return ToolResult(True, done, data)
 
     def named(element_id: int) -> str:
         element = ui.element(element_id)
@@ -619,6 +649,7 @@ def _register_ui_tools(registry: ToolRegistry, settings: ToolSettings, ui: UiDri
             return ToolResult(False, f"Couldn't read the window: {exc}.")
         except Exception as exc:
             return ToolResult(False, f"Couldn't read the window ({type(exc).__name__}).")
+        remember(snapshot)
         summary = f"Read {len(snapshot.elements)} controls of {app_label(snapshot.app)}."
         return ToolResult(True, summary, {"window": format_snapshot(snapshot)})
 
@@ -648,7 +679,7 @@ def _register_ui_tools(registry: ToolRegistry, settings: ToolSettings, ui: UiDri
         done = f"Typed {len(text)} characters into {what}" + (
             " and pressed Enter." if submit else "."
         )
-        return await after(done)
+        return await after(done, "" if submit else text)
 
     async def scroll_ui(direction: str, id: int | None = None, amount: int = 3) -> ToolResult:
         try:

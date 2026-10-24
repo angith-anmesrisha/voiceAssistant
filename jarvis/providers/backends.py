@@ -161,6 +161,11 @@ class GeminiProvider(OpenAICompatibleProvider):
                     )
         return ProviderStatus(ProviderState.READY, latency_ms=latency)
 
+    def _transcribe_prompt(self) -> str:
+        if not self.vocabulary:
+            return _TRANSCRIBE_PROMPT
+        return f"{_TRANSCRIBE_PROMPT} Names and words that may come up: {self.vocabulary}"
+
     async def transcribe(self, wav: bytes) -> Transcription:
         # The compatibility layer has no /audio/transcriptions; send the audio to chat.
         model = self.model_for(Capability.STT)
@@ -173,7 +178,10 @@ class GeminiProvider(OpenAICompatibleProvider):
                 "messages": [
                     {
                         "role": "user",
-                        "content": [{"type": "text", "text": _TRANSCRIBE_PROMPT}, audio_part(wav)],
+                        "content": [
+                            {"type": "text", "text": self._transcribe_prompt()},
+                            audio_part(wav),
+                        ],
                     }
                 ],
             },

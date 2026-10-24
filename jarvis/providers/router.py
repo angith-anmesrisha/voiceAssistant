@@ -94,6 +94,7 @@ class ProviderRouter:
         network_check: Callable[[], Awaitable[NetworkStatus]] = check_internet,
     ) -> None:
         self._providers = dict(providers)
+        self._vocabulary: list[str] = []
         self._priority = [name for name in priority if name in self._providers]
         self._retries = dict(retries)
         self._on_change = on_change
@@ -124,6 +125,17 @@ class ProviderRouter:
 
     def provider(self, name: str) -> Provider | None:
         return self._providers.get(name) if name in self._priority else None
+
+    def vocabulary_words(self) -> list[str]:
+        return list(self._vocabulary)
+
+    def set_vocabulary(self, words: list[str]) -> None:
+        """Names and words for speech-to-text to expect, given to every provider that hears."""
+        self._vocabulary = list(words)
+        text = ", ".join(words)
+        for provider in self._providers.values():
+            if hasattr(provider, "vocabulary"):
+                provider.vocabulary = text
 
     def set_preferred(self, name: str | None) -> None:
         """Put one provider first (None = the configured priority)."""

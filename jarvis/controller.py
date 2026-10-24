@@ -21,6 +21,8 @@ from jarvis.app.events import (
     Announce,
     ChatEntry,
     ConversationChanged,
+    DictationPressed,
+    DictationReleased,
     EntryKind,
     EventBus,
     PushToTalkPressed,
@@ -43,7 +45,8 @@ _ACKS = ("On it.", "Right away.", "One moment.")
 
 
 class LocalTranscriber(Protocol):
-    available: bool
+    @property
+    def available(self) -> bool: ...
 
     async def transcribe(self, wav: bytes) -> str: ...
 
@@ -83,6 +86,11 @@ class AppController:
         # Confirmation buttons in the window (set by main); voice asks alongside them.
         self._ui_ask: Callable[[ConfirmRequest, bool], Awaitable[bool]] | None = None
         self._ui_dismiss: Callable[[bool], None] | None = None
+        # Dictation (hold the hotkey, speak, release): the words are pasted, no AI.
+        self._paste: Callable[[str], Awaitable[str | None]] | None = None
+        self._dictating = False
+        bus.subscribe(DictationPressed, self._on_dictation_pressed)
+        bus.subscribe(DictationReleased, self._on_dictation_released)
         bus.subscribe(PushToTalkPressed, self._on_ptt_pressed)
         bus.subscribe(PushToTalkReleased, self._on_ptt_released)
         bus.subscribe(WakeWordHeard, self._on_wake_word)
@@ -173,6 +181,52 @@ class AppController:
 
     async def _on_ptt_released(self, _event: PushToTalkReleased) -> None:
         await self.stop_listening()
+
+    # --- dictation ---
+
+    def set_dictation(self, paste: Callable[[str], Awaitable[str | None]]) -> None:
+        self._paste = paste
+
+    async def _on_dictation_pressed(self, _event: DictationPressed) -> None:
+        if self._paste is None or self._recorder.recording or self._confirming or self.busy:
+            return  # dictation never cuts into a request or a question
+        if self._speaker.speaking:
+            self._speaker.stop()
+        try:
+            self._recorder.start(None)
+        except AudioDeviceError as exc:
+            await self._bus.publish(ChatEntry(EntryKind.ERROR, f"Microphone problem: {exc}"))
+            return
+        self._dictating = True
+        await self._move_to(AppState.LISTENING)
+        loop = asyncio.get_running_loop()
+        self._max_timer = loop.call_later(
+            self._voice.max_recording_s,
+            lambda: self._spawn(self._on_dictation_released(DictationReleased())),
+        )
+
+    async def _on_dictation_released(self, _event: DictationReleased) -> None:
+        if not self._dictating or not self._recorder.recording:
+            return
+        self._dictating = False
+        self._cancel_max_timer()
+        wav = self._recorder.stop()
+        if self._recorder.duration_s(wav) < _MIN_RECORDING_S:
+            await self._settle()
+            return
+        self._active = self._spawn(self._dictate(wav))
+
+    async def _dictate(self, wav: bytes) -> None:
+        try:
+            await self._move_to(AppState.THINKING)
+            heard = await self._transcribe(wav)
+            if not heard or self._paste is None:
+                return
+            problem = await self._paste(heard)
+            if problem:
+                await self._bus.publish(UserNotice("Dictation", problem))
+        finally:
+            await self._settle()
 
     async def _on_wake_word(self, _event: WakeWordHeard) -> None:
         if self._voice.follow_up_s > 0 and not self._conversation:
@@ -273,10 +327,9 @@ class AppController:
                 logger.warning("Offline speech-to-text failed: {}", type(exc).__name__)
                 online_error += f" {LOCAL_STT_NAME}: {exc}."
             else:
+                used = getattr(local, "name", "") or LOCAL_STT_NAME
                 await self._bus.publish(
-                    UserNotice(
-                        "Voice", f"Heard with {LOCAL_STT_NAME}; add a Groq key for better accuracy."
-                    )
+                    UserNotice("Voice", f"Heard with {used}; add a Groq key for better accuracy.")
                 )
                 return text
         logger.warning("Speech-to-text failed on every provider")

@@ -77,7 +77,9 @@ class ChordTracker:
 
     def key_down(self, token: str) -> None:
         self._down.add(token)
-        if not self._active and self.chord <= self._down:
+        # Exactly the chord's modifiers: Alt+Shift+` isn't also Alt+`.
+        extra = (self._down & _MODIFIERS) - self.chord
+        if not self._active and self.chord <= self._down and not extra:
             self._active = True
             self._on_press()
 

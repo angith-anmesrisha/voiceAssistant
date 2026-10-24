@@ -167,6 +167,8 @@ class OpenAICompatibleProvider(Provider):
         self.name = name
         self.display_name = display_name
         self.settings = settings
+        # Names and words speech-to-text should expect ("Priya, Kochi, Valorant").
+        self.vocabulary = ""
         self._client = client or httpx.AsyncClient()
         # (capability, configured model) -> the model that works for this account now
         self._swapped: dict[tuple[Capability, str], str] = {}
@@ -456,9 +458,16 @@ class OpenAICompatibleProvider(Provider):
         data = await self._post(
             "audio/transcriptions",
             files={"file": ("speech.wav", wav, "audio/wav")},
-            data={"model": model, "response_format": "verbose_json", "temperature": "0"},
+            data=self._transcription_fields(model),
         )
         return Transcription(heard_text(data), self.display_name, model)
+
+    def _transcription_fields(self, model: str) -> dict[str, str]:
+        fields = {"model": model, "response_format": "verbose_json", "temperature": "0"}
+        if self.vocabulary:
+            # Whisper's prompt steers spelling towards these words (OpenAI-compatible field).
+            fields["prompt"] = self.vocabulary
+        return fields
 
 
 # Whisper invents short phrases ("I'm going to go.", "Thank you.") from noise or silence.

@@ -41,6 +41,8 @@ class LocalSttError(Exception):
 class WindowsDictation:
     """Transcribes a WAV recording with SAPI. Unavailable off Windows."""
 
+    name = DISPLAY_NAME
+
     def __init__(self) -> None:
         self.available = sys.platform == "win32"
 

@@ -399,6 +399,8 @@ class WindowsUi:
             if double and self.app.lower() == "explorer.exe" and runnable_name(element.name):
                 raise UiError("JARVIS doesn't start programs or scripts")
             self._bring_to_front(self._hwnd)
+            if not double and not right and _press_by_pattern(control, element.role):
+                return  # buttons, menus, links, checkboxes and tabs: no mouse needed
             if control.BoundingRectangle.isempty():
                 invoke = control.GetPattern(uia.PatternId.InvokePattern)
                 if invoke is None:
@@ -453,6 +455,44 @@ class WindowsUi:
 
     def close(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)
+
+
+# Controls whose own UI Automation action is the same as a left click. Using it works
+# when the control is covered or scrolled half out of view, and doesn't move the mouse
+# (trycua/cua does the same). List items stay mouse clicks: selecting one isn't always
+# opening it.
+_PATTERN_CLICK = {
+    "Button": "InvokePattern",
+    "MenuItem": "InvokePattern",
+    "Hyperlink": "InvokePattern",
+    "SplitButton": "InvokePattern",
+    "CheckBox": "TogglePattern",
+    "RadioButton": "SelectionItemPattern",
+    "TabItem": "SelectionItemPattern",
+}
+
+
+def _press_by_pattern(control: Any, role: str) -> bool:
+    """Do a control's own click action. False if it has none (then the mouse is used)."""
+    import uiautomation as uia
+
+    name = _PATTERN_CLICK.get(role)
+    if name is None:
+        return False
+    try:
+        pattern = control.GetPattern(getattr(uia.PatternId, name))
+        if pattern is None:
+            return False
+        if name == "InvokePattern":
+            pattern.Invoke()
+        elif name == "TogglePattern":
+            pattern.Toggle()
+        else:
+            pattern.Select()
+    except Exception as exc:
+        logger.debug("Pattern click failed ({}); using the mouse", type(exc).__name__)
+        return False
+    return True
 
 
 def _process_name(pid: int) -> str:

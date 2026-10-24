@@ -171,6 +171,8 @@ class ProvidersConfig(BaseModel):
 
 class HotkeySettings(BaseModel):
     push_to_talk: str = "alt+`"
+    # Hold, speak, release: your words are typed where the cursor is (no AI; "" = off).
+    dictation: str = "alt+shift+`"
 
 
 class VoiceSettings(BaseModel):
@@ -208,6 +210,12 @@ class VoiceSettings(BaseModel):
     # Keep listening for the wake word while JARVIS is speaking or working, so
     # "Jarvis, stop" works then too (never while it is recording you).
     wake_while_busy: bool = True
+    # Names and words the speech-to-text should expect (people, places, jargon). Names
+    # of people JARVIS remembers are added automatically.
+    custom_words: list[str] = Field(default_factory=list)
+    # Offline speech-to-text with Cactus Whistle when its package is installed
+    # (pip install cactus-needle); Windows dictation is the last resort either way.
+    whistle: bool = True
 
 
 def _default_apps() -> dict[str, str]:
