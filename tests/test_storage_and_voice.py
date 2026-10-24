@@ -94,9 +94,8 @@ def test_recorder_collects_audio_and_level() -> None:
 
 
 def test_speakable_strips_markup_and_urls() -> None:
-    assert (
-        speakable("**Done!** See https://x.com/a?b=1 for `details`") == "Done! See link for details"
-    )
+    said = speakable("**Done!** See https://x.com/a?b=1 for `details`")
+    assert said == "Done! See x.com for details."
 
 
 async def test_speaker_is_silent_noop_off_windows() -> None:

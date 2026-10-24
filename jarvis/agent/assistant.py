@@ -538,10 +538,13 @@ def plan_summary(steps: list[PlanStep]) -> tuple[str, str]:
     ok = sum(step.status is StepStatus.DONE for step in steps)
     bad = [step for step in steps if step.status is not StepStatus.DONE]
     if not bad:
-        headline = f"All {total} tasks done."
+        headline = (
+            "Both tasks are complete." if total == 2 else f"All {_count(total)} tasks are complete."
+        )
         said = headline
     else:
-        headline = f"{ok} of {total} tasks done; {len(bad)} didn't work."
+        done, failed = _count(ok).capitalize(), _count(len(bad))
+        headline = f"{done} of {_count(total)} tasks complete; {failed} didn't go through."
         said = (
             headline
             + " "
@@ -550,6 +553,13 @@ def plan_summary(steps: list[PlanStep]) -> tuple[str, str]:
             )
         )
     return headline + "\n" + plan_lines(steps), said
+
+
+_NUMBERS = ("none", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine")
+
+
+def _count(n: int) -> str:
+    return _NUMBERS[n] if 0 <= n < len(_NUMBERS) else str(n)
 
 
 def says_it_cannot(reply: str) -> bool:

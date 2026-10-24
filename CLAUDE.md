@@ -67,7 +67,11 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   history, screen fast path, otherwise a tool loop with tools + `look_at_screen`,
   confirmations).
 - `voice/`: `audio_io.py` (mic → WAV recorder, `EndOfSpeech` for hands-free), `tts.py`
-  (SAPI on its own thread), `confirm.py` (spoken yes/no), `hotkeys.py` (global push-to-talk; Windows hook swallows the
+  (`Speaker`: Kokoro neural voice when loaded, else SAPI, on its own thread; sentence
+  pipelining, barge-in), `neural.py` (Kokoro-82M via onnxruntime + phonemizer/espeak-ng
+  en-gb; model files from kokoro-onnx's model-files-v1.1 release, SHA-256 pinned),
+  `spoken_text.py` (`speakable`: strips Markdown, think blocks, code, emoji; links →
+  site name, paths → file name, lines → sentences), `confirm.py` (spoken yes/no), `hotkeys.py` (global push-to-talk; Windows hook swallows the
   chord's main key), `local_stt.py` (offline SAPI dictation fallback), `wake_word.py`
   (offline SAPI command grammar for "Jarvis").
 - `controller.py`: glues UI, voice, and assistant; owns busy/listening.
@@ -215,6 +219,18 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   docked bottom-right. QPainter only (no blur effects), static layers cached as pixmaps,
   time-based easing; 60 fps when active, 30 when calm or if a frame takes >10 ms; stops
   when hidden, for Iris Xe. The owner liked this UI; keep its look.
+- Voice (owner asked for a free, unlimited JARVIS-like voice, 2026-10-24): local Kokoro
+  `bm_george` at speed 0.95, 0.32 s between sentences; fp32 model (325 MB) because it ran
+  3x faster than int8 on x86 CPUs (RTF ~0.33 vs ~1). Downloaded in the background on
+  first start (`voice.download_voice`), cancelled on quit; SAPI speaks meanwhile and is
+  the fallback. No cloning of the actor's voice. Kokoro-onnx itself isn't a dependency
+  (it caps Python <3.14); `neural.py` runs the model directly (vocab from the model's
+  `kokoro_config` metadata). Piper was considered; its voices are on Hugging Face,
+  which the build sandbox can't reach to pin checksums.
+- Personality: `_IDENTITY` in prompts.py is the owner's JARVIS brief, condensed (British
+  English, composed, concise, dry wit, lead with the result, never invent results).
+  Plan summaries read "All three tasks are complete." / "One of two tasks complete;
+  one didn't go through."
 - Closing the window hides to the tray; Quit is in the tray menu.
 - Push-to-talk is Alt+` (vk 0xC0, or 0xDF on UK layouts). On Windows the backtick is
   swallowed while the chord is held and an unassigned key (0xE8) is tapped so releasing
@@ -246,7 +262,7 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 
 ## Known issues
 - Groq and Ollama calls aren't exercised from CI; tests use `httpx.MockTransport` and fakes.
-- SAPI TTS, dictation and the wake word, global hotkeys (and the backtick swallowing),
+- SAPI TTS, the Kokoro voice's playback and download on Windows, dictation and the wake word, global hotkeys (and the backtick swallowing),
   the vsync clock, the corner overlay, the key dialog's registry write, and the desktop
   tools are untested on real Windows so far.
 - The wake word needs a pause after "Jarvis"; words said in the same breath are lost.

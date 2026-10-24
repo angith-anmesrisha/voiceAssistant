@@ -61,7 +61,7 @@ python -m jarvis --hidden   # starts in the tray
   - or hold **Alt+`** (the key left of 1) anywhere in Windows and let go to send;
   - or tap the mic button.
 
-  Spoken questions get spoken answers (Windows' built-in voice); talk again to interrupt.
+  Spoken questions get spoken answers; talk again to interrupt.
   Speech is turned into text by Groq (or Gemini); with neither, Windows' offline speech
   recognition is used.
 - When you call JARVIS while working in another app, only the **orb appears in the
@@ -166,13 +166,40 @@ opened. Only http(s) URLs can be opened, and nothing runs a command line written
 model. Text read from the screen is treated as data, never
 as instructions.
 
+## JARVIS's voice and manner
+
+JARVIS speaks with a refined British male voice that runs **on your PC**: free, offline
+and unlimited, with no account or API key. It uses the open Kokoro speech model (Apache
+2.0). The first start downloads the model once (about 350 MB, into
+`%LOCALAPPDATA%\JARVIS\voices`, checked against a fixed checksum); Windows' own voice
+speaks until it's ready, and takes over again if the model ever can't run.
+
+It is a stock voice chosen to sound like the film's composed English AI, not a copy of
+the actor's voice (cloning a real person's voice without permission isn't something
+JARVIS does). Four British male voices are included; set `voice.neural_voice` to try them:
+
+| Voice | Notes |
+|---|---|
+| `bm_george` (default) | the best-rated British male voice in Kokoro's own list |
+| `bm_fable` | also rated well; worth comparing with George |
+| `bm_lewis`, `bm_daniel` | rated lower by Kokoro's authors, but some prefer them |
+
+`voice.neural_speed` sets the pace (0.95 by default, measured; 0.7 to 1.3). Set
+`voice.tts_engine` to `"sapi"` to use only Windows' voice, or `voice.download_voice` to
+`false` to never download. A short pause separates sentences, and Markdown, links, code,
+emoji and file paths are never read aloud (a link becomes the site's name).
+
+Replies, task reports and notices follow one personality: composed, concise British
+English that leads with the result, with the odd dry remark, and it never claims to have
+done something its tools didn't actually do.
+
 ## Settings
 
 `%LOCALAPPDATA%\JARVIS\settings.json` (created when you first save settings; defaults apply
 otherwise). You can change provider priority, model names, timeouts and retries, approved
 apps, trusted sites, the hotkey (`hotkeys.push_to_talk`, default ``alt+` ``), the wake word (`voice.wake_word`,
 `voice.wake_phrases`, `voice.wake_min_confidence`: `low`, `normal` or `high`), how long it keeps listening for
-follow-ups (`voice.follow_up_s`, 0 to turn off) and the voice. Conversation history is stored in
+follow-ups (`voice.follow_up_s`, 0 to turn off) and the voice (see above). Conversation history is stored in
 `%LOCALAPPDATA%\JARVIS\jarvis.sqlite3`; logs are in `%LOCALAPPDATA%\JARVIS\logs` and never
 contain your messages, audio or keys.
 

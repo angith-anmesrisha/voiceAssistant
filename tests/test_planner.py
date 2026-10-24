@@ -104,7 +104,8 @@ async def test_long_request_runs_each_task(tmp_path: Path) -> None:
     assert [s.status for s in plans[-1].steps] == [StepStatus.DONE] * 3
     final = rig.entries[-1]
     assert final.kind is EntryKind.ASSISTANT and not final.failed
-    assert final.text.startswith("All 3 tasks done.") and "✓ 3. Paris fact" in final.text
+    assert final.text.startswith("All three tasks are complete.")
+    assert "✓ 3. Paris fact" in final.text
     assert final.mode is not None and "plan" in final.mode
     assert reply.ok and rig.state.state is AppState.IDLE
     assert [m.content for m in await rig.store.messages(await rig.assistant.conversation_id())][
@@ -125,7 +126,7 @@ async def test_a_failed_task_turns_the_plan_red(tmp_path: Path) -> None:
     )
     final = rig.entries[-1]
     assert final.failed
-    assert final.text.startswith("1 of 2 tasks done; 1 didn't work.")
+    assert final.text.startswith("One of two tasks complete; one didn't go through.")
     assert "✕ 2. Lock the PC" in final.text
     assert any(e.kind is EntryKind.ACTION and e.text.startswith("Declined") for e in rig.entries)
     assert reply.ok
@@ -140,7 +141,7 @@ async def test_no_provider_stops_the_remaining_tasks(tmp_path: Path) -> None:
     rig = Rig(tmp_path, router)
     await rig.assistant.handle(" ".join(["please do these things"] * 8))
     final = rig.entries[-1]
-    assert final.failed and "1 of 3 tasks done" in final.text
+    assert final.failed and "One of three tasks complete" in final.text
     assert "✕ 2. Two" in final.text and "- 3. Three: not started" in final.text
 
 
@@ -163,7 +164,7 @@ def test_spoken_summary_is_short() -> None:
     ]
     shown, said = plan_summary(steps)
     assert "\n" in shown and "\n" not in said
-    assert said == "1 of 2 tasks done; 1 didn't work. Lock: You declined."
+    assert said == "One of two tasks complete; one didn't go through. Lock: You declined."
 
 
 async def test_hud_shows_the_task_list(qapp: QApplication) -> None:

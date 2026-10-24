@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from loguru import logger
 from pydantic import BaseModel, Field, ValidationError, model_validator
@@ -145,7 +145,15 @@ class VoiceSettings(BaseModel):
     input_device: str | None = None
     # Speak replies to spoken requests. Typed requests are answered in text only.
     speak_replies: bool = True
-    # Windows SAPI voice name substring (e.g. "David", "Zira"); empty = system default.
+    # "kokoro": JARVIS's own British voice, run on this PC (free, offline, unlimited;
+    # the model, ~350 MB, is downloaded once). "sapi": Windows' built-in voice only.
+    tts_engine: Literal["kokoro", "sapi"] = "kokoro"
+    # Kokoro voice: bm_george (default), bm_fable, bm_lewis or bm_daniel (British male).
+    neural_voice: str = "bm_george"
+    neural_speed: float = Field(default=0.95, ge=0.7, le=1.3)  # under 1 is more measured
+    download_voice: bool = True
+    # Windows SAPI voice name substring (e.g. "David", "Hazel"); empty = system default.
+    # Used until the neural voice is ready, or always with tts_engine "sapi".
     tts_voice: str = ""
     tts_rate: int = 1  # SAPI rate, -10..10
     max_recording_s: float = 60.0

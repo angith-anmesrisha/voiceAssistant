@@ -45,3 +45,8 @@ def database_file() -> Path:
 def keep_file() -> Path:
     """Facts JARVIS remembers, reminders, watched topics, conversation summaries."""
     return data_dir() / "keep.sqlite3"
+
+
+def voices_dir() -> Path:
+    """The neural voice model, downloaded once."""
+    return data_dir() / "voices"

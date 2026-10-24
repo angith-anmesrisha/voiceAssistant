@@ -27,7 +27,7 @@ from jarvis.app.events import (
     WakeWordHeard,
 )
 from jarvis.app.logging_setup import configure_logging
-from jarvis.app.paths import database_file, keep_file
+from jarvis.app.paths import database_file, keep_file, voices_dir
 from jarvis.app.single_instance import SingleInstance
 from jarvis.app.state import AppState, StateChanged, StateMachine
 
@@ -158,7 +158,14 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         guard=guard,
         memory=lambda: _memory(keep, memory_prompt),
     )
-    speaker = Speaker(settings.voice.tts_voice, settings.voice.tts_rate)
+    speaker = Speaker(
+        settings.voice.tts_voice,
+        settings.voice.tts_rate,
+        engine=settings.voice.tts_engine,
+        neural_voice=settings.voice.neural_voice,
+        neural_speed=settings.voice.neural_speed,
+        model_folder=voices_dir(),
+    )
     speaker.start()
     recorder = Recorder(
         Microphone(settings.voice.input_sample_rate, device=settings.voice.input_device),
@@ -261,6 +268,12 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     background = Background(bus, keep)
     background.start()
     spawn(asyncio.to_thread(installed.refresh))  # so "open Valorant" is instant later
+
+    def voice_status(title: str, message: str) -> None:
+        notice = UserNotice(title, message)
+        loop.call_soon_threadsafe(lambda: spawn(bus.publish(notice)))
+
+    spawn(asyncio.to_thread(speaker.prepare_neural, settings.voice.download_voice, voice_status))
     probes = asyncio.create_task(router.run_probes(config.probe_interval_s))
     logger.info("{} {} running", APP_NAME, __version__)
 
