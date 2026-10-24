@@ -115,9 +115,11 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     store = HistoryStore(database_file())
     from jarvis.agent.background import Background
     from jarvis.storage.keep import Keep, memory_prompt
+    from jarvis.tools.steam import installed_games, steam_folder
     from jarvis.tools.system_ctl import WindowsSystem
     from jarvis.tools.undo import UndoJournal
     from jarvis.tools.windows import WindowsWindows
+    from jarvis.ui.camera import capture_webcam
 
     keep = Keep(keep_file())
     desktop = WindowsDesktop()
@@ -139,6 +141,9 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         http=client,
         windows=WindowsWindows(),
         system=WindowsSystem(),
+        steam_games=lambda: installed_games(steam_folder()),
+        camera=capture_webcam,
+        describe_image=lambda photo, question: _describe_photo(router, photo, question),
     )
 
     hotkey_label = "+".join(
@@ -162,7 +167,14 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         history_messages=settings.history_messages,
         max_tool_rounds=settings.tools.max_tool_rounds,
         on_prefer=lambda name: save_choice("providers", "preferred", name or ""),
-        situation=situation(desktop, router),
+        situation=situation(
+            desktop,
+            router,
+            about=lambda: (
+                f"About you: JARVIS {__version__}, running on the user's PC; speaking with "
+                f"{speaker.voice_name}; memory, reminders and history stay on this PC."
+            ),
+        ),
         guard=guard,
         memory=lambda: _memory(keep, memory_prompt),
     )
@@ -353,6 +365,35 @@ def run(argv: list[str] | None = None) -> int:
     logger.info("{} exited cleanly", APP_NAME)
     logger.complete()
     return 0
+
+
+async def _describe_photo(router: ProviderRouter, photo: bytes, question: str) -> str:
+    """A vision model looks at one webcam photo (Gemini or a local model that can see)."""
+    from jarvis.agent.prompts import system_prompt
+    from jarvis.providers.openai_compat import image_part
+    from jarvis.providers.router import AllProvidersFailedError
+    from jarvis.voice.spoken_text import without_thinking
+
+    prompt = (
+        system_prompt(spoken=False)
+        + "\n\nYou are given one photo from the user's webcam, taken just now with their "
+        "permission. Answer their question about it kindly and briefly; describe people "
+        "without guessing identity, age or anything sensitive."
+    )
+    try:
+        result = await router.chat(
+            [
+                {"role": "system", "content": prompt},
+                {
+                    "role": "user",
+                    "content": [{"type": "text", "text": question}, image_part(photo)],
+                },
+            ],
+            vision=True,
+        )
+    except AllProvidersFailedError:
+        return "No AI that can see images answered; the photo was discarded."
+    return without_thinking(result.content or "") or "Nothing notable in the photo."
 
 
 def _routines(

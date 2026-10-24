@@ -76,3 +76,50 @@ def speakable(text: str) -> str:
     spoken = re.sub(r"\s+([.,!?;:])", r"\1", spoken)
     spoken = re.sub(r"([.!?])\.+", r"\1", spoken)
     return re.sub(r"\s+", " ", spoken).strip()
+
+
+# Unicode name prefix of a script -> (language, Windows primary language id).
+_SCRIPTS = {
+    "DEVANAGARI": ("hi", 0x39),
+    "MALAYALAM": ("ml", 0x4C),
+    "TAMIL": ("ta", 0x49),
+    "TELUGU": ("te", 0x4A),
+    "KANNADA": ("kn", 0x4B),
+    "BENGALI": ("bn", 0x45),
+    "GUJARATI": ("gu", 0x47),
+    "GURMUKHI": ("pa", 0x46),
+    "ARABIC": ("ar", 0x01),
+    "HEBREW": ("he", 0x0D),
+    "CYRILLIC": ("ru", 0x19),
+    "GREEK": ("el", 0x08),
+    "THAI": ("th", 0x1E),
+    "HANGUL": ("ko", 0x12),
+    "HIRAGANA": ("ja", 0x11),
+    "KATAKANA": ("ja", 0x11),
+    "CJK": ("zh", 0x04),
+}
+
+
+def script_language(text: str) -> tuple[str, int] | None:
+    """The language a reply is mostly written in, judged by its script, when that isn't
+    the Latin alphabet: ("hi", 0x39) for Hindi in Devanagari. None for English and other
+    Latin-script text."""
+    counts: dict[tuple[str, int], int] = {}
+    letters = 0
+    for ch in text:
+        if not ch.isalpha():
+            continue
+        letters += 1
+        name = unicodedata.name(ch, "")
+        for prefix, language in _SCRIPTS.items():
+            if name.startswith(prefix):
+                counts[language] = counts.get(language, 0) + 1
+                break
+    if not counts or not letters:
+        return None
+    language, count = max(counts.items(), key=lambda item: item[1])
+    if count / letters < 0.3:
+        return None
+    if language[0] == "zh" and ("ja", 0x11) in counts:
+        return ("ja", 0x11)  # Japanese mixes kanji with kana
+    return language

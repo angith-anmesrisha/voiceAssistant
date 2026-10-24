@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from datetime import datetime
 from typing import Any
 from urllib.parse import quote_plus, urlparse
@@ -14,10 +15,12 @@ from jarvis.storage.keep import Keep
 from jarvis.tools.apps import AppIndex
 from jarvis.tools.desktop import Desktop, DesktopUnsupportedError
 from jarvis.tools.files import FileAccessError, FileArea, default_area
+from jarvis.tools.media import CameraFn, DescribeFn, register_media_tools
 from jarvis.tools.pc import register_pc_tools
 from jarvis.tools.personal import register_personal_tools
 from jarvis.tools.registry import Risk, ToolRegistry, ToolResult, ToolSpec
 from jarvis.tools.shortcuts import SHORTCUTS, KeyComboError, parse_combo
+from jarvis.tools.steam import SteamGame
 from jarvis.tools.system_ctl import SystemControl
 from jarvis.tools.ui import UiDriver, UiError, app_label, click_risk, format_snapshot
 from jarvis.tools.undo import UndoJournal
@@ -66,6 +69,9 @@ def build_registry(
     http: httpx.AsyncClient | None = None,
     windows: WindowControl | None = None,
     system: SystemControl | None = None,
+    steam_games: Callable[[], list[SteamGame]] | None = None,
+    camera: CameraFn | None = None,
+    describe_image: DescribeFn | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     journal = undo if undo is not None else UndoJournal()
@@ -499,6 +505,7 @@ def build_registry(
     if ui is not None:
         _register_ui_tools(registry, settings, ui)
     register_pc_tools(registry, area, journal, windows, system)
+    register_media_tools(registry, desktop, http, steam_games, camera, describe_image)
     register_personal_tools(
         registry, keep, http, home_place=settings.home_place, news_locale=settings.news_locale
     )

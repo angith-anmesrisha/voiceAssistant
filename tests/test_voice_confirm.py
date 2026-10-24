@@ -147,3 +147,29 @@ async def test_no_speech_to_text_leaves_it_to_the_buttons() -> None:
     assert buttons.future is not None
     buttons.future.set_result(False)
     assert await asyncio.wait_for(pending, 2) is False
+
+
+async def test_slow_spoken_requests_get_a_short_acknowledgement(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import jarvis.controller as controller_module
+
+    monkeypatch.setattr(controller_module, "_ACK_AFTER_S", 0.02)
+    controller, rig = make_controller()
+    original = rig.assistant.handle
+
+    async def slow(text: str, *, spoken: bool = False) -> Any:
+        await rig.state.transition(AppState.THINKING)
+        await asyncio.sleep(0.1)
+        await rig.state.transition(AppState.IDLE)
+        return await original(text, spoken=spoken)
+
+    rig.assistant.handle = slow
+    await controller._answer_locked("plan my trip", spoken=True)
+    assert rig.speaker.spoken == ["On it.", "answer to plan my trip"]
+    rig.speaker.spoken.clear()
+    rig.assistant.handle = original
+    await controller._answer_locked("what time is it", spoken=True)
+    await asyncio.sleep(0.05)
+    assert rig.speaker.spoken == ["answer to what time is it"]  # quick: no "On it."
+    await controller.shutdown()

@@ -46,8 +46,13 @@ def open_windows(titles: list[str], active: str = "") -> list[str]:
     return kept
 
 
-def situation(desktop: Desktop, router: ProviderRouter | None = None) -> Callable[[], str]:
-    """A function that describes the current situation in a few lines."""
+def situation(
+    desktop: Desktop,
+    router: ProviderRouter | None = None,
+    about: Callable[[], str] | None = None,
+) -> Callable[[], str]:
+    """A function that describes the current situation in a few lines. ``about`` adds
+    what JARVIS knows about itself right now (version, voice), for "what are you?"."""
 
     def describe() -> str:
         lines: list[str] = []
@@ -65,6 +70,8 @@ def situation(desktop: Desktop, router: ProviderRouter | None = None) -> Callabl
             lines.append(
                 f"AI choice: {chosen.display_name} first" if chosen else "AI choice: automatic"
             )
+        if about is not None:
+            lines.append(about())
         return "\n".join(lines)
 
     return describe

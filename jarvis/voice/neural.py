@@ -99,8 +99,11 @@ _SENTENCE = re.compile(r"(?<=[.!?…])\s+(?=\S)")
 _CLAUSE = re.compile(r"(?<=[,;:])\s+")
 
 
-def sentences(text: str, longest: int = 220) -> list[str]:
-    """Split into sentences, and overly long ones at commas, so speech starts sooner."""
+def sentences(text: str, longest: int = 220, first: int = 70) -> list[str]:
+    """Split into sentences, and overly long ones at commas, so speech starts sooner.
+
+    The first piece is kept short (cut at its first comma past a few words, if it's
+    longer than ``first``), because speech can't begin until it has been made."""
     pieces: list[str] = []
     for sentence in _SENTENCE.split(text.strip()):
         if len(sentence) <= longest:
@@ -115,7 +118,12 @@ def sentences(text: str, longest: int = 220) -> list[str]:
                 current = f"{current} {clause}".strip()
         if current:
             pieces.append(current)
-    return [p for p in pieces if p.strip()]
+    pieces = [p for p in pieces if p.strip()]
+    if pieces and len(pieces[0]) > first:
+        cut = _CLAUSE.search(pieces[0], 20)
+        if cut is not None and cut.start() < len(pieces[0]) - 10:
+            pieces[0:1] = [pieces[0][: cut.start()], pieces[0][cut.end() :]]
+    return pieces
 
 
 def _split_phonemes(phonemes: str, limit: int = _MAX_PHONEMES) -> list[str]:
@@ -131,7 +139,7 @@ def _split_phonemes(phonemes: str, limit: int = _MAX_PHONEMES) -> list[str]:
 class KokoroVoice:
     """Loaded model plus one voice. ``synthesize`` is safe to call from one thread at a time."""
 
-    def __init__(self, folder: Path, voice: str = DEFAULT_VOICE, speed: float = 0.95) -> None:
+    def __init__(self, folder: Path, voice: str = DEFAULT_VOICE, speed: float = 1.05) -> None:
         import espeakng_loader
         import numpy as np
         import onnxruntime as rt
@@ -157,6 +165,7 @@ class KokoroVoice:
         self._style = np.asarray(voices[voice], dtype=np.float32)
         self.speed = max(0.5, min(2.0, speed))
         self._lock = threading.Lock()
+        self.synthesize("Ready.")  # the first run is slow (allocations); do it now
 
     def _phonemes(self, text: str) -> str:
         import phonemizer

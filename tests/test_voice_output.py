@@ -45,6 +45,12 @@ def test_site_names() -> None:
 def test_sentences_split_long_ones_at_commas() -> None:
     said = sentences("Good evening. I'm online!  Ready?")
     assert said == ["Good evening.", "I'm online!", "Ready?"]
+    opening = "I've checked the forecast for Kochi, and it looks like rain this afternoon."
+    assert sentences(opening + " Take an umbrella.") == [
+        "I've checked the forecast for Kochi,",
+        "and it looks like rain this afternoon.",
+        "Take an umbrella.",
+    ]
     long = ", ".join(["a fairly long clause about something"] * 12) + "."
     parts = sentences(long, longest=100)
     assert len(parts) > 1 and all(len(p) <= 100 for p in parts)
@@ -179,7 +185,7 @@ def test_neural_playback_streams_sentences_and_stops(monkeypatch: pytest.MonkeyP
     speaker._neural = Voice()
     speaker._play_neural("First. Second.")
     played = FakeStream.made[0]
-    assert played.frames == 2 * 24_000 + int(0.32 * 24_000) and not played.aborted
+    assert played.frames == 2 * 24_000 + int(0.22 * 24_000) and not played.aborted
 
     original = FakeStream.__init__
 
@@ -191,3 +197,43 @@ def test_neural_playback_streams_sentences_and_stops(monkeypatch: pytest.MonkeyP
     speaker._play_neural("First. Second. Third.")
     barged = FakeStream.made[1]
     assert barged.aborted and barged.frames == 1200  # one 50 ms block, then silence
+
+
+def test_echo_of_own_reply_is_recognised() -> None:
+    from jarvis.voice.confirm import is_echo
+
+    said = "Certainly. I've opened Notepad and typed your shopping list into it."
+    assert is_echo("opened notepad and typed your shopping list", said)
+    assert is_echo("I've opened Notepad, and typed your shopping list into it", said)
+    assert not is_echo("now save it to my desktop please", said)
+    assert not is_echo("send it", "Shall I send it?")  # short answers are real
+    assert not is_echo("open notepad", "")
+
+
+def test_reasoning_is_never_shown() -> None:
+    from jarvis.voice.spoken_text import without_thinking
+
+    assert without_thinking("<think>plan it</think>\nOpening Spotify now.") == (
+        "Opening Spotify now."
+    )
+    assert without_thinking("<think>never closed") == ""
+
+
+@pytest.mark.parametrize(
+    ("text", "language"),
+    [
+        ("Opening your browser now.", None),
+        ("Abriendo el navegador.", None),
+        ("नमस्ते, मैं तैयार हूँ।", "hi"),
+        ("ശരി, ഞാൻ തയ്യാറാണ്.", "ml"),
+        ("Привет! Готово.", "ru"),
+        ("今日はいい天気ですね。", "ja"),
+        ("Done: नमस्ते", "hi"),
+        ("Saved notes.txt (नोट)", None),
+    ],
+)
+def test_reply_language_by_script(text: str, language: str | None) -> None:
+    from jarvis.voice.spoken_text import script_language
+
+    found = script_language(text)
+    assert (found[0] if found else None) == language

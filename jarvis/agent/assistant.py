@@ -29,6 +29,7 @@ from jarvis.providers.openai_compat import image_part
 from jarvis.providers.router import AllProvidersFailedError, Diagnosis, ProviderRouter
 from jarvis.storage.db import HistoryStore
 from jarvis.tools.registry import ArgumentError, Risk, ToolRegistry, ToolResult, validate_args
+from jarvis.voice.spoken_text import without_thinking
 
 
 @dataclass(frozen=True, slots=True)
@@ -55,6 +56,8 @@ UNTRUSTED_TOOLS = frozenset(
         "scroll_ui",
         "look_up",
         "recall_memory",
+        "play_youtube",
+        "look_through_webcam",
     }
 )
 
@@ -287,7 +290,7 @@ class Assistant:
             if self._state.state in (AppState.THINKING, AppState.ACTING):
                 await self._state.transition(AppState.IDLE)
 
-        reply = result.content or "Done."
+        reply = without_thinking(result.content or "") or "Done."
         label = " + ".join(sorted(self._did)) or None
         await self._store.add_message(
             conversation,
@@ -360,7 +363,7 @@ class Assistant:
                 any_failed = True
                 break
             last = result
-            note = (result.content or "Done.").strip()
+            note = without_thinking(result.content or "") or "Done."
             failed = self._failed or self._blocked or says_it_cannot(note)
             any_failed = any_failed or failed
             steps[i] = PlanStep(task.title, StepStatus.FAILED if failed else StepStatus.DONE, note)
@@ -444,7 +447,9 @@ class Assistant:
             return ToolResult(False, "The screen couldn't be captured.")
         except AllProvidersFailedError as exc:
             return ToolResult(False, _failure_message(exc))
-        return ToolResult(True, seen.content or "Nothing notable on screen.")
+        return ToolResult(
+            True, without_thinking(seen.content or "") or "Nothing notable on screen."
+        )
 
     async def _run_tool(self, call: ToolCall) -> ToolResult:
         spec = self._registry.get(call.name)

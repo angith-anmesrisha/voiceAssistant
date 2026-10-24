@@ -31,12 +31,14 @@ from jarvis.app.state import AppState, InvalidTransitionError, StateMachine
 from jarvis.providers.router import AllProvidersFailedError, ProviderRouter
 from jarvis.tools.registry import Risk
 from jarvis.voice.audio_io import AudioDeviceError, Recorder
-from jarvis.voice.confirm import parse_yes_no, spoken_question
+from jarvis.voice.confirm import is_echo, parse_yes_no, spoken_question
 from jarvis.voice.local_stt import DISPLAY_NAME as LOCAL_STT_NAME
 from jarvis.voice.tts import Speaker
 
 _MIN_RECORDING_S = 0.4
 _ANSWER_WAIT_S = 6.0  # silence before a spoken confirmation counts as no
+_ACK_AFTER_S = 2.5  # a spoken request still working after this gets a short "On it."
+_ACKS = ("On it.", "Right away.", "One moment.")
 
 
 class LocalTranscriber(Protocol):
@@ -63,6 +65,8 @@ class AppController:
         self._router = router
         self._recorder = recorder
         self._speaker = speaker
+        self._last_said = ""  # to ignore the mic hearing it during follow-ups
+        self._acks = 0
         self._voice = voice
         self._local_stt = local_stt
         # The request being handled. "Busy" means this task is still running, so the
@@ -192,6 +196,9 @@ class AppController:
             if not heard:
                 await self._bus.publish(ChatEntry(EntryKind.ERROR, "I didn't catch that."))
                 return
+            if self._conversation and is_echo(heard, self._last_said):
+                logger.info("Ignored the microphone hearing JARVIS's own reply")
+                return
             await self._answer_locked(heard, spoken=True)
         finally:
             await self._settle()
@@ -235,10 +242,33 @@ class AppController:
             await self._settle()
 
     async def _answer_locked(self, text: str, *, spoken: bool) -> None:
-        reply = await self._assistant.handle(text, spoken=spoken)
-        if spoken and reply.ok and self._voice.speak_replies and self._speaker.available:
+        voiced = spoken and self._voice.speak_replies and self._speaker.available
+        ack = None
+        if voiced and self._voice.acknowledge:
+            loop = asyncio.get_running_loop()
+            ack = loop.call_later(_ACK_AFTER_S, lambda: self._spawn(self._acknowledge()))
+        try:
+            reply = await self._assistant.handle(text, spoken=spoken)
+        finally:
+            if ack is not None:
+                ack.cancel()
+        if voiced and reply.ok:
             await self._move_to(AppState.SPEAKING)
-            await self._speaker.speak(reply.text)
+            await self._say(reply.text)
+
+    async def _acknowledge(self) -> None:
+        """A short "On it." when a spoken request takes a while (never over a question)."""
+        if self._recorder.recording or self._speaker.speaking:
+            return
+        if self._state.state not in (AppState.THINKING, AppState.ACTING):
+            return
+        line = _ACKS[self._acks % len(_ACKS)]
+        self._acks += 1
+        await self._say(line)
+
+    async def _say(self, text: str) -> None:
+        self._last_said = text
+        await self._speaker.speak(text)
 
     # --- things JARVIS brings up by itself ---
 
@@ -257,7 +287,7 @@ class AppController:
         self._active = asyncio.current_task()  # busy while speaking it
         try:
             await self._move_to(AppState.SPEAKING)
-            await self._speaker.speak(text)
+            await self._say(text)
         finally:
             await self._settle()
 

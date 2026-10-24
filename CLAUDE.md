@@ -32,7 +32,8 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 - `jarvis/main.py`: entry; wires router, store, tools, window, assistant, voice, tray, hotkeys.
 - `app/`: paths (`%LOCALAPPDATA%\JARVIS`, `JARVIS_DATA_DIR` override), config (pydantic
   `Settings` in `settings.json`), events (`EventBus`), state (`StateMachine`), logging,
-  single instance.
+  single instance, `autostart.py` (Startup-folder shortcut `pythonw -m jarvis --hidden`,
+  tray toggle "Start with Windows").
 - `providers/`: `base.py` (types, `ProviderError`, `ErrorKind`, `ProviderState`),
   `openai_compat.py` (shared chat/transcribe/probe), `backends.py` (Groq, Gemini, Ollama),
   `network.py` (TCP reachability), `router.py` (priority, capability routing, bounded
@@ -44,6 +45,10 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   summaries, small state) and `memory_prompt` (newest facts + an index of the rest).
 - `tools/`: `apps.py` (`AppIndex` of installed apps: Start menu .lnk/.url + shell:AppsFolder,
   minus uninstallers/help/links and blocked shells/system editors; fuzzy `best_match`),
+  `media.py` (play_youtube: first `videoRenderer` on the results page, else the results;
+  find_flights: Google Flights `?q=` URL; Steam tools; look_through_webcam MEDIUM),
+  `steam.py` (libraryfolders.vdf + appmanifest_*.acf; StateFlags≠4 = needs update;
+  `steam://rungameid/<id>`, `steam://open/downloads`),
   `registry.py` (`Risk`, `ToolSpec`, arg validation), `desktop.py` (`WindowsDesktop`:
   approved launches with `shell=False`, pynput keys/typing, clipboard, lock/sleep, delayed
   shutdown), `files.py` (`FileArea`: allowed roots, blocked system folders, Recycle Bin via
@@ -81,7 +86,8 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   `widgets/`: `orb.py` (particle globe when idle, morphs into the glowing ring), `stage.py`
   (backdrop, top bar, clock/state caption, reply card, status strip, `Tween`), `panels.py`
   (provider/network/safety panels in the details overlay, command bar, confirm overlay),
-  `chat.py` (history drawer), `keys.py` (API key overlay), `glass.py`, `overlay.py`
+  `chat.py` (history drawer), `keys.py` (API key overlay), `glass.py`, `camera.py` (one QtMultimedia
+  photo, JPEG in memory, camera off straight after), `overlay.py`
   (always-on-top corner orb). `frame_clock.py`: one shared animation clock (vsync via
   `DwmFlush` on Windows, precise timer elsewhere).
 - `assets/fonts/`: Orbitron, Rajdhani, Inter (OFL).
@@ -222,7 +228,9 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   time-based easing; 60 fps when active, 30 when calm or if a frame takes >10 ms; stops
   when hidden, for Iris Xe. The owner liked this UI; keep its look.
 - Voice (owner asked for a free, unlimited JARVIS-like voice, 2026-10-24): local Kokoro
-  `bm_george` at speed 0.95, 0.32 s between sentences; fp32 model (325 MB) because it ran
+  `bm_george` at speed 1.05 (0.95 felt slow to the owner), 0.22 s between sentences,
+  first piece cut at its first comma when over 70 chars so audio starts sooner, a
+  warm-up synthesis at load, low-latency output stream; fp32 model (325 MB) because it ran
   3x faster than int8 on x86 CPUs (RTF ~0.33 vs ~1). Downloaded in the background on
   first start (`voice.download_voice`), cancelled on quit; SAPI speaks meanwhile and is
   the fallback. No cloning of the actor's voice. Kokoro-onnx itself isn't a dependency
@@ -244,6 +252,15 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   quiet if the session had 2+ user turns (`summarised_upto`; on first run existing
   history is skipped; on failure retried after 30 min). Check-ins and topic news respect
   quiet hours (`quiet_from`/`quiet_until`). Watched topics keep the user's casing.
+- Small extras (batch 4): a spoken request still working after 2.5 s gets "On it." /
+  "Right away." / "One moment." (`voice.acknowledge`; never while listening or
+  speaking); during follow-up listening a transcript of 4+ words that is ≥80% JARVIS's
+  last spoken words is ignored (`is_echo`); `<think>` blocks are stripped from shown and
+  spoken replies; the context carries an "About you" line (version, current voice);
+  replies mostly in a non-Latin script (Hindi, Malayalam, Arabic...) are spoken by a
+  SAPI voice of that language if installed (Kokoro is English only). Webcam photos go
+  to the vision route once, after a Yes, and are never stored. No assistant/user name
+  settings: memory ("call me ...") covers it.
 - Closing the window hides to the tray; Quit is in the tray menu.
 - Push-to-talk is Alt+` (vk 0xC0, or 0xDF on UK layouts). On Windows the backtick is
   swallowed while the chord is held and an unassigned key (0xE8) is tapped so releasing

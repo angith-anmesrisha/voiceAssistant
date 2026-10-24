@@ -21,11 +21,11 @@ from typing import Any
 
 from loguru import logger
 
-from jarvis.voice.spoken_text import speakable
+from jarvis.voice.spoken_text import script_language, speakable
 
 _SVSF_ASYNC = 1
 _SVSF_PURGE = 2
-_SENTENCE_PAUSE_S = 0.32  # between sentences: measured, not hurried
+_SENTENCE_PAUSE_S = 0.22  # between sentences: natural, not hurried
 _BLOCK = 1200  # frames written at a time (50 ms), so stop() is quick
 
 __all__ = ["Speaker", "speakable"]
@@ -48,7 +48,7 @@ class Speaker:
         *,
         engine: str = "sapi",
         neural_voice: str = "bm_george",
-        neural_speed: float = 0.95,
+        neural_speed: float = 1.05,
         model_folder: Path | None = None,
     ) -> None:
         self._voice_hint = voice_hint.lower()
@@ -157,7 +157,7 @@ class Speaker:
             return
         pause = np.zeros(int(_SENTENCE_PAUSE_S * SAMPLE_RATE), dtype=np.float32)
         pool = ThreadPoolExecutor(1, thread_name_prefix="tts-synth")
-        stream = sd.OutputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32")
+        stream = sd.OutputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32", latency="low")
         try:
             # Make the next sentence while this one plays.
             pending: Future[Any] = pool.submit(voice.synthesize, parts[0])
@@ -199,12 +199,20 @@ class Speaker:
             logger.error("Windows speech engine unavailable: {}", type(exc).__name__)
             return None
 
-    def _speak_sapi(self, voice: Any, text: str) -> None:
-        voice.Speak(text, _SVSF_ASYNC | _SVSF_PURGE)
-        while not voice.WaitUntilDone(50):
-            if self._stop.is_set():
-                voice.Speak("", _SVSF_ASYNC | _SVSF_PURGE)
-                break
+    def _speak_sapi(self, voice: Any, text: str, language_id: int | None = None) -> None:
+        usual = voice.Voice
+        match = _voice_for(voice, language_id) if language_id is not None else None
+        if match is not None:
+            voice.Voice = match
+        try:
+            voice.Speak(text, _SVSF_ASYNC | _SVSF_PURGE)
+            while not voice.WaitUntilDone(50):
+                if self._stop.is_set():
+                    voice.Speak("", _SVSF_ASYNC | _SVSF_PURGE)
+                    break
+        finally:
+            if match is not None:
+                voice.Voice = usual
 
     def _worker(self) -> None:
         sapi = self._open_sapi()
@@ -217,19 +225,34 @@ class Speaker:
             try:
                 self.speaking = True
                 spoken = False
-                if self._neural is not None:
+                # The British voice only speaks English; Hindi, Malayalam, Arabic... go to
+                # a Windows voice for that language when one is installed.
+                language = script_language(job.text)
+                if self._neural is not None and language is None:
                     try:
                         self._play_neural(job.text)
                         spoken = True
                     except Exception as exc:
                         logger.warning("Neural voice failed: {}", type(exc).__name__)
                 if not spoken and sapi is not None and not self._stop.is_set():
-                    self._speak_sapi(sapi, job.text)
+                    self._speak_sapi(sapi, job.text, language[1] if language else None)
             except Exception as exc:
                 logger.warning("Speech failed: {}", type(exc).__name__)
             finally:
                 self.speaking = False
                 job.loop.call_soon_threadsafe(_resolve, job.done)
+
+
+def _voice_for(voice: Any, language_id: int) -> Any:
+    """An installed SAPI voice whose language has this primary language id, if any."""
+    for token in voice.GetVoices():
+        try:
+            codes = str(token.GetAttribute("Language")).split(";")
+            if any(int(code, 16) & 0x3FF == language_id for code in codes if code):
+                return token
+        except Exception:
+            continue
+    return None
 
 
 def _resolve(future: asyncio.Future[None]) -> None:

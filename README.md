@@ -122,6 +122,13 @@ python -m jarvis --hidden   # starts in the tray
   watch, warns about a low battery or a PC that's been flat out for minutes, and after
   two hours without a break suggests one (never during quiet hours, 22:00 to 08:00).
   Each of these can be turned off under `routines` in settings.json.
+- **Entertainment and errands.** "Play lo-fi on YouTube" plays the top result; "find
+  flights from Kochi to Dubai on 12 March" opens Google Flights; "what Steam games do I
+  have?", "start Cyberpunk", "update my games". "How do I look?" takes one webcam photo
+  after you say yes, and it's never saved.
+- **Feels responsive.** A spoken request that takes a moment gets a quick "On it.", it
+  won't mistake its own voice for you during a conversation, and "Start with Windows"
+  in the tray menu starts it quietly in the tray when you sign in.
 - **Undo.** "Undo that" takes back JARVIS's own last file move, rename, copy, new folder
   or file, desktop tidy-up, or volume, brightness or wallpaper change.
 - **Documents and your PC.** "Summarise the PDF in my Downloads", "save these notes to
@@ -190,7 +197,7 @@ JARVIS does). Four British male voices are included; set `voice.neural_voice` to
 | `bm_fable` | also rated well; worth comparing with George |
 | `bm_lewis`, `bm_daniel` | rated lower by Kokoro's authors, but some prefer them |
 
-`voice.neural_speed` sets the pace (0.95 by default, measured; 0.7 to 1.3). Set
+`voice.neural_speed` sets the pace (1.05 by default; lower is slower and more measured; 0.7 to 1.3). Set
 `voice.tts_engine` to `"sapi"` to use only Windows' voice, or `voice.download_voice` to
 `false` to never download. A short pause separates sentences, and Markdown, links, code,
 emoji and file paths are never read aloud (a link becomes the site's name).

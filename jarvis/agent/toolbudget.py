@@ -46,6 +46,15 @@ _GROUPS: dict[str, re.Pattern[str]] = {
         r"settings page)\b",
         re.IGNORECASE,
     ),
+    "media": re.compile(
+        r"\b(youtube|video|song|music|playlist|listen|watch|play|flights?|fly|plane|"
+        r"airport|steam|games?|update)\b",
+        re.IGNORECASE,
+    ),
+    "camera": re.compile(
+        r"\b(webcam|camera|how do i look|look at me|see me|what am i (holding|wearing))\b",
+        re.IGNORECASE,
+    ),
     "reminders": re.compile(
         r"\b(remind|reminder|reminders|timer|alarm|wake me|in \d+ (sec|second|min|minute|"
         r"hour)s?|at \d{1,2}(:\d\d)?\s*(am|pm)?|tomorrow|tonight|later|schedule|"

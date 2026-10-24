@@ -150,7 +150,7 @@ class VoiceSettings(BaseModel):
     tts_engine: Literal["kokoro", "sapi"] = "kokoro"
     # Kokoro voice: bm_george (default), bm_fable, bm_lewis or bm_daniel (British male).
     neural_voice: str = "bm_george"
-    neural_speed: float = Field(default=0.95, ge=0.7, le=1.3)  # under 1 is more measured
+    neural_speed: float = Field(default=1.05, ge=0.7, le=1.3)  # under 1 is more measured
     download_voice: bool = True
     # Windows SAPI voice name substring (e.g. "David", "Hazel"); empty = system default.
     # Used until the neural voice is ready, or always with tts_engine "sapi".
@@ -167,6 +167,8 @@ class VoiceSettings(BaseModel):
     # Ask Medium-risk confirmations out loud and accept a spoken yes or no (the
     # buttons still work). High risk always needs CONFIRM typed in the window.
     voice_confirm: bool = True
+    # Say "On it." when a spoken request is still being worked on after a moment.
+    acknowledge: bool = True
 
 
 def _default_apps() -> dict[str, str]:

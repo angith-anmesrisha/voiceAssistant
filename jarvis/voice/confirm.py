@@ -8,6 +8,7 @@ that isn't clearly a yes, counts as no.
 from __future__ import annotations
 
 import re
+from difflib import SequenceMatcher
 
 _YES = re.compile(
     r"\b(yes|yeah|yea|yep|yup|sure|ok|okay|go ahead|do it|go for it|please do|confirm|"
@@ -49,3 +50,16 @@ def parse_yes_no(heard: str, *, asked: str = "") -> bool | None:
     if no:
         return False  # "no", "yes, no wait": any no wins
     return True if yes else None
+
+
+def is_echo(heard: str, said: str, threshold: float = 0.8) -> bool:
+    """Whether a transcript is just JARVIS's own last words picked up by the microphone.
+
+    Short phrases never count: "send it" after "Shall I send it?" is a real answer.
+    """
+    words, spoken = _words(heard).split(), _words(said).split()
+    if len(words) < 4 or not spoken:
+        return False
+    matcher = SequenceMatcher(a=words, b=spoken, autojunk=False)
+    matched = sum(block.size for block in matcher.get_matching_blocks())
+    return matched / len(words) >= threshold

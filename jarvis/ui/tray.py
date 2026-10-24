@@ -1,4 +1,4 @@
-"""System tray icon: show/hide the window, quit."""
+"""System tray icon: show/hide the window, start with Windows, quit."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ from PySide6.QtGui import QAction
 from PySide6.QtWidgets import QMenu, QSystemTrayIcon
 
 from jarvis import APP_NAME, __version__
+from jarvis.app import autostart
 from jarvis.app.events import EventBus, NoticeLevel, QuitRequested, UserNotice
 from jarvis.app.state import StateChanged
 from jarvis.ui.icons import app_icon
@@ -27,12 +28,17 @@ class Tray:
         self._status.setEnabled(False)
         show = QAction(f"Open {APP_NAME}")
         show.triggered.connect(show_window)
+        self._autostart = QAction("Start with Windows")
+        self._autostart.setCheckable(True)
+        self._autostart.setChecked(autostart.enabled())
+        self._autostart.toggled.connect(self._on_autostart)
         quit_action = QAction(f"Quit {APP_NAME}")
         quit_action.triggered.connect(self._on_quit)
-        self._actions = [self._status, show, quit_action]
+        self._actions = [self._status, show, self._autostart, quit_action]
         self._menu.addAction(self._status)
         self._menu.addSeparator()
         self._menu.addAction(show)
+        self._menu.addAction(self._autostart)
         self._menu.addAction(quit_action)
         self._icon.setContextMenu(self._menu)
         self._icon.setToolTip(f"{APP_NAME} {__version__}")
@@ -50,6 +56,24 @@ class Tray:
 
     def hide(self) -> None:
         self._icon.hide()
+
+    def _on_autostart(self, on: bool) -> None:
+        try:
+            autostart.set_enabled(on)
+            notice = UserNotice(
+                "Start with Windows",
+                f"{APP_NAME} will start in the tray when you sign in."
+                if on
+                else f"{APP_NAME} won't start by itself any more.",
+            )
+        except autostart.AutostartError as exc:
+            self._autostart.blockSignals(True)
+            self._autostart.setChecked(autostart.enabled())
+            self._autostart.blockSignals(False)
+            notice = UserNotice("Start with Windows", str(exc), NoticeLevel.WARNING)
+        task = asyncio.ensure_future(self._bus.publish(notice))
+        self._pending.add(task)
+        task.add_done_callback(self._pending.discard)
 
     def _on_quit(self) -> None:
         task = asyncio.ensure_future(self._bus.publish(QuitRequested(reason="tray")))
