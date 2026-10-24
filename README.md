@@ -192,8 +192,8 @@ python -m jarvis --hidden   # starts in the tray
   (needs `OPENROUTER_API_KEY`, free at openrouter.ai/settings/keys; about 50 decks a day
   without credit), with Groq's free GPT-OSS 120B as the backup for short topics. Never
   Gemini, Ollama or a paid model. JARVIS draws it as a real .pptx (16:9, six themes,
-  title, section, cards, stats, timeline, comparison table, quote and closing slides,
-  speaker notes on every slide), saves it in Documents\JARVIS Presentations and opens it.
+  title, agenda, section, icon cards, stats, editable charts, timeline, comparison
+  table, statement, quote and closing slides, speaker notes on every slide), saves it in Documents\JARVIS Presentations and opens it.
   PDF, Word, PowerPoint, Excel, text and Markdown files can be the source.
 - **WhatsApp messages.** Ask "send Mom a WhatsApp message saying I'll be late": after
   one Yes, JARVIS brings WhatsApp to the front, searches for the chat (Ctrl+F), opens

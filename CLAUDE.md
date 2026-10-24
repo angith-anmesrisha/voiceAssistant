@@ -216,12 +216,17 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   step)/volume, mute, brightness or wallpaper change, session only, 30 steps.
 - PowerPoint decks (owner, 2026-10-24: "only use free models", "dont use bad models like
   gemini"): `make_presentation` (LOW, group "slides") makes one JSON call (`DECK_PROMPT`,
-  `json_mode`) to `slides.models` on OpenRouter (inkling, nemotron-3-ultra, qwen3.8-27b,
-  nemotron-3-super, openrouter/free; `is_free`: ids ending ":free" or "openrouter/free",
-  anything else is dropped), then Groq `openai/gpt-oss-120b` only when the prompt is ≤5,500
+  `json_mode`) to `slides.models` on OpenRouter (nemotron-3-ultra, nemotron-3-super,
+  dots-3-note-preview, laguna-s-2.1, openrouter/free; `is_free`: ids ending ":free" or
+  "openrouter/free", anything else is dropped; Inkling's free tier answers 403 outside
+  agent apps and Qwen 3.8's ended, so `RETIRED_SLIDE_MODELS` strips them from saved
+  settings; a 404 or a 403 "only available…" skips that model for the session), then Groq `openai/gpt-oss-120b` only when the prompt is ≤5,500
   chars (8K TPM). Never Gemini or Ollama. `parse_deck` cleans the JSON and downgrades a
   layout missing its content to bullets; `deck_render` draws every slide from shapes on a
-  blank 16:9 layout (6 themes, 10 layouts, notes), `open("xb")` so it never overwrites.
+  blank 16:9 layout (6 themes, 13 layouts incl. agenda, statement and native editable
+  charts: column/bar/line/pie/doughnut; emoji icons in Segoe UI Emoji badges; "Lead:
+  detail" bullets get a bold lead; notes), `open("xb")` so it never overwrites. The prompt
+  asks for an `outline` first (ignored when parsing) so the model plans the story.
   Sources are read with `read_text` (400 PDF pages) and sampled by `excerpt` (12 segments,
   120K chars). "Upload" = a file dropped on the window in the last 10 min, else a
   QFileDialog. Clear requests go through `deck_command` without a chat model (mode

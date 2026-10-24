@@ -318,14 +318,15 @@ class MemorySettings(BaseModel):
 class SlideSettings(BaseModel):
     """PowerPoint decks ("make a 15 slide ppt on ..."), written by free models only."""
 
-    # Free OpenRouter models, best first (ids must end in ":free"; others are ignored).
-    # The free list changes often: a model that's gone is skipped.
+    # Free OpenRouter models, strongest that reliably answers first (ids must end in
+    # ":free"; others are ignored). The free list changes often: a model that's gone or
+    # refuses (404/403) is skipped for the rest of the session.
     models: list[str] = Field(
         default_factory=lambda: [
-            "thinkingmachines/inkling:free",
             "nvidia/nemotron-3-ultra-550b-a55b:free",
-            "qwen/qwen3.8-27b:free",
             "nvidia/nemotron-3-super-120b-a12b:free",
+            "dots-studio/dots-3-note-preview:free",
+            "poolside/laguna-s-2.1:free",
             "openrouter/free",
         ]
     )
@@ -336,6 +337,15 @@ class SlideSettings(BaseModel):
     # Empty = Documents/JARVIS Presentations.
     folder: str = ""
     open_when_done: bool = True
+
+    @model_validator(mode="after")
+    def _drop_unusable(self) -> SlideSettings:
+        # Inkling's free tier answers 403 outside agent apps; Qwen 3.8's free tier ended.
+        self.models = [m for m in self.models if m not in RETIRED_SLIDE_MODELS]
+        return self
+
+
+RETIRED_SLIDE_MODELS = frozenset({"thinkingmachines/inkling:free", "qwen/qwen3.8-27b:free"})
 
 
 class Settings(BaseModel):

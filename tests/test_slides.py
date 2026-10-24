@@ -294,3 +294,75 @@ async def test_assistant_makes_a_deck_without_asking_the_chat_model(tmp_path: Pa
     last = [e for e in entries if e.kind is EntryKind.ASSISTANT][-1]
     assert (last.provider, last.model, last.mode) == ("OpenRouter", "best/model:free", "slides")
     assert list((tmp_path / "Presentations").glob("*.pptx"))
+
+
+# --- richer decks: icons, charts, refusing models ---
+
+
+def test_charts_and_icons_are_checked() -> None:
+    reply = json.dumps(
+        {
+            "title": "T",
+            "slides": [
+                {"layout": "cards", "title": "C", "bullets": ["A: b", "C: d"],
+                 "icons": ["🚀", "x"]},
+                {"layout": "stats", "title": "S",
+                 "stats": [{"value": "4x", "label": "l", "icon": "📈"}]},
+                {"layout": "chart", "title": "Up", "chart": {
+                    "type": "column", "categories": ["2020", "2021"],
+                    "series": [{"name": "GW", "values": ["39", "1,049.5"]}], "unit": "GW"}},
+                {"layout": "chart", "title": "Broken", "chart": {
+                    "categories": ["a", "b"], "series": [{"values": [1, "n/a"]}]}},
+                {"layout": "statement", "title": "Storage is the bottleneck", "icon": "🔋"},
+            ],
+        }
+    )  # fmt: skip
+    deck = parse_deck(reply, 5)
+    cards, stats, chart, broken, statement = deck.slides
+    assert cards.icons == ["🚀", ""] and stats.icons == ["📈"]
+    assert chart.chart is not None and chart.chart.series == [("GW", [39.0, 1049.5])]
+    assert broken.layout == "bullets"
+    assert statement.layout == "statement" and statement.icon == "🔋"
+
+
+def test_charts_and_new_layouts_draw(tmp_path: Path) -> None:
+    from pptx import Presentation
+
+    slides = [
+        {"layout": "title", "title": "Solar"},
+        {"layout": "agenda", "title": "Agenda", "bullets": ["One", "Two", "Three", "Four", "Five"]},
+        {"layout": "statement", "title": "Storage is the bottleneck", "subtitle": "Why",
+         "icon": "🔋"},
+        {"layout": "bullets", "title": "B", "icon": "🏭", "bullets": ["Lead: detail", "plain"]},
+    ] + [
+        {"layout": "chart", "title": kind, "bullets": ["Insight: here"], "chart": {
+            "type": kind, "categories": ["a", "b", "c"],
+            "series": [{"name": "s", "values": [1, 2, 3]}], "unit": unit}}
+        for kind, unit in (
+            ("column", "GW"), ("bar", "₹"), ("line", "%"), ("pie", "%"), ("doughnut", "")
+        )
+    ]  # fmt: skip
+    path = tmp_path / "charts.pptx"
+    assert render(parse_deck(json.dumps({"title": "T", "slides": slides}), 9), path) == 9
+    prs = Presentation(str(path))
+    charts = [s for slide in prs.slides for s in slide.shapes if s.has_chart]
+    assert len(charts) == 5
+
+
+async def test_a_model_that_refuses_is_not_asked_again() -> None:
+    refused = ProviderError(
+        "OpenRouter", ErrorKind.AUTH, "HTTP 403: x:free is only available on agentic harnesses"
+    )
+    openrouter = FakeProvider("OpenRouter", [refused, deck_json(4), deck_json(4)])
+    writer = DeckWriter(openrouter, None, ["x:free", "y:free"], groq_model="")
+    await writer.write("tea", 4)
+    await writer.write("coffee", 4)
+    assert [m for m, _ in openrouter.calls] == ["x:free", "y:free", "y:free"]
+
+
+def test_retired_free_models_are_dropped_from_settings() -> None:
+    from jarvis.app.config import SlideSettings
+
+    saved = SlideSettings(models=["thinkingmachines/inkling:free", "a/b:free"])
+    assert saved.models == ["a/b:free"]
+    assert "thinkingmachines/inkling:free" not in SlideSettings().models
