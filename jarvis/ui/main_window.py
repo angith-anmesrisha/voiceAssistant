@@ -698,8 +698,11 @@ class MainWindow(HudBackdrop):
 
     # --- confirmations and screen capture ---
 
-    async def confirm(self, request: ConfirmRequest) -> bool:
-        self.show_and_raise()
+    async def confirm(self, request: ConfirmRequest, focus: bool = True) -> bool:
+        """Show the confirm card. Without focus (the question is asked out loud) the
+        window isn't brought forward, so the app JARVIS is working in keeps the focus."""
+        if focus:
+            self.show_and_raise()
         return await self.confirm_overlay.ask(request.description, request.risk)
 
     def show_and_raise(self) -> None:

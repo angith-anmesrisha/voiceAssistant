@@ -65,6 +65,7 @@ class AppController:
         self._router = router
         self._recorder = recorder
         self._speaker = speaker
+        self._ui_forward: Callable[[], None] | None = None
         self._last_said = ""  # to ignore the mic hearing it during follow-ups
         self._acks = 0
         self._voice = voice
@@ -78,7 +79,7 @@ class AppController:
         # so follow-ups need no wake word. Silence, typing or a mic problem ends it.
         self._conversation = False
         # Confirmation buttons in the window (set by main); voice asks alongside them.
-        self._ui_ask: Callable[[ConfirmRequest], Awaitable[bool]] | None = None
+        self._ui_ask: Callable[[ConfirmRequest, bool], Awaitable[bool]] | None = None
         self._ui_dismiss: Callable[[bool], None] | None = None
         bus.subscribe(PushToTalkPressed, self._on_ptt_pressed)
         bus.subscribe(PushToTalkReleased, self._on_ptt_released)
@@ -294,21 +295,30 @@ class AppController:
     # --- confirmations ---
 
     def set_confirm_ui(
-        self, ask: Callable[[ConfirmRequest], Awaitable[bool]], dismiss: Callable[[bool], None]
+        self,
+        ask: Callable[[ConfirmRequest, bool], Awaitable[bool]],
+        dismiss: Callable[[bool], None],
+        bring_forward: Callable[[], None] | None = None,
     ) -> None:
+        """``ask(request, focus)``: show the buttons; with focus False they appear without
+        taking the user away from the app JARVIS is working in (a spoken answer is coming).
+        ``bring_forward`` raises them later if the spoken answer can't be heard."""
         self._ui_ask, self._ui_dismiss = ask, dismiss
+        self._ui_forward = bring_forward
 
     async def confirm(self, request: ConfirmRequest) -> bool:
         """Ask before a risky step. Medium risk is asked out loud too; the first answer wins."""
-        ui: asyncio.Future[bool] | None = None
-        if self._ui_ask is not None:
-            ui = asyncio.ensure_future(self._ui_ask(request))
         aloud = (
             request.risk < Risk.HIGH
             and self._voice.voice_confirm
             and self._speaker.available
             and not self._recorder.recording
         )
+        ui: asyncio.Future[bool] | None = None
+        if self._ui_ask is not None:
+            # Asked out loud, the buttons stay in the background: switching windows
+            # mid-task would break what JARVIS is doing in the other app.
+            ui = asyncio.ensure_future(self._ui_ask(request, not aloud))
         if not aloud:
             return await ui if ui is not None else False
         voice = asyncio.ensure_future(self._ask_aloud(request.description))
@@ -321,6 +331,8 @@ class AppController:
             return ui.result()
         answer = voice.result()
         if answer is None:  # no microphone or speech-to-text: the buttons decide
+            if self._ui_forward is not None:
+                self._ui_forward()
             return await ui if ui is not None else False
         if self._ui_dismiss is not None:
             self._ui_dismiss(answer)

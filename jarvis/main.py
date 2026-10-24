@@ -195,7 +195,9 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     controller = AppController(
         bus, state, assistant, router, recorder, speaker, settings.voice, WindowsDictation()
     )
-    controller.set_confirm_ui(window.confirm, window.confirm_overlay.settle)
+    controller.set_confirm_ui(
+        window.confirm, window.confirm_overlay.settle, bring_forward=window.show_and_raise
+    )
 
     from jarvis.app import keys
     from jarvis.ui.widgets.keys import KeyField

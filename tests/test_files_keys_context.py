@@ -129,7 +129,7 @@ async def test_open_never_runs_programs(tools: ToolRegistry, desktop: FakeDeskto
 def test_file_risks(tools: ToolRegistry) -> None:
     assert risk(tools, "list_folder", path="documents") is Risk.LOW
     assert risk(tools, "create_folder", path="documents/x") is Risk.LOW
-    assert risk(tools, "copy_item", source="a", destination="b") is Risk.MEDIUM
+    assert risk(tools, "copy_item", source="a", destination="b") is Risk.LOW  # never overwrites
     assert risk(tools, "move_item", source="a", destination="b") is Risk.MEDIUM
 
 
@@ -157,7 +157,9 @@ def test_unsafe_or_unknown_combos_are_refused(text: str) -> None:
 
 
 async def test_press_keys(tools: ToolRegistry, desktop: FakeDesktop) -> None:
-    assert risk(tools, "press_keys", keys="ctrl+shift+n") is Risk.MEDIUM
+    assert risk(tools, "press_keys", keys="ctrl+shift+n") is Risk.LOW
+    for committing in ("enter", "ctrl+enter", "alt+f4", "ctrl+w", "shift+delete", "ctrl+s"):
+        assert risk(tools, "press_keys", keys=committing) is Risk.MEDIUM, committing
     assert (await run(tools, "press_keys", keys="ctrl+shift+n")).ok
     assert desktop.calls[-1] == ("press", ("ctrl", "shift", "n"))
     refused = await run(tools, "press_keys", keys="win+r")
@@ -167,7 +169,8 @@ async def test_press_keys(tools: ToolRegistry, desktop: FakeDesktop) -> None:
 def test_every_named_shortcut_is_valid() -> None:
     for name, (keys, level, what) in SHORTCUTS.items():
         assert keys and what and level in (Risk.LOW, Risk.MEDIUM), name
-    assert SHORTCUTS["copy"][1] is Risk.LOW and SHORTCUTS["paste"][1] is Risk.MEDIUM
+    assert SHORTCUTS["copy"][1] is Risk.LOW and SHORTCUTS["paste"][1] is Risk.LOW
+    assert SHORTCUTS["enter"][1] is Risk.MEDIUM and SHORTCUTS["close_tab"][1] is Risk.MEDIUM
 
 
 # --- clipboard ---

@@ -79,7 +79,7 @@ def test_risk_levels(registry: ToolRegistry) -> None:
     assert risk(registry, "open_url", url="https://notyoutube.com") is Risk.MEDIUM
     assert risk(registry, "press_shortcut", shortcut="play_pause") is Risk.LOW
     assert risk(registry, "press_shortcut", shortcut="close_tab") is Risk.MEDIUM
-    assert risk(registry, "type_text", text="hi") is Risk.MEDIUM
+    assert risk(registry, "type_text", text="hi") is Risk.LOW  # typing doesn't ask
     assert risk(registry, "lock_pc") is Risk.MEDIUM
     assert risk(registry, "shutdown_or_restart_pc", action="shutdown") is Risk.HIGH
 

@@ -21,7 +21,7 @@ from jarvis.tools.media import CameraFn, DescribeFn, register_media_tools
 from jarvis.tools.pc import register_pc_tools
 from jarvis.tools.personal import register_personal_tools
 from jarvis.tools.registry import Risk, ToolRegistry, ToolResult, ToolSpec
-from jarvis.tools.shortcuts import SHORTCUTS, KeyComboError, parse_combo
+from jarvis.tools.shortcuts import SHORTCUTS, KeyComboError, combo_risk, parse_combo
 from jarvis.tools.steam import SteamGame
 from jarvis.tools.system_ctl import SystemControl
 from jarvis.tools.ui import UiDriver, UiError, app_label, click_risk, format_snapshot
@@ -58,6 +58,13 @@ def _safe(action: str, fn: Any) -> ToolResult:
     except Exception as exc:
         return ToolResult(False, f"Couldn't {action}: {type(exc).__name__}.")
     return ToolResult(True, action[0].upper() + action[1:] + ".")
+
+
+def _keys_risk(keys: str) -> Risk:
+    try:
+        return combo_risk(parse_combo(keys))
+    except KeyComboError:
+        return Risk.LOW  # refused when run, so nothing to confirm
 
 
 def build_registry(
@@ -296,7 +303,7 @@ def build_registry(
             "when you know it (e.g. ctrl+shift+n for a new folder in Explorer).",
             _schema({"keys": {"type": "string", "maxLength": 60}}, ["keys"]),
             press_keys,
-            Risk.MEDIUM,
+            lambda a: _keys_risk(str(a.get("keys", ""))),
             lambda a: f"Press {a.get('keys', 'keys')}",
         )
     )
@@ -306,7 +313,7 @@ def build_registry(
             "Type text into the window the user was last using (dictation).",
             _schema({"text": {"type": "string", "maxLength": settings.max_typed_chars}}, ["text"]),
             type_text,
-            Risk.MEDIUM,
+            Risk.LOW,
             lambda a: (
                 f"Type {len(str(a.get('text', '')))} characters into your last window: "
                 f"“{str(a.get('text', ''))[:80]}”"
@@ -426,7 +433,7 @@ def build_registry(
          lambda a: f"Create folder {a.get('path')}"),
         ("copy_item", "Copy a file or folder. If the destination is a folder, the copy goes "
          "inside it. Never overwrites.", {"source": path_arg, "destination": path_arg},
-         ["source", "destination"], copy_item, Risk.MEDIUM,
+         ["source", "destination"], copy_item, Risk.LOW,
          lambda a: f"Copy {a.get('source')} to {a.get('destination')}"),
         ("move_item", "Move a file or folder. If the destination is a folder, it goes inside "
          "it. Never overwrites.", {"source": path_arg, "destination": path_arg},

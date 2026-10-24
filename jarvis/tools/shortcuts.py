@@ -52,25 +52,25 @@ SHORTCUTS: dict[str, tuple[list[str], Risk, str]] = {
     "lock_screen": (["cmd", "l"], M, "lock the PC"),
     # editing (any app)
     "copy": (["ctrl", "c"], L, "copy the selection"),
-    "cut": (["ctrl", "x"], M, "cut the selection"),
-    "paste": (["ctrl", "v"], M, "paste"),
-    "paste_plain_text": (["ctrl", "shift", "v"], M, "paste without formatting"),
-    "undo": (["ctrl", "z"], M, "undo"),
-    "redo": (["ctrl", "y"], M, "redo"),
+    "cut": (["ctrl", "x"], L, "cut the selection"),
+    "paste": (["ctrl", "v"], L, "paste"),
+    "paste_plain_text": (["ctrl", "shift", "v"], L, "paste without formatting"),
+    "undo": (["ctrl", "z"], L, "undo"),
+    "redo": (["ctrl", "y"], L, "redo"),
     "select_all": (["ctrl", "a"], L, "select all"),
     "save": (["ctrl", "s"], M, "save"),
-    "save_as": (["ctrl", "shift", "s"], M, "save as"),
-    "print": (["ctrl", "p"], M, "print dialog"),
+    "save_as": (["ctrl", "shift", "s"], L, "save as"),
+    "print": (["ctrl", "p"], L, "print dialog"),
     "find": (["ctrl", "f"], L, "find on page or in document"),
-    "replace": (["ctrl", "h"], M, "find and replace"),
-    "bold": (["ctrl", "b"], M, "bold"),
-    "italic": (["ctrl", "i"], M, "italic"),
-    "underline": (["ctrl", "u"], M, "underline"),
+    "replace": (["ctrl", "h"], L, "find and replace"),
+    "bold": (["ctrl", "b"], L, "bold"),
+    "italic": (["ctrl", "i"], L, "italic"),
+    "underline": (["ctrl", "u"], L, "underline"),
     "new_document": (["ctrl", "n"], L, "new window or document"),
     "open_file_dialog": (["ctrl", "o"], L, "open file dialog"),
-    "rename_selected": (["f2"], M, "rename the selected file"),
+    "rename_selected": (["f2"], L, "rename the selected file"),
     "file_properties": (["alt", "enter"], L, "properties of the selected file"),
-    "new_folder_in_explorer": (["ctrl", "shift", "n"], M, "new folder in File Explorer"),
+    "new_folder_in_explorer": (["ctrl", "shift", "n"], L, "new folder in File Explorer"),
     # browser
     "new_tab": (["ctrl", "t"], L, "new tab"),
     "close_tab": (["ctrl", "w"], M, "close tab"),
@@ -82,7 +82,7 @@ SHORTCUTS: dict[str, tuple[list[str], Risk, str]] = {
     "back": (["alt", "left"], L, "go back"),
     "forward": (["alt", "right"], L, "go forward"),
     "address_bar": (["ctrl", "l"], L, "focus the address bar"),
-    "bookmark_page": (["ctrl", "d"], M, "bookmark the page"),
+    "bookmark_page": (["ctrl", "d"], L, "bookmark the page"),
     "history": (["ctrl", "h"], L, "browser history"),
     "downloads": (["ctrl", "j"], L, "browser downloads"),
     "incognito_window": (["ctrl", "shift", "n"], L, "private window (in a browser)"),
@@ -120,6 +120,21 @@ _REFUSED = {
 
 class KeyComboError(ValueError):
     pass
+
+
+# Combinations that send, submit, delete, save over or close something still ask first.
+_COMMITTING = (
+    {"enter"}, {"delete"}, {"alt", "f4"}, {"ctrl", "w"}, {"ctrl", "shift", "w"},
+    {"ctrl", "f4"}, {"ctrl", "q"}, {"ctrl", "s"}, {"shift", "delete"},
+)  # fmt: skip
+
+
+def combo_risk(keys: list[str]) -> Risk:
+    """LOW for moving around and editing; MEDIUM if the keys can send, delete or close."""
+    pressed = set(keys)
+    if "enter" in pressed or "delete" in pressed:
+        return M
+    return M if any(pressed == combo for combo in _COMMITTING) else L
 
 
 def parse_combo(text: str) -> list[str]:

@@ -133,12 +133,12 @@ async def test_low_risk_tool_runs_without_confirmation(tmp_path: Path) -> None:
 async def test_medium_risk_tool_declined_is_not_run(tmp_path: Path) -> None:
     rig = Rig(
         tmp_path,
-        ScriptedRouter(tool_reply("type_text", text="hello"), text_reply("Okay, I won't.")),
+        ScriptedRouter(tool_reply("lock_pc"), text_reply("Okay, I won't.")),
         approve=False,
     )
-    await rig.assistant.handle("type hello")
+    await rig.assistant.handle("lock my pc")
     assert rig.confirms[0].risk is Risk.MEDIUM
-    assert ("type", "hello") not in rig.desktop.calls
+    assert ("lock", None) not in rig.desktop.calls
     assert "declined" in rig.router.requests[1]["messages"][-1]["content"]
     assert any(e.kind is EntryKind.ACTION and e.text.startswith("Declined") for e in rig.entries)
 

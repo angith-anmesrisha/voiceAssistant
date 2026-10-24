@@ -228,7 +228,13 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   `parse_yes_no` (any no wins; its own question echoed back isn't an answer), asks once
   more if unclear, then takes it as no. The Yes/No buttons stay up and the first answer
   wins; with no mic or speech-to-text the buttons decide. `voice.voice_confirm` turns it
-  off. High risk requires typing CONFIRM. Shutdown/restart run with a
+  off. A spoken confirm never raises the window (`ask(request, focus=False)`): raising it
+  mid-WhatsApp broke the owner's flow; `bring_forward` raises it only when the answer
+  can't be heard. Owner (2026-10-24): no asking for typing, copy, cut, paste, undo or
+  ordinary keys; `combo_risk` keeps Enter/Delete/Alt+F4/Ctrl+W/Ctrl+S/Ctrl+Q MEDIUM, and
+  sending (type_into submit, Send-style clicks) still asks once. Mark-LVI's WhatsApp
+  sender is blind keystrokes (Ctrl+F, contact, Enter, paste, Enter) with no read-back;
+  JARVIS keeps the UI Automation look → act → check loop instead. High risk requires typing CONFIRM. Shutdown/restart run with a
   60 s delay and can be cancelled.
 - Screen, web, and file text is treated as information, never instructions (in every prompt).
 - UI follows the owner's reference video: charcoal grid HUD, particle globe + clock when

@@ -50,8 +50,14 @@ class UiButtons:
     def __init__(self) -> None:
         self.future: asyncio.Future[bool] | None = None
         self.settled: list[bool] = []
+        self.focused: list[bool] = []
+        self.forwarded = 0
 
-    async def ask(self, request: ConfirmRequest) -> bool:
+    def forward(self) -> None:
+        self.forwarded += 1
+
+    async def ask(self, request: ConfirmRequest, focus: bool = True) -> bool:
+        self.focused.append(focus)
         self.future = asyncio.get_running_loop().create_future()
         return await self.future
 
@@ -75,7 +81,7 @@ def rigged(text: str = "yes") -> tuple[Any, Any, UiButtons]:
     controller, rig = make_controller(router)
     rig.router = router
     buttons = UiButtons()
-    controller.set_confirm_ui(buttons.ask, buttons.dismiss)
+    controller.set_confirm_ui(buttons.ask, buttons.dismiss, buttons.forward)
     return controller, rig, buttons
 
 
@@ -88,6 +94,7 @@ async def test_spoken_yes_allows_and_closes_the_buttons() -> None:
     assert rig.speaker.spoken[0].startswith("Shall I type “hi” into")
     assert "(" not in rig.speaker.spoken[0]
     assert buttons.settled == [True]
+    assert buttons.focused == [False]  # the app JARVIS works in keeps the focus
     assert rig.state.state is AppState.THINKING  # back to work
 
 
@@ -130,7 +137,7 @@ async def test_high_risk_still_needs_the_typed_confirm() -> None:
     pending = asyncio.ensure_future(controller.confirm(shutdown))
     await settle()
     assert rig.speaker.spoken == [] and not controller.listening
-    assert buttons.future is not None
+    assert buttons.future is not None and buttons.focused == [True]
     buttons.future.set_result(False)
     assert await asyncio.wait_for(pending, 2) is False
 
@@ -145,6 +152,7 @@ async def test_no_speech_to_text_leaves_it_to_the_buttons() -> None:
         await settle()
     assert not pending.done()
     assert buttons.future is not None
+    assert buttons.focused == [False] and buttons.forwarded == 1  # now it needs a click
     buttons.future.set_result(False)
     assert await asyncio.wait_for(pending, 2) is False
 
