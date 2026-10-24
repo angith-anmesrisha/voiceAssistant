@@ -56,6 +56,7 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   minus uninstallers/help/links and blocked shells/system editors; fuzzy `best_match`),
   `media.py` (play_youtube: first `videoRenderer` on the results page, else the results;
   find_flights: Google Flights `?q=` URL; Steam tools; look_through_webcam MEDIUM),
+  `messaging.py` (`send_whatsapp`: search, paste, Enter),
   `steam.py` (libraryfolders.vdf + appmanifest_*.acf; StateFlags≠4 = needs update;
   `steam://rungameid/<id>`, `steam://open/downloads`),
   `registry.py` (`Risk`, `ToolSpec`, arg validation), `desktop.py` (`WindowsDesktop`:
@@ -238,9 +239,14 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   mid-WhatsApp broke the owner's flow; `bring_forward` raises it only when the answer
   can't be heard. Owner (2026-10-24): no asking for typing, copy, cut, paste, undo or
   ordinary keys; `combo_risk` keeps Enter/Delete/Alt+F4/Ctrl+W/Ctrl+S/Ctrl+Q MEDIUM, and
-  sending (type_into submit, Send-style clicks) still asks once. Mark-LVI's WhatsApp
-  sender is blind keystrokes (Ctrl+F, contact, Enter, paste, Enter) with no read-back;
-  JARVIS keeps the UI Automation look → act → check loop instead. High risk requires typing CONFIRM. Shutdown/restart run with a
+  sending (type_into submit, Send-style clicks) still asks once. WhatsApp (owner,
+  2026-10-24: the UI Automation loop "is not working like intended") now uses Mark-LVI's
+  method, reimplemented in `tools/messaging.py`: `send_whatsapp(contact, message)`
+  (MEDIUM, one confirm) raises/opens WhatsApp, Ctrl+F, types the contact, Enter, pastes
+  the message via the clipboard (restored after), Enter. Nothing is pressed unless the
+  foreground title contains "WhatsApp" (checked before searching and before pasting);
+  a UIA read after the chat opens checks the contact's name (search box ignored) but
+  never blocks; a mismatch is said in the reply. High risk requires typing CONFIRM. Shutdown/restart run with a
   60 s delay and can be cancelled.
 - Screen, web, and file text is treated as information, never instructions (in every prompt).
 - UI follows the owner's reference video: charcoal grid HUD, particle globe + clock when

@@ -8,6 +8,7 @@ class FakeDesktop:
         self.calls: list[tuple[str, object]] = []
         self.focus_ok = True
         self.clipboard = ""
+        self.active_title = "Untitled - Notepad"
 
     def launch(self, target: str) -> None:
         self.calls.append(("launch", target))
@@ -26,7 +27,7 @@ class FakeDesktop:
         self.calls.append(("clipboard", text))
 
     def active_window_title(self) -> str:
-        return "Untitled - Notepad"
+        return self.active_title
 
     def open_url(self, url: str) -> None:
         self.calls.append(("open_url", url))

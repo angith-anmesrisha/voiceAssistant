@@ -148,8 +148,12 @@ python -m jarvis --hidden   # starts in the tray
   space.png my wallpaper", "close Spotify". If an app is already open it is brought to
   the front instead of opened twice, and JARVIS only says an app opened once its
   window has actually appeared.
-- **Works inside apps.** Ask "send Mom a WhatsApp message saying I'll be late" and
-  JARVIS opens WhatsApp, reads its window (buttons, search box, chats, message box) with
+- **WhatsApp messages.** Ask "send Mom a WhatsApp message saying I'll be late": after
+  one Yes, JARVIS brings WhatsApp to the front, searches for the chat (Ctrl+F), opens
+  it, pastes the message and presses Enter. It stops if WhatsApp isn't the window in
+  front, and tells you if it couldn't see the contact's name in the opened chat.
+- **Works inside apps.** Ask "add milk to my shopping list in Notepad" and
+  JARVIS opens the app, reads its window (buttons, search box, chats, message box) with
   Windows' accessibility interface, then clicks and types step by step, checking the
   window after each step, until it's done. It asks before anything that sends, pays,
   deletes or calls, and before pressing Enter to send. It never touches shells,

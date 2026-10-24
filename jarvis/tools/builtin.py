@@ -18,6 +18,7 @@ from jarvis.tools.code_runner import register_code_tool
 from jarvis.tools.desktop import Desktop, DesktopUnsupportedError
 from jarvis.tools.files import FileAccessError, FileArea, default_area
 from jarvis.tools.media import CameraFn, DescribeFn, register_media_tools
+from jarvis.tools.messaging import register_messaging_tools
 from jarvis.tools.pc import register_pc_tools
 from jarvis.tools.personal import register_personal_tools
 from jarvis.tools.registry import Risk, ToolRegistry, ToolResult, ToolSpec
@@ -514,6 +515,7 @@ def build_registry(
 
     if ui is not None:
         _register_ui_tools(registry, settings, ui)
+    register_messaging_tools(registry, desktop, open_app, ui)
     register_pc_tools(registry, area, journal, windows, system)
     register_media_tools(registry, desktop, http, steam_games, camera, describe_image)
     if code_folder is not None:
