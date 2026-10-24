@@ -28,6 +28,7 @@ from jarvis.providers.base import Capability, ChatResult, Message, ToolCall
 from jarvis.providers.openai_compat import image_part
 from jarvis.providers.router import AllProvidersFailedError, Diagnosis, ProviderRouter
 from jarvis.storage.db import HistoryStore
+from jarvis.tools.plugins import is_plugin_tool
 from jarvis.tools.registry import ArgumentError, Risk, ToolRegistry, ToolResult, validate_args
 from jarvis.voice.spoken_text import without_thinking
 
@@ -58,6 +59,7 @@ UNTRUSTED_TOOLS = frozenset(
         "recall_memory",
         "play_youtube",
         "look_through_webcam",
+        "run_python",
     }
 )
 
@@ -154,7 +156,8 @@ class Assistant:
 
     async def _screen(self, call: ToolCall, outcome: ToolResult) -> ToolResult:
         """Withhold outside text (clipboard, files, screen) that tries to steer JARVIS."""
-        if call.name not in UNTRUSTED_TOOLS or not outcome.ok or self._guard is None:
+        untrusted = call.name in UNTRUSTED_TOOLS or is_plugin_tool(call.name)
+        if not untrusted or not outcome.ok or self._guard is None:
             return outcome
         text = outcome.summary + "\n" + json.dumps(outcome.data, ensure_ascii=False)
         if not await self._guard.suspicious(text):

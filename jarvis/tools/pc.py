@@ -261,6 +261,24 @@ def _setting_tools(
             lambda p: Path(p).name or "none",
         )  # fmt: skip
 
+    async def set_dark_mode(on: bool) -> ToolResult:
+        return await change(
+            "theme", system.dark_mode, system.set_dark_mode, on,
+            lambda dark: "dark mode" if dark else "light mode",
+        )  # fmt: skip
+
+    async def set_wifi(on: bool) -> ToolResult:
+        result = await change(
+            "Wi-Fi", system.wifi, system.set_wifi, on, lambda live: "on" if live else "off"
+        )
+        if result.ok and not on:
+            result = ToolResult(
+                True,
+                result.summary + " Online AIs can't answer until it's back on; JARVIS's local "
+                "model (if installed) still can, or flip it back in the taskbar.",
+            )
+        return result
+
     async def get_volume_and_brightness() -> ToolResult:
         parts = []
         for label, read in (("volume", system.volume), ("brightness", system.brightness)):
@@ -302,6 +320,35 @@ def _setting_tools(
             set_wallpaper,
             Risk.LOW,
             lambda a: f"Set the wallpaper to {a.get('path')}",
+            group="system",
+        )
+    )
+    registry.register(
+        ToolSpec(
+            "set_dark_mode",
+            "Switch Windows and apps to dark mode (on=true) or light mode. Undoable.",
+            _schema({"on": {"type": "boolean"}}, ["on"]),
+            set_dark_mode,
+            Risk.MEDIUM,
+            lambda a: (
+                "Switch Windows to dark mode" if a.get("on") else "Switch Windows to light mode"
+            ),
+            group="system",
+        )
+    )
+    registry.register(
+        ToolSpec(
+            "set_wifi",
+            "Turn the Wi-Fi radio on or off. Turning it off cuts the internet, so online AIs "
+            "stop answering. Undoable.",
+            _schema({"on": {"type": "boolean"}}, ["on"]),
+            set_wifi,
+            Risk.MEDIUM,
+            lambda a: (
+                "Turn Wi-Fi on"
+                if a.get("on")
+                else "Turn Wi-Fi off (online AIs stop answering until it's back on)"
+            ),
             group="system",
         )
     )

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 from urllib.parse import quote_plus, urlparse
 
@@ -13,6 +14,7 @@ import httpx
 from jarvis.app.config import ToolSettings
 from jarvis.storage.keep import Keep
 from jarvis.tools.apps import AppIndex
+from jarvis.tools.code_runner import register_code_tool
 from jarvis.tools.desktop import Desktop, DesktopUnsupportedError
 from jarvis.tools.files import FileAccessError, FileArea, default_area
 from jarvis.tools.media import CameraFn, DescribeFn, register_media_tools
@@ -72,6 +74,7 @@ def build_registry(
     steam_games: Callable[[], list[SteamGame]] | None = None,
     camera: CameraFn | None = None,
     describe_image: DescribeFn | None = None,
+    code_folder: Path | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     journal = undo if undo is not None else UndoJournal()
@@ -506,6 +509,8 @@ def build_registry(
         _register_ui_tools(registry, settings, ui)
     register_pc_tools(registry, area, journal, windows, system)
     register_media_tools(registry, desktop, http, steam_games, camera, describe_image)
+    if code_folder is not None:
+        register_code_tool(registry, code_folder)
     register_personal_tools(
         registry, keep, http, home_place=settings.home_place, news_locale=settings.news_locale
     )

@@ -50,3 +50,13 @@ def keep_file() -> Path:
 def voices_dir() -> Path:
     """The neural voice model, downloaded once."""
     return data_dir() / "voices"
+
+
+def code_dir() -> Path:
+    """The only working folder for programs JARVIS runs (after you confirm each one)."""
+    return data_dir() / "code"
+
+
+def plugins_dir() -> Path:
+    """Your own tools as .py files; each new or changed one asks before loading."""
+    return data_dir() / "plugins"

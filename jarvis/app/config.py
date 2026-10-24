@@ -213,6 +213,11 @@ class ToolSettings(BaseModel):
     home_place: str = ""
     # Language and country of news headlines, e.g. "en-IN" or "en-GB".
     news_locale: str = "en-US"
+    # Let JARVIS write and run short Python programs in its own folder. Every run shows
+    # the code and needs CONFIRM typed. False removes the tool entirely.
+    code_runner: bool = True
+    # Load your own tools from the plugins folder (each new or changed file asks first).
+    plugins: bool = True
 
 
 class RoutineSettings(BaseModel):

@@ -23,6 +23,10 @@ dependencies = [
     "uiautomation>=2.0.20; sys_platform == 'win32'",
     "pycaw>=20240316; sys_platform == 'win32'",
     "pypdf>=5.0",
+    "winrt-runtime>=3.0; sys_platform == 'win32'",
+    "winrt-Windows.Devices.Radios>=3.0; sys_platform == 'win32'",
+    "winrt-Windows.Foundation>=3.0; sys_platform == 'win32'",
+    "winrt-Windows.Foundation.Collections>=3.0; sys_platform == 'win32'",
     # JARVIS's own voice (Kokoro model run locally; see jarvis/voice/neural.py)
     "onnxruntime>=1.20",
     "numpy>=2.0",
@@ -60,7 +64,7 @@ packages = ["jarvis", "tests"]
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["qasync", "qasync.*", "sounddevice", "pynput", "pynput.*", "win32event", "win32api", "win32clipboard", "uiautomation", "pycaw", "pycaw.*", "comtypes", "pypdf", "onnxruntime", "phonemizer", "phonemizer.*", "espeakng_loader", "winerror", "win32com", "win32com.*", "pythoncom", "psutil", "pytestqt.*"]
+module = ["qasync", "qasync.*", "sounddevice", "pynput", "pynput.*", "win32event", "win32api", "win32clipboard", "uiautomation", "pycaw", "pycaw.*", "comtypes", "pypdf", "winrt", "winrt.*", "onnxruntime", "phonemizer", "phonemizer.*", "espeakng_loader", "winerror", "win32com", "win32com.*", "pythoncom", "psutil", "pytestqt.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLineEdit,
+    QPlainTextEdit,
     QPushButton,
     QWidget,
 )
@@ -198,6 +199,16 @@ class ConfirmOverlay(QWidget):
         self.text.setWordWrap(True)
         self.hint = body_label("", 9.2, TEXT_DIM)
         self.hint.setWordWrap(True)
+        # The exact program (or other detail) behind a request, read before allowing it.
+        self.detail = QPlainTextEdit()
+        self.detail.setReadOnly(True)
+        self.detail.setMaximumHeight(240)
+        self.detail.setFont(QFont("Consolas", 9))
+        self.detail.setStyleSheet(
+            f"QPlainTextEdit {{ color: {theme.css(ICE)}; background: {theme.css(rgba(STEEL, 40))};"
+            f" border: 1px solid {theme.css(rgba(STEEL, 120))}; border-radius: 8px; }}"
+        )
+        self.detail.hide()
         self.typed = QLineEdit()
         self.typed.setPlaceholderText("Type CONFIRM to allow")
         self.typed.setMinimumHeight(40)
@@ -210,7 +221,7 @@ class ConfirmOverlay(QWidget):
         self.allow.clicked.connect(lambda: self._finish(True))
         buttons.addWidget(self.cancel)
         buttons.addWidget(self.allow)
-        for w in (self.badge, self.text, self.hint, self.typed):
+        for w in (self.badge, self.text, self.detail, self.hint, self.typed):
             self.card.body.addWidget(w)
         self.card.body.addLayout(buttons)
 
@@ -239,9 +250,12 @@ class ConfirmOverlay(QWidget):
         self.card._accent = color
         self.badge.setText("HIGH RISK · STRONG CONFIRMATION" if high else "MEDIUM RISK")
         self.badge.setStyleSheet(f"color: {theme.css(color)}; background: transparent;")
-        self.text.setText(description)
+        headline, _, detail = description.partition("\n")
+        self.text.setText(headline)
+        self.detail.setPlainText(detail)
+        self.detail.setVisible(bool(detail.strip()))
         self.hint.setText(
-            "This could lose unsaved work or is hard to undo. Type CONFIRM to allow it."
+            "This is powerful or hard to undo. Read it, then type CONFIRM to allow it."
             if high
             else "JARVIS will only do this if you allow it."
         )

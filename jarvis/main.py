@@ -27,7 +27,7 @@ from jarvis.app.events import (
     WakeWordHeard,
 )
 from jarvis.app.logging_setup import configure_logging
-from jarvis.app.paths import database_file, keep_file, voices_dir
+from jarvis.app.paths import code_dir, database_file, keep_file, voices_dir
 from jarvis.app.single_instance import SingleInstance
 from jarvis.app.state import AppState, StateChanged, StateMachine
 
@@ -144,6 +144,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         steam_games=lambda: installed_games(steam_folder()),
         camera=capture_webcam,
         describe_image=lambda photo, question: _describe_photo(router, photo, question),
+        code_folder=code_dir() if settings.tools.code_runner else None,
     )
 
     hotkey_label = "+".join(
@@ -287,6 +288,8 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
 
     background = Background(bus, keep, jobs=_routines(settings, keep, store, router, client))
     background.start()
+    if settings.tools.plugins:
+        spawn(_load_plugins(bus, registry, keep, controller))
     spawn(asyncio.to_thread(installed.refresh))  # so "open Valorant" is instant later
 
     def voice_status(title: str, message: str) -> None:
@@ -365,6 +368,25 @@ def run(argv: list[str] | None = None) -> int:
     logger.info("{} exited cleanly", APP_NAME)
     logger.complete()
     return 0
+
+
+async def _load_plugins(bus: Any, registry: Any, keep: Any, controller: Any) -> None:
+    """Load the user's plugins; new or changed files are shown and must be confirmed."""
+    from jarvis.agent.assistant import ConfirmRequest
+    from jarvis.app.paths import plugins_dir
+    from jarvis.tools.plugins import PluginLoader
+    from jarvis.tools.registry import Risk
+
+    async def ask(headline: str, code: str) -> bool:
+        allowed: bool = await controller.confirm(
+            ConfirmRequest("load_plugin", Risk.HIGH, f"{headline}\n{code}")
+        )
+        return allowed
+
+    loaded = await PluginLoader(plugins_dir(), registry, keep, ask).load_all()
+    if loaded:
+        tools = sum(len(names) for names in loaded.values())
+        await bus.publish(UserNotice("Plugins", f"Loaded {', '.join(loaded)} ({tools} tool(s))."))
 
 
 async def _describe_photo(router: ProviderRouter, photo: bytes, question: str) -> str:

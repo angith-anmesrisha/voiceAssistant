@@ -16,6 +16,15 @@ working rules and safety rules still apply where they don't conflict.
   by `tools/files.py`: user folders and non-system drives only, Recycle Bin instead of
   delete, no overwrite, never open runnable files. Never log audio, API keys, or dictated
   text (or window titles).
+- Owner-approved exceptions (2026-10-24, "all four, each asks first"), and only these:
+  `run_python` (HIGH: the code is shown and CONFIRM typed every run; Python only, `-I`,
+  cwd `%LOCALAPPDATA%\JARVIS\code`, no secrets in its env, 30 s, AST refusal of
+  subprocess/ctypes/winreg/pywin32/os.system/remove/exec...); plugins (a new or changed
+  `.py` in the plugins folder is shown and needs CONFIRM, approval keyed by SHA-256, the
+  approved text is what runs, output screened by Prompt Guard, tools default MEDIUM);
+  `set_dark_mode` (MEDIUM, writes only the two HKCU Personalize theme values) and
+  `set_wifi` (MEDIUM, WinRT radio API); the phone dashboard (off until a phone is paired
+  with a one-time code). Still no generic shell, command-line or registry tool.
 - Never claim a provider/model answered unless it did; the UI shows the real provider/model.
 
 ## Stack

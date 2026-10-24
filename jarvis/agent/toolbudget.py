@@ -51,6 +51,11 @@ _GROUPS: dict[str, re.Pattern[str]] = {
         r"airport|steam|games?|update)\b",
         re.IGNORECASE,
     ),
+    "code": re.compile(
+        r"\b(python|script|program|code|calculate|calculation|compute|simulate|"
+        r"spreadsheet formula|convert .+ (to|into)|csv|json|plot|chart|statistics)\b",
+        re.IGNORECASE,
+    ),
     "camera": re.compile(
         r"\b(webcam|camera|how do i look|look at me|see me|what am i (holding|wearing))\b",
         re.IGNORECASE,

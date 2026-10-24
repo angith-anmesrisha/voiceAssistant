@@ -51,6 +51,8 @@ class FakeSystem:
         self.light = 70
         self.paper = r"C:\Windows\Web\img0.jpg"
         self.no_brightness = False
+        self.dark = False
+        self.radio = True
 
     def volume(self) -> int:
         return self.level
@@ -77,6 +79,18 @@ class FakeSystem:
 
     def set_wallpaper(self, path: Path) -> None:
         self.paper = str(path)
+
+    def dark_mode(self) -> bool:
+        return self.dark
+
+    def set_dark_mode(self, on: bool) -> None:
+        self.dark = on
+
+    def wifi(self) -> bool:
+        return self.radio
+
+    def set_wifi(self, on: bool) -> None:
+        self.radio = on
 
 
 @pytest.fixture
@@ -313,3 +327,16 @@ async def test_open_app_reports_what_it_saw(home: Path, monkeypatch: pytest.Monk
     windows.open.clear()
     seen = await run(registry, "open_app", name="discord")
     assert seen.summary == "Opened Discord; its window is up."
+
+
+async def test_dark_mode_and_wifi_ask_first_and_undo(home: Path) -> None:
+    system = FakeSystem()
+    registry = tools(home, system=system)
+    assert risk(registry, "set_dark_mode", on=True) is Risk.MEDIUM
+    assert risk(registry, "set_wifi", on=False) is Risk.MEDIUM
+    dark = await run(registry, "set_dark_mode", on=True)
+    assert dark.summary == "Set the theme to dark mode (it was light mode)." and system.dark
+    off = await run(registry, "set_wifi", on=False)
+    assert off.ok and not system.radio and "Online AIs can't answer" in off.summary
+    assert (await run(registry, "undo_last")).ok and system.radio
+    assert (await run(registry, "undo_last")).ok and not system.dark
