@@ -62,7 +62,9 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   information), `context.py` (`situation`: active window, other open windows, AI choice),
   `guard.py` (`PromptGuard`: Llama Prompt Guard 2 scores outside text for injections),
   `toolbudget.py` (`groups_for`: which tool groups a request gets), `background.py`
-  (`Background`: reminders and other jobs → `Announce`), `planner.py` (`needs_plan`, planner prompt, `parse_plan` → `Task`s, `step_request`),
+  (`Background`: reminders and other jobs → `Announce`), `routines.py` (`Briefing`, `TopicWatch`, `HardwareWatch`,
+  `CheckIns`, `SessionSummaries`: jobs `Background` ticks every 10 s; `idle_seconds` via
+  GetLastInputInfo), `planner.py` (`needs_plan`, planner prompt, `parse_plan` → `Task`s, `step_request`),
   `assistant.py` (keeps the last 8 actions for context; one turn:
   history, screen fast path, otherwise a tool loop with tools + `look_at_screen`,
   confirmations).
@@ -231,6 +233,17 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   English, composed, concise, dry wit, lead with the result, never invent results).
   Plan summaries read "All three tasks are complete." / "One of two tasks complete;
   one didn't go through."
+- Routines (`routines` settings, each can be turned off): briefing once a day between 4
+  and 12 when the user has touched the PC in the last 2 min (date, home-city weather,
+  today's reminders, unmentioned summaries, `briefing_headlines` top stories; state
+  `briefing_day`); topic news checked every 20 h, first check silent, only a changed top
+  headline is said; battery at `battery_low` and again at half that (reset when
+  plugged), CPU/RAM ≥90% for 12 readings (2 min), repeated at most every 30 min; no CPU
+  temperature (Windows only reports it to admins); check-in after `check_in_hours` with
+  no 5-min break; session summaries one LLM call (`SUMMARY_PROMPT`) after 15 min of
+  quiet if the session had 2+ user turns (`summarised_upto`; on first run existing
+  history is skipped; on failure retried after 30 min). Check-ins and topic news respect
+  quiet hours (`quiet_from`/`quiet_until`). Watched topics keep the user's casing.
 - Closing the window hides to the tray; Quit is in the tray menu.
 - Push-to-talk is Alt+` (vk 0xC0, or 0xDF on UK layouts). On Windows the backtick is
   swallowed while the chord is held and an unassigned key (0xE8) is tapped so releasing

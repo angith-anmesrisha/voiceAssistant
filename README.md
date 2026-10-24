@@ -116,6 +116,12 @@ python -m jarvis --hidden   # starts in the tray
 - **Weather, news and web answers.** "Will it rain tomorrow?", "latest news on the
   election", "what's the price of a PS5?": it reads the results and answers, saying
   where it came from. "Keep an eye on news about SpaceX" checks once a day.
+- **Speaks up when it matters.** The first time you're at the PC each morning, a short
+  briefing: the date, your city's weather, today's reminders, a line on what you did
+  last time, and a few headlines. It also mentions news on topics you asked it to
+  watch, warns about a low battery or a PC that's been flat out for minutes, and after
+  two hours without a break suggests one (never during quiet hours, 22:00 to 08:00).
+  Each of these can be turned off under `routines` in settings.json.
 - **Undo.** "Undo that" takes back JARVIS's own last file move, rename, copy, new folder
   or file, desktop tidy-up, or volume, brightness or wallpaper change.
 - **Documents and your PC.** "Summarise the PDF in my Downloads", "save these notes to
