@@ -91,7 +91,10 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   (`is_conversation`, `wants_cloud`, `KeepLocalWarm`), `background.py`
   (`Background`: reminders and other jobs → `Announce`), `routines.py` (`Briefing`, `TopicWatch`, `HardwareWatch`,
   `CheckIns`, `SessionSummaries`: jobs `Background` ticks every 10 s; `idle_seconds` via
-  GetLastInputInfo), `planner.py` (`needs_plan`, planner prompt, `parse_plan` → `Task`s, `step_request`),
+  GetLastInputInfo), `workflows.py` (`Trigger`/`Step`/`Workflow`, `ACTIONS` mapped to
+  tools, `fill` for `{previous}`/`{step N}`/`{today}`, `WorkflowStore` (`workflows.json`),
+  `parse_proposal`, `templates`, `WorkflowTriggers` job, `register_workflow_tools`),
+  `planner.py` (`needs_plan`, planner prompt, `parse_plan` → `Task`s, `step_request`),
   `assistant.py` (keeps the last 8 actions for context; one turn:
   history, screen fast path, otherwise a tool loop with tools + `look_at_screen`,
   confirmations).
@@ -115,6 +118,8 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   AI or the history.
 - `controller.py`: glues UI, voice, and assistant; owns busy/listening.
 - `ui/`: `theme.py`, `main_window.py` (HUD stage, tweens, layout), `tray.py`, `icons.py`,
+  `workflows.py` (`WorkflowBuilder` window: list, trigger form, steps with Add menu/
+  `StepEditor` form/drag/Up/Down/Remove, Test, Save; `problems` validation),
   `widgets/`: `orb.py` (particle globe when idle, morphs into the glowing ring), `stage.py`
   (backdrop, top bar, clock/state caption, reply card, status strip, `Tween`), `panels.py`
   (provider/network/safety panels in the details overlay, command bar, confirm overlay),
@@ -157,6 +162,17 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   doesn't stop the rest; no provider answering does (the rest are skipped). The final
   ASSISTANT entry is the summary (mode "plan"), red if any task failed; spoken replies say
   only the headline and failures. One task, or an unparseable plan, takes the normal path.
+- Workflows (owner, 2026-10-25): trigger (phrase, time, startup, folder, manual) + up to
+  20 steps from `ACTIONS`; tool-backed steps go through `_run_tool`, so each keeps its
+  risk and confirmation; `confirm` steps that get a no skip the rest. The runner reuses
+  the plan card (`PlanUpdated`); reply = headline + plan lines + shown outputs; spoken =
+  headline + say/briefing/ask_jarvis outputs. Phrase match runs before everything else
+  in `_handle` (exact phrase or "run the X workflow"); "whenever I…"/"create a workflow…"
+  → one model call → `parse_proposal` → shown → MEDIUM confirm → saved. Time triggers
+  fire once a day up to 30 min late (state `workflows_ran`), startup ones 10 s after
+  start; both publish `RunWorkflow`, which the controller runs when IDLE (waits ≤15 min).
+  `run_workflow` tool only queues. Tasks/ideas: `tasks` table in keep, tools
+  `add_task`/`list_tasks`/`complete_task` (group "tasks"), `parse_due`.
 - Operating apps (computer use): `read_ui` lists a window's controls as numbered lines
   (`[3] Edit "Type a message"`), and `click_element` / `type_into` / `scroll_ui` act by
   number and return the window afterwards, so the model works look → act → check

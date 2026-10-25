@@ -24,6 +24,7 @@ class Tray:
         on_pair: Callable[[], None] | None = None,
         on_unpair: Callable[[], None] | None = None,
         on_stop: Callable[[], None] | None = None,
+        on_workflows: Callable[[], None] | None = None,
     ):
         self._bus = bus
         self._window_visible = window_visible
@@ -50,7 +51,11 @@ class Tray:
             self._actions.append(stop)
             self._menu.addAction(stop)
         self._menu.addAction(self._autostart)
-        for label, callback in (("Pair a phone…", on_pair), ("Unpair phones", on_unpair)):
+        for label, callback in (
+            ("Workflows…", on_workflows),
+            ("Pair a phone…", on_pair),
+            ("Unpair phones", on_unpair),
+        ):
             if callback is not None:
                 action = QAction(label)
                 action.triggered.connect(callback)

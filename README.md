@@ -134,6 +134,26 @@ python -m jarvis --hidden   # starts in the tray
 
 ![JARVIS working through a task list](docs/renders/16-plan-running.png)
 
+- **Tasks and ideas.** "Add revise chapter 4 to my study tasks, due Friday", "save this
+  as a project idea: a plant-watering bot", "what's pending?", "mark the chapter 4 task
+  done". Kept on your PC with the rest of JARVIS's memory.
+- **Workflows.** One phrase, several steps. Open the builder from the tray (Workflows…)
+  or say "open the workflow builder": pick what starts it (a phrase you say, a time of
+  day, JARVIS starting, or only when you run it), add steps from the menu (open a
+  folder, file, app or website, show pending tasks, start a timer, show a checklist,
+  say something, give the briefing, save a note, find files, read a document, save
+  text, ask JARVIS, make a deck, ask before going on, wait, or run any tool), edit
+  their settings, drag or move them up and down, Test, then Save. Templates: Study Mode,
+  Start work, Development environment and Prepare my presentation. Or describe it:
+  "Whenever I start work, open my project folder and show my pending tasks." JARVIS
+  shows the workflow it would make and saves it only if you say yes. Then saying
+  "activate study mode" runs every step on the card, ticking each off; risky steps
+  still ask first, an "ask before going on" step you say no to skips the rest, and a
+  step can use the one before it (`{previous}`, `{step 2}`, `{today}`), so a workflow
+  can be a **command chain** (find the sources, pull out the key points, write the
+  outline, save it, make the deck). Workflows live in `workflows.json` in JARVIS's data
+  folder.
+
 - **Remembers you.** Tell it "my sister is Ayşe" or "I live in Kochi" and it keeps that
   on your PC (`keep.sqlite3`), uses it later, and forgets it when you ask. After each
   conversation it also picks up lasting facts you mentioned on your own.

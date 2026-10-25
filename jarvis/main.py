@@ -9,6 +9,7 @@ import signal
 import sys
 import time
 from collections.abc import Awaitable, Callable
+from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -39,7 +40,7 @@ from jarvis.app.state import AppState, StateChanged, StateMachine
 if TYPE_CHECKING:
     import httpx
 
-    from jarvis.agent.routines import Job
+    from jarvis.agent.routines import Briefing, Job
     from jarvis.providers.router import ProviderRouter
     from jarvis.storage.db import HistoryStore
     from jarvis.storage.keep import Keep
@@ -157,6 +158,18 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         slides=_slide_tools(settings, router, lambda: pick_upload(), bus, spawn),
     )
 
+    from jarvis.agent.workflows import WorkflowStore, WorkflowTriggers, register_workflow_tools
+    from jarvis.app.events import RunWorkflow
+    from jarvis.app.paths import data_dir
+
+    workflows = WorkflowStore(data_dir() / "workflows.json")
+
+    async def queue_workflow(workflow: Any, reason: str) -> None:
+        await bus.publish(RunWorkflow(workflow.id, reason))
+
+    register_workflow_tools(registry, workflows, queue_workflow)
+    briefing = _briefing(settings, keep, client)
+
     hotkey_label = "+".join(
         part.strip().title() for part in settings.hotkeys.push_to_talk.split("+")
     )
@@ -192,6 +205,9 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         long_memory=memory,
         local_first=lambda: settings.routing.local_first,
         local_timeout_s=settings.routing.local_timeout_s,
+        workflows=workflows,
+        briefing=lambda: briefing.compose(datetime.now().astimezone()),
+        on_open_workflows=lambda: open_workflows(),
     )
     speaker = Speaker(
         settings.voice.tts_voice,
@@ -305,6 +321,22 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
 
     window.on_file_dropped = on_drop
 
+    builder: list[Any] = []
+
+    def open_workflows() -> None:
+        from jarvis.ui.workflows import WorkflowBuilder
+
+        if not builder:
+            builder.append(
+                WorkflowBuilder(
+                    workflows, lambda workflow: controller.run_workflow(workflow, "test")
+                )
+            )
+        builder[0].refresh()
+        builder[0].show()
+        builder[0].raise_()
+        builder[0].activateWindow()
+
     tray = Tray(
         bus,
         show_window=window.show_and_raise,
@@ -312,6 +344,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         on_pair=lambda: spawn(pair_from_tray()),
         on_unpair=lambda: spawn(unpair_from_tray()),
         on_stop=lambda: spawn(stop_jarvis()),
+        on_workflows=open_workflows,
     )
     tray.show()
     if not args.hidden:
@@ -371,7 +404,18 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         spawn(check_wake())
 
     background = Background(
-        bus, keep, jobs=_routines(settings, keep, store, router, client, memory)
+        bus,
+        keep,
+        jobs=_routines(
+            settings,
+            keep,
+            store,
+            router,
+            client,
+            memory,
+            briefing=briefing,
+            workflows=WorkflowTriggers(workflows, keep, queue_workflow),
+        ),
     )
     background.start()
     spawn(_start_dashboard(dashboard, bus))
@@ -542,11 +586,12 @@ def _routines(
     router: ProviderRouter,
     client: httpx.AsyncClient,
     memory: Memory | None = None,
+    briefing: Job | None = None,
+    workflows: Job | None = None,
 ) -> list[Job]:
     """The things JARVIS brings up by itself, as configured in ``routines``."""
     from jarvis.agent.prompts import SUMMARY_PROMPT
     from jarvis.agent.routines import (
-        Briefing,
         CheckIns,
         HardwareWatch,
         MarketWatch,
@@ -554,21 +599,11 @@ def _routines(
         TopicWatch,
     )
     from jarvis.tools import live, web
-    from jarvis.tools.personal import home_city
     from jarvis.voice.spoken_text import without_thinking
 
     plan = settings.routines
     locale = settings.tools.news_locale
     quiet_hours = (plan.quiet_from, plan.quiet_until)
-
-    async def weather() -> web.Forecast | None:
-        place = await home_city(keep, settings.tools.home_place)
-        return await web.forecast(client, place) if place else None
-
-    async def headlines() -> list[web.Headline]:
-        if plan.briefing_headlines <= 0:
-            return []
-        return await web.news(client, "", locale, limit=plan.briefing_headlines)
 
     async def topic_news(topic: str) -> list[web.Headline]:
         return await web.news(client, topic, locale, limit=3)
@@ -585,22 +620,16 @@ def _routines(
     async def price(name: str) -> live.Quote:
         return await live.price_of(client, name, locale)
 
-    async def markets() -> list[live.Quote]:
-        found = await asyncio.gather(
-            *(price(name) for name in plan.briefing_markets[:5]), return_exceptions=True
-        )
-        return [q for q in found if isinstance(q, live.Quote)]
-
     from jarvis.voice.vocabulary import VocabularyRefresh
 
     jobs: list[Job] = [
         TopicWatch(keep, topic_news, quiet_hours),
         VocabularyRefresh(keep, settings.voice.custom_words, router.set_vocabulary),
     ]
-    if plan.briefing:
-        jobs.append(
-            Briefing(keep, weather, headlines, markets=markets if plan.briefing_markets else None)
-        )
+    if plan.briefing and briefing is not None:
+        jobs.append(briefing)
+    if workflows is not None:
+        jobs.append(workflows)
     if plan.market_watch:
         jobs.append(MarketWatch(keep, price, quiet_hours))
     if plan.hardware_alerts:
@@ -620,6 +649,34 @@ def _routines(
             )
         )
     return jobs
+
+
+def _briefing(settings: Settings, keep: Keep, client: httpx.AsyncClient) -> Briefing:
+    """The morning briefing: said once a day by itself, and the "briefing" workflow step."""
+    from jarvis.agent.routines import Briefing
+    from jarvis.tools import live, web
+    from jarvis.tools.personal import home_city
+
+    plan = settings.routines
+    locale = settings.tools.news_locale
+
+    async def weather() -> web.Forecast | None:
+        place = await home_city(keep, settings.tools.home_place)
+        return await web.forecast(client, place) if place else None
+
+    async def headlines() -> list[web.Headline]:
+        if plan.briefing_headlines <= 0:
+            return []
+        return await web.news(client, "", locale, limit=plan.briefing_headlines)
+
+    async def markets() -> list[live.Quote]:
+        found = await asyncio.gather(
+            *(live.price_of(client, name, locale) for name in plan.briefing_markets[:5]),
+            return_exceptions=True,
+        )
+        return [q for q in found if isinstance(q, live.Quote)]
+
+    return Briefing(keep, weather, headlines, markets=markets if plan.briefing_markets else None)
 
 
 def _slide_tools(

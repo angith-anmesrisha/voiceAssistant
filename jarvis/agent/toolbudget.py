@@ -86,6 +86,11 @@ _GROUPS: dict[str, re.Pattern[str]] = {
         r"mark .+ (done|complete)|plan my day|my day|priorit\w*)\b",
         re.IGNORECASE,
     ),
+    "workflows": re.compile(
+        r"\b(workflows?|routines?|command chains?|automations?|study mode|run my|"
+        r"start my .+ (mode|routine))\b",
+        re.IGNORECASE,
+    ),
     "reminders": re.compile(
         r"\b(remind|reminder|reminders|timer|alarm|wake me|in \d+ (sec|second|min|minute|"
         r"hour)s?|at \d{1,2}(:\d\d)?\s*(am|pm)?|tomorrow|tonight|later|schedule|"

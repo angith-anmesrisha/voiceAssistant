@@ -662,3 +662,141 @@ def templates() -> list[Workflow]:
             description="Command chain: sources → key points → outline → saved → deck (asks).",
         ),
     ]
+
+
+# --- workflows that start by themselves ---
+
+
+class WorkflowTriggers:
+    """A background job: runs time-of-day workflows (once a day, up to 30 minutes late,
+    e.g. when the PC was asleep) and, once, the "when JARVIS starts" ones."""
+
+    LATE_MIN = 30
+
+    def __init__(
+        self,
+        store: WorkflowStore,
+        keep: Any,
+        run: Callable[[Workflow, str], Any],
+        *,
+        startup_after_s: float = 10.0,
+    ) -> None:
+        self._store = store
+        self._keep = keep
+        self._run = run
+        self._startup_after_s = startup_after_s
+        self._born: datetime | None = None
+        self._started = False
+
+    async def tick(self, now: datetime) -> list[Any]:
+        if self._born is None:
+            self._born = now
+        if not self._started and (now - self._born).total_seconds() >= self._startup_after_s:
+            self._started = True
+            for workflow in self._store.with_trigger("startup"):
+                await self._fire(workflow, "JARVIS started")
+        due = [w for w in self._store.with_trigger("time") if _due(w.trigger, now, self.LATE_MIN)]
+        if due:
+            ran = await self._ran()
+            today = now.date().isoformat()
+            for workflow in due:
+                if ran.get(workflow.id) == today:
+                    continue
+                ran[workflow.id] = today
+                await self._keep.set_state("workflows_ran", json.dumps(ran))
+                await self._fire(workflow, f"it's {workflow.trigger.at}")
+        return []
+
+    async def _ran(self) -> dict[str, str]:
+        try:
+            data = json.loads(await self._keep.get_state("workflows_ran") or "{}")
+        except ValueError:
+            return {}
+        return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+
+    async def _fire(self, workflow: Workflow, reason: str) -> None:
+        logger.info("Workflow {} triggered", workflow.id)
+        result = self._run(workflow, reason)
+        if hasattr(result, "__await__"):
+            await result
+
+
+def parse_clock(text: str) -> tuple[int, int] | None:
+    """ "07:30", "7.30", "7:30 pm", "19:05" → (hour, minute)."""
+    match = re.fullmatch(r"\s*(\d{1,2})(?:[:.](\d{2}))?\s*(am|pm)?\s*", text.lower())
+    if not match:
+        return None
+    hour, minute = int(match.group(1)), int(match.group(2) or 0)
+    if match.group(3) == "pm" and hour < 12:
+        hour += 12
+    elif match.group(3) == "am" and hour == 12:
+        hour = 0
+    if hour > 23 or minute > 59:
+        return None
+    return hour, minute
+
+
+def _due(trigger: Trigger, now: datetime, late_min: int) -> bool:
+    clock = parse_clock(trigger.at)
+    if clock is None:
+        return False
+    if trigger.days and DAYS[now.weekday()] not in trigger.days:
+        return False
+    at = now.replace(hour=clock[0], minute=clock[1], second=0, microsecond=0)
+    late = (now - at).total_seconds()
+    return 0 <= late <= late_min * 60
+
+
+def register_workflow_tools(
+    registry: Any, store: WorkflowStore, run: Callable[[Workflow, str], Any]
+) -> None:
+    """``list_workflows`` and ``run_workflow`` (queued: it runs once this reply is done,
+    with each step's own confirmations)."""
+    from jarvis.tools.registry import Risk, ToolResult, ToolSpec
+
+    async def list_workflows() -> ToolResult:
+        found = store.all
+        if not found:
+            return ToolResult(True, "No workflows saved yet.")
+        lines = [
+            f"{w.name}{'' if w.enabled else ' (off)'}: {w.trigger.describe()}; "
+            + "; ".join(s.describe() for s in w.steps[:6])
+            for w in found[:30]
+        ]
+        return ToolResult(True, f"{len(found)} workflows.", {"workflows": lines})
+
+    async def run_workflow(name: str) -> ToolResult:
+        workflow = store.named(name)
+        if workflow is None:
+            return ToolResult(False, f"There's no workflow called “{name}”.")
+        result = run(workflow, "you asked")
+        if hasattr(result, "__await__"):
+            await result
+        return ToolResult(True, f"{workflow.name} will run as soon as this reply is done.")
+
+    registry.register(
+        ToolSpec(
+            "list_workflows",
+            "List the user's saved workflows (command chains) and what starts them.",
+            {"type": "object", "properties": {}, "required": []},
+            list_workflows,
+            Risk.LOW,
+            lambda a: "List workflows",
+            group="workflows",
+        )
+    )
+    registry.register(
+        ToolSpec(
+            "run_workflow",
+            "Run one of the user's saved workflows by name.",
+            {
+                "type": "object",
+                "properties": {"name": {"type": "string", "maxLength": 80}},
+                "required": ["name"],
+            },
+            run_workflow,
+            Risk.LOW,
+            lambda a: f"Run the workflow {a.get('name', '')}",
+            group="workflows",
+        )
+    )

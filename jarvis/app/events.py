@@ -176,3 +176,12 @@ class Announce(Event):
 
     text: str
     kind: str = "reminder"  # reminder | briefing | news | hardware | check-in
+
+
+@dataclass(frozen=True, slots=True)
+class RunWorkflow(Event):
+    """Run a saved workflow once JARVIS is free (its time came, JARVIS started, a watched
+    folder changed, or a tool asked for it)."""
+
+    workflow_id: str
+    reason: str = ""

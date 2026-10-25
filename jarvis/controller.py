@@ -16,6 +16,7 @@ from typing import Any, Protocol
 from loguru import logger
 
 from jarvis.agent.assistant import Assistant, ConfirmRequest
+from jarvis.agent.workflows import Workflow
 from jarvis.app.config import VoiceSettings
 from jarvis.app.events import (
     Announce,
@@ -27,6 +28,7 @@ from jarvis.app.events import (
     EventBus,
     PushToTalkPressed,
     PushToTalkReleased,
+    RunWorkflow,
     UserNotice,
     WakeWordHeard,
 )
@@ -95,6 +97,7 @@ class AppController:
         bus.subscribe(PushToTalkReleased, self._on_ptt_released)
         bus.subscribe(WakeWordHeard, self._on_wake_word)
         bus.subscribe(Announce, self._on_announce)
+        bus.subscribe(RunWorkflow, self._on_run_workflow)
 
     @property
     def busy(self) -> bool:
@@ -417,6 +420,36 @@ class AppController:
         try:
             await self._move_to(AppState.SPEAKING)
             await self._say(text)
+        finally:
+            await self._settle()
+
+    async def _on_run_workflow(self, event: RunWorkflow) -> None:
+        store = self._assistant.workflows
+        workflow = store.get(event.workflow_id) if store is not None else None
+        if workflow is not None and workflow.enabled:
+            self.run_workflow(workflow, event.reason)
+
+    def run_workflow(self, workflow: Workflow, reason: str) -> None:
+        """Run ``workflow`` (saved or not, e.g. the builder's Test) once JARVIS is free."""
+        self._spawn(self._workflow_when_free(workflow, reason))
+
+    async def _workflow_when_free(
+        self, workflow: Workflow, reason: str, wait_s: float = 900.0
+    ) -> None:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + wait_s
+        while self.busy or self._recorder.recording or self._state.state is not AppState.IDLE:
+            if loop.time() > deadline:
+                logger.info("Workflow {} skipped: JARVIS stayed busy", workflow.id)
+                return
+            await asyncio.sleep(0.5)
+        voiced = self._voice.speak_replies and self._speaker.available
+        self._active = asyncio.current_task()
+        try:
+            reply = await self._assistant.run_workflow(workflow, spoken=voiced, reason=reason)
+            if voiced and reply.ok and reply.text.strip():
+                await self._move_to(AppState.SPEAKING)
+                await self._say(reply.text)
         finally:
             await self._settle()
 
