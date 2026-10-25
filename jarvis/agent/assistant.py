@@ -31,7 +31,7 @@ from jarvis.agent.planner import (
     planner_prompt,
     step_request,
 )
-from jarvis.agent.prompts import chat_prompt, system_prompt, wants_screen
+from jarvis.agent.prompts import chat_prompt, guidance, system_prompt, wants_screen
 from jarvis.agent.routing import NEEDS_TOOLS, is_conversation, wants_cloud
 from jarvis.agent.toolbudget import groups_for
 from jarvis.agent.workflows import (
@@ -78,6 +78,8 @@ UNTRUSTED_TOOLS = frozenset(
         "calendar_events",
         "study_document",
         "research",
+        "check_email",
+        "read_email",
         "list_folder",
         "find_items",
         "look_at_screen",
@@ -842,7 +844,9 @@ class Assistant:
         messages: list[Message] = [
             {
                 "role": "system",
-                "content": system_prompt(spoken=spoken, context=self._turn_context),
+                "content": system_prompt(
+                    spoken=spoken, context=self._turn_context, extra=guidance(text)
+                ),
             },
             *(await self._context() if history else []),
         ]
@@ -912,7 +916,12 @@ class Assistant:
         if not self._router.local_ready():
             return None
         messages: list[Message] = [
-            {"role": "system", "content": chat_prompt(spoken=spoken, context=self._turn_context)},
+            {
+                "role": "system",
+                "content": chat_prompt(
+                    spoken=spoken, context=self._turn_context, extra=guidance(text)
+                ),
+            },
             *turns[-10:],
         ]
         relay = _Relay(self._on_text) if self._on_text is not None else None

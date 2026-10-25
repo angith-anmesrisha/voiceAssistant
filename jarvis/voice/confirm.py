@@ -29,7 +29,8 @@ def _words(text: str) -> str:
 
 def spoken_question(description: str) -> str:
     """ "Type “hi” into “Search” (this sends it)" -> "Shall I type “hi” into “Search”?"."""
-    text = _ASIDE.sub("", description).strip().rstrip(".")
+    first = description.strip().split("\n", 1)[0]  # the details stay on screen
+    text = _ASIDE.sub("", first).strip().rstrip(".:?")
     if not text:
         return "Shall I go ahead?"
     return "Shall I " + text[0].lower() + text[1:] + "?"

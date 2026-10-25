@@ -16,7 +16,9 @@ _GROUPS: dict[str, re.Pattern[str]] = {
         r"\b(battery|cpu|ram|memory usage|processor|status|performance|windows? open|"
         r"volume|louder|quieter|softer|mute|unmute|sound|brightness|brighter|dimmer|dim|"
         r"screen light|wallpaper|background|close|quit|exit|kill|shut (it|that) down|"
-        r"dark mode|light mode|wi-?fi|wireless|internet)\b",
+        r"dark mode|light mode|wi-?fi|wireless|internet|slow|lag\w*|freez\w*|crash\w*|"
+        r"not working|doesn'?t work|won'?t|troubleshoot\w*|disk|storage|space|overheat\w*|"
+        r"error code|blue screen|bsod|no sound|network)\b",
         re.IGNORECASE,
     ),
     "keys": re.compile(
@@ -86,6 +88,11 @@ _GROUPS: dict[str, re.Pattern[str]] = {
         r"blog|proposal|speech|summari[sz]e|summary|documents?|pdf|docx|word (doc|file)|"
         r"study notes|action items|key points|explain (this|the) (doc|file|pdf|paper)|"
         r"papers?|quiz me|flashcards)\b",
+        re.IGNORECASE,
+    ),
+    "email": re.compile(
+        r"\b(e-?mails?|inbox|mail|mails|gmail|outlook|unread|reply to|draft (a )?repl(y|ies)|"
+        r"newsletters?|messages from)\b",
         re.IGNORECASE,
     ),
     "tasks": re.compile(

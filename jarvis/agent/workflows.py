@@ -656,6 +656,22 @@ def templates() -> list[Workflow]:
             description="Opens your study folder and app, shows study tasks, starts a timer.",
         ),
         Workflow(
+            "Email triage",
+            Trigger("phrase", ["check my email", "triage my inbox", "go through my email"]),
+            [
+                Step(
+                    "ask_jarvis",
+                    {
+                        "request": "Check my unread email (up to 15 messages) and read the "
+                        "ones that look important. Summarise in a few lines, then list the "
+                        "action items with any deadlines, and say which messages need a "
+                        "reply. Don't draft replies unless I ask."
+                    },
+                )
+            ],
+            description="Email Assistant: summary, action items, what needs a reply.",
+        ),
+        Workflow(
             "Start work",
             Trigger("phrase", ["start work", "i'm starting work", "let's start work"]),
             [

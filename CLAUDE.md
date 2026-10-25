@@ -191,6 +191,18 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   source list from citations in the body; saved Documents\JARVIS Research, opened),
   `write_document` (Markdown → `markdown_to_docx` via python-docx (MIT), "xb", Documents\
   JARVIS Writing). `paths.writing_dir/research_dir`.
+- Email (owner's list: "summarise, find action items, draft replies for approval"):
+  `tools/email_imap.py`, IMAP over TLS with env `JARVIS_EMAIL_ADDRESS`/`_PASSWORD`
+  (app password)/`_IMAP` (host guessed for Gmail/Outlook/Yahoo/iCloud/Zoho). INBOX
+  selected read-only, `BODY.PEEK[]`; `check_email`/`read_email` (group "email",
+  screened), `draft_reply` MEDIUM → APPEND to the `\Drafts` folder with In-Reply-To.
+  No SMTP anywhere. Content and addresses never logged. `spoken_question` speaks only a
+  description's first line (the draft stays on screen).
+- Decision/Troubleshooting: `prompts.guidance(text)` adds `_DECIDE` or `_TROUBLESHOOT` to
+  the system/chat prompt (`extra=`). `tools/diagnostics.py` `check_pc(area)` (group
+  "system", LOW, read-only): psutil uptime/CPU/memory/busiest by process name/disks/
+  battery, DNS + TCP 443 to 1.1.1.1 and google, Windows System/Application error events
+  (24 h, ≤10, source + id only) via win32evtlog.
 - Calendar: read-only iCal from env `JARVIS_CALENDAR_ICS` (a secret URL, never logged;
   `tools/calendar_ics.py`, own parser: TZID/UTC/all-day, RRULE daily/weekly BYDAY/monthly
   incl. 2TU/-1FR/yearly, INTERVAL/COUNT/UNTIL, EXDATE, moved instances; 10-min cache;

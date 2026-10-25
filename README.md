@@ -246,6 +246,27 @@ python -m jarvis --hidden   # starts in the tray
   Word file in Documents\JARVIS Writing (never overwriting one), opened for you, with
   [placeholders] for details it doesn't know. For shorter things ("rewrite this email
   more politely") it just answers.
+- **Email Assistant (reads, never sends).** "Summarise my unread email", "any action
+  items in my inbox?", "what did Priya say about the budget?", "draft a reply to Priya
+  saying I'll send it Thursday". JARVIS reads your inbox without marking anything as
+  read, and a reply is only ever saved to your **Drafts** folder after you've seen it
+  and said yes; you send it yourself. There is no sending code in JARVIS. To connect
+  Gmail: turn on 2-step verification, make an app password at
+  myaccount.google.com/apppasswords, then `setx JARVIS_EMAIL_ADDRESS "you@gmail.com"` and
+  `setx JARVIS_EMAIL_PASSWORD "the 16-letter app password"` and restart JARVIS (other
+  providers: also `JARVIS_EMAIL_IMAP`, e.g. `imap.zoho.in`). The "Email triage" template
+  ("check my email") gives a summary, action items and what needs a reply.
+- **Decision Assistant.** "Should I buy the MacBook Air or the ThinkPad?", "help me
+  decide between these two job offers": the goal in a line, the options, weighted
+  criteria in a small table, risks, and a clear recommendation with how sure it is and
+  what would change it, looking up current prices or facts first when the choice
+  depends on them.
+- **Troubleshooting Assistant.** "My laptop is really slow", "the Wi-Fi keeps
+  dropping", "my disk is full", "Spotify keeps crashing": JARVIS runs a read-only
+  check (uptime, CPU and memory with the busiest programs, disk space, battery,
+  network, DNS and internet, recent Windows error events), then gives the likely cause
+  and steps from the quickest to the more involved. It changes nothing by itself and
+  offers only fixes it already has tools for, asking first.
 - Long documents, research and writing use the same free OpenRouter models as the decks
   (then Groq for short ones, then the usual providers), and say which model wrote them.
 - **PowerPoint decks, free models only.** "Make a 12 slide presentation on black holes",

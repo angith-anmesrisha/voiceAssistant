@@ -125,10 +125,54 @@ _LOCAL = (
 )
 
 
-def chat_prompt(*, spoken: bool, now: datetime | None = None, context: str = "") -> str:
+_DECISION = re.compile(
+    r"\b(should i|shall i|help me (decide|choose|pick)|which (one |of (these|them|the two) )?"
+    r"(should|would|do) (i|you)|pros and cons|(compare|comparing) .+ (and|vs\.?|versus|with) |"
+    r"\bvs\.? |versus|better option|worth it|or should i|trade-?offs?|weigh up)",
+    re.IGNORECASE,
+)
+_TROUBLE = re.compile(
+    r"\b(slow|lag(gy|ging)?|freez\w*|hang(s|ing)?|crash\w*|not working|isn'?t working|"
+    r"doesn'?t work|won'?t (start|open|load|connect|turn on|charge)|stopped working|"
+    r"keeps (dropping|disconnecting|crashing|freezing)|troubleshoot\w*|fix (my|the|this)|"
+    r"error code|blue screen|bsod|no (sound|internet|wi-?fi)|disk (is )?full|overheat\w*|"
+    r"battery drain\w*)\b",
+    re.IGNORECASE,
+)
+_DECIDE = (
+    "Decision help: state the real goal in one line; list the options (add an obvious "
+    "one if missing, such as waiting); pick three to five criteria that matter for this "
+    "person and weigh them; score each option in a small table; give the main risks; "
+    "then a clear recommendation, how confident you are, and what would change your mind. "
+    "Use what you know about the user. If the choice hangs on current prices or facts, "
+    "look them up first instead of guessing."
+)
+_TROUBLESHOOT = (
+    "Troubleshooting: if the problem is on this PC, run check_pc (the right area) before "
+    "advising. Then give the likely cause and numbered steps from the quickest and safest "
+    "to the more involved, saying what each should show. Offer only the steps you can do "
+    "with your own tools (closing an app, Wi-Fi, volume); everything else the user does "
+    "themselves, and never suggest disabling security software, editing the registry or "
+    "running commands you can't explain. Ask one question if the cause is unclear."
+)
+
+
+def guidance(text: str) -> str:
+    """Extra instructions for decisions and troubleshooting ("" for anything else)."""
+    parts = []
+    if _DECISION.search(text):
+        parts.append(_DECIDE)
+    if _TROUBLE.search(text):
+        parts.append(_TROUBLESHOOT)
+    return "\n\n".join(parts)
+
+
+def chat_prompt(
+    *, spoken: bool, now: datetime | None = None, context: str = "", extra: str = ""
+) -> str:
     """The shorter prompt for the local models: a long prompt is slow on a laptop CPU."""
     now = now or datetime.now().astimezone()
-    parts = [_IDENTITY, _LOCAL, _SAFETY]
+    parts = [_IDENTITY, _LOCAL, _SAFETY, *([extra] if extra else [])]
     if spoken:
         parts.append(_SPOKEN)
     parts.append(f"Current local time: {now:%A %d %B %Y, %H:%M}.")
@@ -140,10 +184,15 @@ def chat_prompt(*, spoken: bool, now: datetime | None = None, context: str = "")
 
 
 def system_prompt(
-    *, spoken: bool, screen: bool = False, now: datetime | None = None, context: str = ""
+    *,
+    spoken: bool,
+    screen: bool = False,
+    now: datetime | None = None,
+    context: str = "",
+    extra: str = "",
 ) -> str:
     now = now or datetime.now().astimezone()
-    parts = [_IDENTITY, _SCREEN if screen else _AGENT, _SAFETY]
+    parts = [_IDENTITY, _SCREEN if screen else _AGENT, _SAFETY, *([extra] if extra else [])]
     if spoken:
         parts.append(_SPOKEN)
     parts.append(f"Current local time: {now:%A %d %B %Y, %H:%M}.")
