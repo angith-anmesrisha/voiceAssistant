@@ -29,6 +29,7 @@ from jarvis.tools.shortcuts import SHORTCUTS, KeyComboError, combo_risk, parse_c
 from jarvis.tools.slides import DeckWriter, PickFn, register_slide_tools
 from jarvis.tools.steam import SteamGame
 from jarvis.tools.system_ctl import SystemControl
+from jarvis.tools.tasks import register_task_tools
 from jarvis.tools.ui import (
     UiDriver,
     UiError,
@@ -550,6 +551,8 @@ def build_registry(
         news_locale=settings.news_locale,
         memory=memory,
     )
+    if keep is not None:
+        register_task_tools(registry, keep)
     if slides is not None:
         register_slide_tools(
             registry,

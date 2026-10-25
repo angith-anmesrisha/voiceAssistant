@@ -32,6 +32,17 @@ from jarvis.agent.planner import (
 from jarvis.agent.prompts import chat_prompt, system_prompt, wants_screen
 from jarvis.agent.routing import NEEDS_TOOLS, is_conversation, wants_cloud
 from jarvis.agent.toolbudget import groups_for
+from jarvis.agent.workflows import (
+    ProposalError,
+    Workflow,
+    WorkflowStore,
+    checklist_text,
+    filled,
+    parse_proposal,
+    proposal_prompt,
+    tool_call,
+    workflow_request,
+)
 from jarvis.app.events import ChatEntry, EntryKind, EventBus, PlanStep, PlanUpdated, StepStatus
 from jarvis.app.state import AppState, StateMachine
 from jarvis.providers.base import Capability, ChatResult, Message, ProviderError, ToolCall
@@ -53,6 +64,7 @@ class ConfirmRequest:
 
 
 LOOKED = "looked at screen"
+WORKFLOW = "workflow"
 ACTED = "used tools"
 PLANNED = "plan"
 
@@ -165,6 +177,9 @@ class Assistant:
         long_memory: Memory | None = None,
         local_first: Callable[[], bool] | None = None,
         local_timeout_s: float = 90.0,
+        workflows: WorkflowStore | None = None,
+        briefing: Callable[[], Awaitable[str]] | None = None,
+        on_open_workflows: Callable[[], None] | None = None,
     ) -> None:
         self._router = router
         self._store = store
@@ -183,6 +198,9 @@ class Assistant:
         self._long_memory = long_memory
         self._local_first = local_first or (lambda: False)
         self._local_timeout_s = local_timeout_s
+        self.workflows = workflows
+        self._briefing = briefing
+        self._on_open_workflows = on_open_workflows
         self._on_text: Callable[[str], None] | None = None  # this turn's live reply sink
         self._streamed = False
         self._writes: set[asyncio.Task[None]] = set()
@@ -363,6 +381,17 @@ class Assistant:
         whatsapp = self._whatsapp_request(text)
         if whatsapp is not None:
             return await self._whatsapp(conversation, whatsapp)
+        if self.workflows is not None:
+            if self._on_open_workflows is not None and _OPEN_BUILDER.search(text):
+                self._on_open_workflows()
+                reply = "The workflow builder is open."
+                await self._emit(EntryKind.ASSISTANT, reply, mode=WORKFLOW)
+                return Reply(reply, ok=True)
+            workflow = self.workflows.match(text)
+            if workflow is not None:
+                return await self.run_workflow(workflow, spoken=spoken, conversation=conversation)
+            if workflow_request(text):
+                return await self._propose_workflow(conversation, shown, text)
         deck = deck_command(text) if self._registry.get("make_presentation") else None
         if deck is not None:
             return await self._presentation(conversation, shown, deck)
@@ -456,6 +485,186 @@ class Assistant:
             mode="slides",
             failed=not result.ok,
         )
+        self._keep(shown, reply)
+        return Reply(reply, ok=True)
+
+    # --- workflows ---
+
+    async def run_workflow(
+        self,
+        workflow: Workflow,
+        *,
+        spoken: bool = False,
+        conversation: int | None = None,
+        reason: str = "",
+    ) -> Reply:
+        """Run a saved workflow's steps in order, on the plan card, each with its own
+        risk level and confirmations. ``reason`` says what started it (for the log)."""
+        conversation = conversation or await self.conversation_id()
+        if reason:
+            await self._emit(EntryKind.ACTION, f"▶ {workflow.name} ({reason})")
+        self._did = {WORKFLOW}
+        self._failed = self._blocked = False
+        self._turn_context = await self.checked_context()
+        if self._state.state is not AppState.THINKING:
+            await self._state.transition(AppState.THINKING)
+        try:
+            steps, shown_parts, said_parts = await self._workflow_steps(workflow, spoken)
+        finally:
+            if self._state.state in (AppState.THINKING, AppState.ACTING):
+                await self._state.transition(AppState.IDLE)
+        done = sum(step.status is StepStatus.DONE for step in steps)
+        failed = any(step.status is StepStatus.FAILED for step in steps)
+        if done == len(steps):
+            headline = f"{workflow.name} is done."
+        else:
+            headline = f"{workflow.name}: {_count(done)} of {_count(len(steps))} steps done."
+        reply = "\n\n".join([headline + "\n" + plan_lines(steps), *shown_parts])
+        said = " ".join([headline, *said_parts])
+        await self._store.add_message(
+            conversation, {"role": "assistant", "content": reply}, mode=WORKFLOW
+        )
+        await self._emit(EntryKind.ASSISTANT, reply, mode=WORKFLOW, failed=failed)
+        return Reply(said if spoken else reply, ok=True)
+
+    async def _workflow_steps(
+        self, workflow: Workflow, spoken: bool
+    ) -> tuple[list[PlanStep], list[str], list[str]]:
+        steps = [PlanStep(step.describe()) for step in workflow.steps]
+        outputs: list[str] = []
+        shown: list[str] = []
+        said: list[str] = []
+        stopped = False
+
+        async def publish(finished: bool = False) -> None:
+            await self._bus.publish(PlanUpdated(tuple(steps), finished=finished))
+
+        for i, raw in enumerate(workflow.steps):
+            if stopped:
+                steps[i] = PlanStep(steps[i].title, StepStatus.SKIPPED)
+                outputs.append("")
+                continue
+            steps[i] = PlanStep(steps[i].title, StepStatus.RUNNING)
+            await publish()
+            step = filled(raw, outputs)
+            ok, note, output, show = await self._workflow_step(i, step, outputs, spoken)
+            if step.action == "confirm" and not ok:
+                stopped = True
+            outputs.append(output)
+            if show and output:
+                shown.append(output)
+                if step.action in ("say", "briefing", "ask_jarvis"):
+                    said.append(output)
+            status = StepStatus.DONE if ok else StepStatus.FAILED
+            steps[i] = PlanStep(steps[i].title, status, note)
+        await publish(finished=True)
+        return steps, shown, said
+
+    async def _workflow_step(
+        self, index: int, step: Any, outputs: list[str], spoken: bool
+    ) -> tuple[bool, str, str, bool]:
+        """(ok, note for the plan card, output for later steps, show it in the reply)."""
+        settings = step.settings
+        if step.action == "show_checklist":
+            text = checklist_text(settings)
+            return True, "Shown", text, True
+        if step.action == "say":
+            text = str(settings.get("text") or "")
+            return True, "Said", text, True
+        if step.action == "wait":
+            try:
+                seconds = max(0.0, min(300.0, float(settings.get("seconds") or 0)))
+            except (TypeError, ValueError):
+                seconds = 0.0
+            await asyncio.sleep(seconds)
+            return True, f"Waited {seconds:g} s", outputs[-1] if outputs else "", False
+        if step.action == "confirm":
+            question = str(settings.get("question") or "Shall I carry on?")
+            approved = await self._confirm(ConfirmRequest("workflow", Risk.MEDIUM, question))
+            if not approved:
+                return False, "You said no, so the rest was skipped", "", False
+            return True, "You said yes", outputs[-1] if outputs else "", False
+        if step.action == "briefing":
+            if self._briefing is None:
+                return False, "The briefing isn't available", "", False
+            text = await self._briefing()
+            return True, "Given", text, True
+        if step.action == "ask_jarvis":
+            request = str(settings.get("request") or "").strip()
+            if not request:
+                return False, "No request was set", "", False
+            result = await self._converse(request, spoken, history=False)
+            text = without_thinking(result.content or "")
+            failed = self._failed or self._blocked or says_it_cannot(text)
+            self._failed = self._blocked = False
+            return not failed, text[:200] or "Done", text, True
+        call = tool_call(step)
+        if call is None:
+            return False, f"Unknown action “{step.action}”", "", False
+        name, args = call
+        tool = ToolCall(f"workflow_{index}", name, args)
+        outcome = await self._screen(tool, await self._run_tool(tool))
+        shown = step.action == "show_tasks" and outcome.ok
+        return outcome.ok, outcome.summary, _result_text(outcome), shown
+
+    async def _propose_workflow(self, conversation: int, shown: str, text: str) -> Reply:
+        """Turn "Whenever I start work, open … and show …" into a workflow, show it, and
+        save it only after a yes."""
+        assert self.workflows is not None
+        await self._state.transition(AppState.THINKING)
+        try:
+            result = await self._router.chat(
+                [
+                    {"role": "system", "content": proposal_prompt()},
+                    {"role": "user", "content": text},
+                ]
+            )
+            workflow = parse_proposal(result.content or "")
+        except (AllProvidersFailedError, ProposalError) as exc:
+            if self._state.state is AppState.THINKING:
+                await self._state.transition(AppState.IDLE)
+            message = (
+                _failure_message(exc)
+                if isinstance(exc, AllProvidersFailedError)
+                else f"I couldn't turn that into a workflow ({exc}). You can build it in "
+                "the workflow builder instead."
+            )
+            await self._emit(EntryKind.ERROR, message)
+            return Reply(message, ok=False)
+        if self._state.state is AppState.THINKING:
+            await self._state.transition(AppState.IDLE)
+        names = {w.name.lower() for w in self.workflows.all}
+        base, number = workflow.name, 2
+        while workflow.name.lower() in names:
+            workflow.name = f"{base} {number}"
+            number += 1
+        proposal = "Here's the workflow I'd set up:\n" + workflow.describe()
+        await self._emit(
+            EntryKind.ASSISTANT,
+            proposal,
+            mode=WORKFLOW,
+            provider=result.provider,
+            model=result.model,
+        )
+        approved = await self._confirm(
+            ConfirmRequest(
+                "save_workflow", Risk.MEDIUM, f"Save this workflow? {workflow.describe()}"
+            )
+        )
+        if approved:
+            self.workflows.put(workflow)
+            how = (
+                f"Say “{workflow.trigger.phrases[0]}” to run it."
+                if workflow.trigger.kind == "phrase" and workflow.trigger.phrases
+                else workflow.trigger.describe() + " it will run."
+            )
+            reply = f"Saved “{workflow.name}”. {how} You can change it in the workflow builder."
+        else:
+            reply = "Very well, I haven't saved it."
+        await self._store.add_message(
+            conversation, {"role": "assistant", "content": reply}, mode=WORKFLOW
+        )
+        await self._emit(EntryKind.ASSISTANT, reply, mode=WORKFLOW)
         self._keep(shown, reply)
         return Reply(reply, ok=True)
 
@@ -728,6 +937,24 @@ class Assistant:
 
 
 _DECLINED = "The user declined this action."
+_OPEN_BUILDER = re.compile(
+    r"^\W*(?:(?:hey\s+)?jarvis\W+)?(?:please\s+)?(?:open|show|edit|manage)\s+(?:me\s+)?"
+    r"(?:the\s+|my\s+)?(?:workflow builder|workflows|routines|command chains)\W*$",
+    re.IGNORECASE,
+)
+
+
+def _result_text(outcome: ToolResult) -> str:
+    """A tool result as text a later step can use: the summary plus any lists."""
+    lines = [outcome.summary]
+    for value in outcome.data.values():
+        if isinstance(value, list):
+            lines += [str(item) for item in value[:40]]
+        elif isinstance(value, str) and len(value) > 40:
+            lines.append(value)
+    return "\n".join(lines)
+
+
 _OLD_WINDOW = "(replaced by the newer reading below)"
 _WHATSAPP_SEND = re.compile(
     r"^(?=.*whats\s?app)(?:.*\b(?:send|tell|reply|ping)\b|\W*(?:message|text|whats\s?app)\s)",

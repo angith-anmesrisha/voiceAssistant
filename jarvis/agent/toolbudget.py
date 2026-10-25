@@ -80,6 +80,12 @@ _GROUPS: dict[str, re.Pattern[str]] = {
         r"\b(ppt|pptx|power ?point|presentations?|slides?|slide ?deck|deck|keynote)\b",
         re.IGNORECASE,
     ),
+    "tasks": re.compile(
+        r"\b(tasks?|to-?dos?|to do list|pending|ideas?|deadlines?|due|assignments?|"
+        r"homework|projects?|checklist|backlog|finished|completed?|done with|tick off|"
+        r"mark .+ (done|complete)|plan my day|my day|priorit\w*)\b",
+        re.IGNORECASE,
+    ),
     "reminders": re.compile(
         r"\b(remind|reminder|reminders|timer|alarm|wake me|in \d+ (sec|second|min|minute|"
         r"hour)s?|at \d{1,2}(:\d\d)?\s*(am|pm)?|tomorrow|tonight|later|schedule|"

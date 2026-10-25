@@ -43,7 +43,18 @@ CREATE TABLE IF NOT EXISTS state (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS tasks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    text TEXT NOT NULL,
+    kind TEXT NOT NULL DEFAULT 'task',
+    project TEXT NOT NULL DEFAULT '',
+    due REAL,
+    created REAL NOT NULL,
+    done REAL
+);
 """
+
+TASK_KINDS = ("task", "idea")
 
 CATEGORIES = ("about_user", "people", "preferences", "projects", "places", "other")
 # A runaway guard, not a working limit: normal use never gets near it.
@@ -56,6 +67,17 @@ class Fact:
     value: str
     category: str
     updated: float
+
+
+@dataclass(frozen=True, slots=True)
+class Task:
+    id: int
+    text: str
+    kind: str  # task | idea
+    project: str
+    due: float | None  # epoch seconds
+    created: float
+    done: float | None  # when it was finished
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,6 +304,80 @@ class Keep:
         return result
 
     # --- small bits of state (last briefing day, ...) ---
+
+    # --- tasks and ideas ---
+
+    async def add_task(
+        self, text: str, *, kind: str = "task", project: str = "", due: float | None = None
+    ) -> Task:
+        kind = kind if kind in TASK_KINDS else "task"
+
+        def go() -> Task:
+            now = time.time()
+            cursor = self._conn.execute(
+                "INSERT INTO tasks (text, kind, project, due, created) VALUES (?, ?, ?, ?, ?)",
+                (text.strip(), kind, project.strip(), due, now),
+            )
+            return Task(
+                int(cursor.lastrowid or 0), text.strip(), kind, project.strip(), due, now, None
+            )
+
+        result: Task = await self._run(go)
+        return result
+
+    async def tasks(
+        self, *, kind: str | None = "task", project: str = "", done: bool | None = False
+    ) -> list[Task]:
+        """Tasks (open ones by default), soonest due first, then oldest."""
+        where, args = ["1 = 1"], []
+        if kind is not None:
+            where.append("kind = ?")
+            args.append(kind)
+        if project:
+            where.append("lower(project) = lower(?)")
+            args.append(project.strip())
+        if done is not None:
+            where.append("done IS NOT NULL" if done else "done IS NULL")
+
+        def go() -> list[Task]:
+            rows = self._conn.execute(
+                "SELECT id, text, kind, project, due, created, done FROM tasks WHERE "
+                + " AND ".join(where)
+                + " ORDER BY due IS NULL, due, created",
+                args,
+            ).fetchall()
+            return [Task(*row) for row in rows]
+
+        result: list[Task] = await self._run(go)
+        return result
+
+    async def finish_task(self, task_id: int, *, reopen: bool = False) -> Task | None:
+        def go() -> Task | None:
+            self._conn.execute(
+                "UPDATE tasks SET done = ? WHERE id = ?", (None if reopen else time.time(), task_id)
+            )
+            row = self._conn.execute(
+                "SELECT id, text, kind, project, due, created, done FROM tasks WHERE id = ?",
+                (task_id,),
+            ).fetchone()
+            return Task(*row) if row else None
+
+        result: Task | None = await self._run(go)
+        return result
+
+    async def tasks_between(self, start: float, end: float) -> list[Task]:
+        """Tasks created or finished between ``start`` and ``end`` (for day reviews)."""
+
+        def go() -> list[Task]:
+            rows = self._conn.execute(
+                "SELECT id, text, kind, project, due, created, done FROM tasks WHERE "
+                "(created BETWEEN ? AND ?) OR (done BETWEEN ? AND ?) ORDER BY created",
+                (start, end, start, end),
+            ).fetchall()
+            return [Task(*row) for row in rows]
+
+        result: list[Task] = await self._run(go)
+        return result
 
     async def get_state(self, key: str) -> str | None:
         def go() -> str | None:
