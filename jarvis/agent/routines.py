@@ -23,6 +23,7 @@ from loguru import logger
 from jarvis.storage.db import HistoryStore
 from jarvis.storage.keep import Keep
 from jarvis.storage.memory import Memory
+from jarvis.tools.calendar_ics import Calendar, CalendarError
 from jarvis.tools.live import Quote, money, save_watched, watched
 from jarvis.tools.web import Forecast, Headline, WebError
 
@@ -81,6 +82,7 @@ class Briefing:
     headlines: Callable[[], Awaitable[list[Headline]]]
     idle: Callable[[], float] = idle_seconds
     markets: Callable[[], Awaitable[list[Quote]]] | None = None
+    calendar: Calendar | None = None
     until_hour: int = 12
     _done: str = ""
 
@@ -107,7 +109,9 @@ class Briefing:
         if forecast is not None:
             lines.append(_weather_line(forecast))
         lines.extend(await self._markets())
+        lines.extend(await self._calendar(now))
         lines.extend(await self._reminders(now))
+        lines.extend(await self._tasks(now))
         recap = await self.keep.unmentioned_summaries(now.date().isoformat())
         if recap:
             lines.append("From last time: " + " ".join(recap[-3:]))
@@ -140,6 +144,39 @@ class Briefing:
                 part += f", {'up' if q.change_pct >= 0 else 'down'} {abs(q.change_pct):.1f}%"
             parts.append(part)
         return [f"Markets: {'; '.join(parts)}."] if parts else []
+
+    async def _calendar(self, now: datetime) -> list[str]:
+        if self.calendar is None or not self.calendar.available:
+            return []
+        try:
+            events = await self.calendar.day(now.date())
+        except CalendarError as exc:
+            logger.info("Briefing without the calendar: {}", exc)
+            return []
+        ahead = [e for e in events if e.all_day or e.end > now]
+        if not ahead:
+            return ["Nothing on your calendar today."]
+        listed = "; ".join(e.describe() for e in ahead[:4])
+        more = f", and {len(ahead) - 4} more" if len(ahead) > 4 else ""
+        count = _number(len(ahead))
+        return [
+            f"On your calendar, {count} {'event' if len(ahead) == 1 else 'events'}: {listed}{more}."
+        ]
+
+    async def _tasks(self, now: datetime) -> list[str]:
+        end = datetime.combine(now.date() + timedelta(days=1), datetime.min.time(), now.tzinfo)
+        start = datetime.combine(now.date(), datetime.min.time(), now.tzinfo)
+        pending = [t for t in await self.keep.tasks(kind="task", done=False) if t.due]
+        due = [t for t in pending if start.timestamp() <= (t.due or 0) < end.timestamp()]
+        late = [t for t in pending if (t.due or 0) < start.timestamp()]
+        lines = []
+        if due:
+            names = "; ".join(t.text for t in due[:3])
+            lines.append(f"Due today: {names}{' and more' if len(due) > 3 else ''}.")
+        if late:
+            noun = "task is" if len(late) == 1 else "tasks are"
+            lines.append(f"{_number(len(late)).capitalize()} {noun} overdue.")
+        return lines
 
     async def _reminders(self, now: datetime) -> list[str]:
         end = datetime.combine(now.date() + timedelta(days=1), datetime.min.time(), now.tzinfo)

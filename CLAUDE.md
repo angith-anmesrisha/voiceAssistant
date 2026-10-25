@@ -80,6 +80,8 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   volume via pycaw, brightness via WMI, wallpaper via SystemParametersInfo),
   `slides.py` (`deck_command` local parser, `DeckWriter`: free models only, `parse_deck`,
   `make_presentation`), `deck_render.py` (python-pptx drawing: `THEMES`, `LAYOUTS`, `render`),
+  `calendar_ics.py` (`Calendar`, `parse`, `events_between`), `day.py` (`my_day`,
+  `calendar_events`), `tasks.py` (tasks/ideas tools, `parse_due`),
   `documents.py` (`read_text`: text, docx, xlsx, pptx, pdf via pypdf), `pc.py`
   (read_document, save_text, organize_desktop, close_app, set_volume/brightness/
   wallpaper, all undoable), `builtin.py` (the tool set; `ToolSpec.group`).
@@ -172,7 +174,14 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   fire once a day up to 30 min late (state `workflows_ran`), startup ones 10 s after
   start; both publish `RunWorkflow`, which the controller runs when IDLE (waits ≤15 min).
   `run_workflow` tool only queues. Tasks/ideas: `tasks` table in keep, tools
-  `add_task`/`list_tasks`/`complete_task` (group "tasks"), `parse_due`.
+  `add_task`/`list_tasks`/`complete_task` (group "tasks"), `parse_due`. `starters()`
+  (Morning Briefing, Daily Planner, End-of-Day Review) are saved on first start.
+- Calendar: read-only iCal from env `JARVIS_CALENDAR_ICS` (a secret URL, never logged;
+  `tools/calendar_ics.py`, own parser: TZID/UTC/all-day, RRULE daily/weekly BYDAY/monthly
+  incl. 2TU/-1FR/yearly, INTERVAL/COUNT/UNTIL, EXDATE, moved instances; 10-min cache;
+  tzdata on Windows). `tools/day.py`: `my_day(when, review)` and `calendar_events`
+  (group "tasks", screened). Briefing adds calendar and due/overdue tasks. Reminders
+  `repeat` (daily/weekdays/weekly/monthly; column added on open; `next_occurrence`).
 - Operating apps (computer use): `read_ui` lists a window's controls as numbered lines
   (`[3] Edit "Type a message"`), and `click_element` / `type_into` / `scroll_ui` act by
   number and return the window afterwards, so the model works look → act → check

@@ -130,6 +130,9 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     from jarvis.ui.camera import capture_webcam
 
     keep = Keep(keep_file())
+    from jarvis.tools.calendar_ics import Calendar
+
+    calendar = Calendar(client)  # read-only, from JARVIS_CALENDAR_ICS if set
     memory = _long_memory(settings, client)
     desktop = WindowsDesktop()
     desktop.start_tracking()
@@ -156,19 +159,29 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         code_folder=code_dir() if settings.tools.code_runner else None,
         memory=memory,
         slides=_slide_tools(settings, router, lambda: pick_upload(), bus, spawn),
+        calendar=calendar,
     )
 
-    from jarvis.agent.workflows import WorkflowStore, WorkflowTriggers, register_workflow_tools
+    from jarvis.agent.workflows import (
+        WorkflowStore,
+        WorkflowTriggers,
+        register_workflow_tools,
+        starters,
+    )
     from jarvis.app.events import RunWorkflow
     from jarvis.app.paths import data_dir
 
+    first_time = not (data_dir() / "workflows.json").exists()
     workflows = WorkflowStore(data_dir() / "workflows.json")
+    if first_time:
+        for starter in starters():
+            workflows.put(starter)
 
     async def queue_workflow(workflow: Any, reason: str) -> None:
         await bus.publish(RunWorkflow(workflow.id, reason))
 
     register_workflow_tools(registry, workflows, queue_workflow)
-    briefing = _briefing(settings, keep, client)
+    briefing = _briefing(settings, keep, client, calendar)
 
     hotkey_label = "+".join(
         part.strip().title() for part in settings.hotkeys.push_to_talk.split("+")
@@ -651,7 +664,9 @@ def _routines(
     return jobs
 
 
-def _briefing(settings: Settings, keep: Keep, client: httpx.AsyncClient) -> Briefing:
+def _briefing(
+    settings: Settings, keep: Keep, client: httpx.AsyncClient, calendar: Any = None
+) -> Briefing:
     """The morning briefing: said once a day by itself, and the "briefing" workflow step."""
     from jarvis.agent.routines import Briefing
     from jarvis.tools import live, web
@@ -676,7 +691,13 @@ def _briefing(settings: Settings, keep: Keep, client: httpx.AsyncClient) -> Brie
         )
         return [q for q in found if isinstance(q, live.Quote)]
 
-    return Briefing(keep, weather, headlines, markets=markets if plan.briefing_markets else None)
+    return Briefing(
+        keep,
+        weather,
+        headlines,
+        markets=markets if plan.briefing_markets else None,
+        calendar=calendar,
+    )
 
 
 def _slide_tools(

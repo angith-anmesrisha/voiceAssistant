@@ -178,8 +178,20 @@ python -m jarvis --hidden   # starts in the tray
   are the international spot price (Indian shop prices add duty and GST). "Watch
   bitcoin and tell me if it moves 3%" checks every 30 minutes, and the morning briefing
   reads `routines.briefing_markets` (Nifty, Sensex and gold by default).
-- **Reminders and timers.** "Remind me at 6 pm to call Mom", "set a 10 minute timer":
-  it says them out loud when due, even after a restart.
+- **Reminders and timers.** "Remind me at 6 pm to call Mom", "set a 10 minute timer",
+  "remind me every weekday at 9 to check mail": it says them out loud when due, even
+  after a restart, and a repeating one sets itself up again (daily, weekdays, weekly,
+  monthly).
+- **Your day.** "Plan my day" gathers your calendar, overdue and due tasks and today's
+  reminders, then gives three priorities and a time-blocked plan. "Review my day" says
+  what got done, what's still open and the first three things for tomorrow, and saves
+  it as a note. "Brief me" gives the morning briefing on demand; the automatic one now
+  includes your calendar and tasks due. "What's on my calendar tomorrow?" works too.
+  **Calendar (read-only):** copy your calendar's secret iCal address (Google Calendar:
+  Settings › your calendar › "Secret address in iCal format"; Outlook: Publish calendar
+  › ICS) into the `JARVIS_CALENDAR_ICS` environment variable, e.g.
+  `setx JARVIS_CALENDAR_ICS "https://calendar.google.com/calendar/ical/.../basic.ics"`.
+  Several addresses can be given separated by spaces. JARVIS never writes to it.
 - **Weather, news and web answers.** "Will it rain tomorrow?", "latest news on the
   election", "what's the price of a PS5?": it reads the results and answers, saying
   where it came from. "Keep an eye on news about SpaceX" checks once a day.

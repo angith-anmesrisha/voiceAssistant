@@ -72,6 +72,8 @@ PLANNED = "plan"
 UNTRUSTED_TOOLS = frozenset(
     {
         "read_clipboard",
+        "my_day",
+        "calendar_events",
         "list_folder",
         "find_items",
         "look_at_screen",

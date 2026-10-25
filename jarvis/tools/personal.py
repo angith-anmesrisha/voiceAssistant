@@ -8,7 +8,7 @@ from typing import Any
 
 import httpx
 
-from jarvis.storage.keep import CATEGORIES, Keep
+from jarvis.storage.keep import CATEGORIES, REPEATS, Keep
 from jarvis.storage.memory import Memory
 from jarvis.tools.registry import Risk, ToolRegistry, ToolResult, ToolSpec
 from jarvis.tools.web import WebError, news, search, weather
@@ -202,15 +202,28 @@ def _note_tool(registry: ToolRegistry, memory: Memory) -> None:
     )
 
 
+_REPEAT_WORDS = {
+    "daily": "every day",
+    "weekdays": "every weekday",
+    "weekly": "every week",
+    "monthly": "every month",
+}
+
+
 def _reminder_tools(registry: ToolRegistry, keep: Keep) -> None:
-    async def set_reminder(text: str, at: str = "", in_minutes: float = 0) -> ToolResult:
+    async def set_reminder(
+        text: str, at: str = "", in_minutes: float = 0, repeat: str = ""
+    ) -> ToolResult:
         try:
             when = due_time(at, in_minutes)
         except WhenError as exc:
             return ToolResult(False, f"Couldn't set the reminder: {exc}.")
-        reminder = await keep.add_reminder(when.timestamp(), text)
+        reminder = await keep.add_reminder(when.timestamp(), text, repeat)
+        again = f", then {_REPEAT_WORDS[reminder.repeat]}" if reminder.repeat else ""
         return ToolResult(
-            True, f"Reminder {reminder.id} set for {spoken_time(when)}.", {"id": reminder.id}
+            True,
+            f"Reminder {reminder.id} set for {spoken_time(when)}{again}.",
+            {"id": reminder.id},
         )
 
     async def list_reminders() -> ToolResult:
@@ -219,6 +232,7 @@ def _reminder_tools(registry: ToolRegistry, keep: Keep) -> None:
             return ToolResult(True, "No reminders are set.")
         lines = [
             f"{r.id}: {spoken_time(datetime.fromtimestamp(r.due).astimezone())}: {r.text}"
+            + (f" ({_REPEAT_WORDS[r.repeat]})" if r.repeat else "")
             for r in pending
         ]
         return ToolResult(True, f"{len(lines)} reminders.", {"reminders": lines})
@@ -232,12 +246,14 @@ def _reminder_tools(registry: ToolRegistry, keep: Keep) -> None:
         ToolSpec(
             "set_reminder",
             "Set a reminder or timer. Give in_minutes for 'in 10 minutes', or at for a time "
-            "('18:30', '6 pm', '2026-10-25 09:00'). JARVIS says it out loud when due.",
+            "('18:30', '6 pm', '2026-10-25 09:00'). repeat for 'every day/weekday/week/"
+            "month'. JARVIS says it out loud when due.",
             _schema(
                 {
                     "text": {"type": "string", "maxLength": 300},
                     "at": {"type": "string", "maxLength": 40},
                     "in_minutes": {"type": "number"},
+                    "repeat": {"type": "string", "enum": ["", *REPEATS]},
                 },
                 ["text"],
             ),

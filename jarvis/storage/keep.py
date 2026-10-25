@@ -6,11 +6,13 @@ sent anywhere except the facts the prompt carries to the AI you use.
 from __future__ import annotations
 
 import asyncio
+import calendar
 import re
 import sqlite3
 import threading
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -85,6 +87,30 @@ class Reminder:
     id: int
     due: float  # epoch seconds
     text: str
+    repeat: str = ""  # "" | daily | weekdays | weekly | monthly
+
+
+REPEATS = ("daily", "weekdays", "weekly", "monthly")
+
+
+def next_occurrence(due: float, repeat: str, now: float) -> float | None:
+    """When a repeating reminder is next due after ``now`` (None if it doesn't repeat)."""
+    if repeat not in REPEATS:
+        return None
+    when = datetime.fromtimestamp(due).astimezone()
+    while when.timestamp() <= now:
+        if repeat == "daily":
+            when += timedelta(days=1)
+        elif repeat == "weekdays":
+            when += timedelta(days=3 if when.weekday() == 4 else 2 if when.weekday() == 5 else 1)
+        elif repeat == "weekly":
+            when += timedelta(days=7)
+        else:
+            month = when.month % 12 + 1
+            year = when.year + (when.month == 12)
+            day = min(when.day, calendar.monthrange(year, month)[1])
+            when = when.replace(year=year, month=month, day=day)
+    return when.timestamp()
 
 
 def clean_key(raw: str) -> str:
@@ -98,6 +124,9 @@ class Keep:
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.execute("PRAGMA journal_mode = WAL")
         self._conn.executescript(_SCHEMA)
+        columns = {row[1] for row in self._conn.execute("PRAGMA table_info(reminders)")}
+        if "repeat" not in columns:  # keep files from before repeating reminders
+            self._conn.execute("ALTER TABLE reminders ADD COLUMN repeat TEXT NOT NULL DEFAULT ''")
         self._conn.commit()
 
     def close(self) -> None:
@@ -189,12 +218,15 @@ class Keep:
 
     # --- reminders ---
 
-    async def add_reminder(self, due: float, text: str) -> Reminder:
+    async def add_reminder(self, due: float, text: str, repeat: str = "") -> Reminder:
+        repeat = repeat if repeat in REPEATS else ""
+
         def go() -> Reminder:
             cursor = self._conn.execute(
-                "INSERT INTO reminders (due, text) VALUES (?, ?)", (due, text.strip())
+                "INSERT INTO reminders (due, text, repeat) VALUES (?, ?, ?)",
+                (due, text.strip(), repeat),
             )
-            return Reminder(int(cursor.lastrowid or 0), due, text.strip())
+            return Reminder(int(cursor.lastrowid or 0), due, text.strip(), repeat)
 
         result: Reminder = await self._run(go)
         return result
@@ -204,7 +236,7 @@ class Keep:
 
         def go() -> list[Reminder]:
             rows = self._conn.execute(
-                "SELECT id, due, text FROM reminders WHERE done = 0 ORDER BY due"
+                "SELECT id, due, text, repeat FROM reminders WHERE done = 0 ORDER BY due"
             ).fetchall()
             return [Reminder(*row) for row in rows]
 
@@ -282,6 +314,20 @@ class Keep:
             return row is not None
 
         result: bool = await self._run(go)
+        return result
+
+    async def summaries_between(self, first_day: str, last_day: str) -> list[tuple[str, str]]:
+        """(day, summary) of conversations from ``first_day`` to ``last_day`` (ISO dates)."""
+
+        def go() -> list[tuple[str, str]]:
+            rows = self._conn.execute(
+                "SELECT day, text FROM summaries WHERE day BETWEEN ? AND ? "
+                "ORDER BY day, conversation_id",
+                (first_day, last_day),
+            ).fetchall()
+            return [(str(day), str(text)) for day, text in rows]
+
+        result: list[tuple[str, str]] = await self._run(go)
         return result
 
     async def unmentioned_summaries(self, before_day: str) -> list[str]:

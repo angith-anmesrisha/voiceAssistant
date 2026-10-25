@@ -586,8 +586,52 @@ def parse_proposal(reply: str) -> Workflow:
 # --- ready-made workflows, offered in the builder ---
 
 
+_PLAN_DAY = (
+    "Plan my day. Call my_day for today first. Then give a short, realistic plan: the top "
+    "three priorities (overdue and due-today tasks first), a time-blocked schedule that "
+    "fits around my calendar with short breaks, and what can wait until tomorrow. Don't "
+    "ask questions; plan with what you have."
+)
+_REVIEW_DAY = (
+    "Review my day. Call my_day with review=true for today. Then say briefly what got "
+    "done, what's still open (overdue first), anything I should carry over, and the three "
+    "things to start with tomorrow. Don't invent anything that isn't in the material."
+)
+
+
+def starters() -> list[Workflow]:
+    """Saved on first start, so the everyday ones work by voice straight away."""
+    return [
+        Workflow(
+            "Morning Briefing",
+            Trigger("phrase", ["morning briefing", "brief me", "give me my briefing"]),
+            [Step("briefing", {})],
+            description="Weather, calendar, reminders, tasks due and headlines.",
+        ),
+        Workflow(
+            "Daily Planner",
+            Trigger("phrase", ["plan my day", "plan today", "help me plan my day"]),
+            [Step("ask_jarvis", {"request": _PLAN_DAY})],
+            description="Priorities and a time-blocked plan around your calendar.",
+        ),
+        Workflow(
+            "End-of-Day Review",
+            Trigger(
+                "phrase",
+                ["review my day", "end of day review", "close out my day", "wrap up my day"],
+            ),
+            [
+                Step("ask_jarvis", {"request": _REVIEW_DAY}),
+                Step("note", {"title": "Day review {today}", "text": "{previous}"}),
+            ],
+            description="What got done, what's open, and tomorrow's first three; saved as a note.",
+        ),
+    ]
+
+
 def templates() -> list[Workflow]:
     return [
+        *starters(),
         Workflow(
             "Study Mode",
             Trigger("phrase", ["activate study mode", "start study mode", "study mode"]),

@@ -18,7 +18,7 @@ from loguru import logger
 
 from jarvis.agent.routines import Job
 from jarvis.app.events import Announce, ChatEntry, EntryKind, EventBus
-from jarvis.storage.keep import Keep
+from jarvis.storage.keep import Keep, next_occurrence
 
 _LATE_S = 120  # a reminder this late was missed while JARVIS wasn't running
 
@@ -75,6 +75,9 @@ class Background:
                 break
             if not await self._keep.finish_reminder(reminder.id):
                 continue
+            following = next_occurrence(reminder.due, reminder.repeat, now)
+            if following is not None:
+                await self._keep.add_reminder(following, reminder.text, reminder.repeat)
             text = f"Reminder: {reminder.text}"
             if now - reminder.due > _LATE_S:
                 missed = datetime.fromtimestamp(reminder.due).astimezone().strftime("%H:%M")

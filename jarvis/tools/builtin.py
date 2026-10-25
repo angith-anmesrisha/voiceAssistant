@@ -16,7 +16,9 @@ from jarvis.app.config import ToolSettings
 from jarvis.storage.keep import Keep
 from jarvis.storage.memory import Memory
 from jarvis.tools.apps import AppIndex
+from jarvis.tools.calendar_ics import Calendar
 from jarvis.tools.code_runner import register_code_tool
+from jarvis.tools.day import register_day_tools
 from jarvis.tools.desktop import Desktop, DesktopUnsupportedError
 from jarvis.tools.files import FileAccessError, FileArea, default_area
 from jarvis.tools.live import register_live_tools
@@ -106,6 +108,7 @@ def build_registry(
     code_folder: Path | None = None,
     memory: Memory | None = None,
     slides: SlideTools | None = None,
+    calendar: Calendar | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     journal = undo if undo is not None else UndoJournal()
@@ -553,6 +556,7 @@ def build_registry(
     )
     if keep is not None:
         register_task_tools(registry, keep)
+        register_day_tools(registry, keep, calendar)
     if slides is not None:
         register_slide_tools(
             registry,

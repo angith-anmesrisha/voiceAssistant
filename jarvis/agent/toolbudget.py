@@ -83,7 +83,9 @@ _GROUPS: dict[str, re.Pattern[str]] = {
     "tasks": re.compile(
         r"\b(tasks?|to-?dos?|to do list|pending|ideas?|deadlines?|due|assignments?|"
         r"homework|projects?|checklist|backlog|finished|completed?|done with|tick off|"
-        r"mark .+ (done|complete)|plan my day|my day|priorit\w*)\b",
+        r"mark .+ (done|complete)|plan my day|my day|priorit\w*|calendar|meetings?|"
+        r"agenda|appointments?|events?|schedule|busy|free (today|tomorrow|on)|"
+        r"end of (the )?day|wrap up|close out)\b",
         re.IGNORECASE,
     ),
     "workflows": re.compile(
