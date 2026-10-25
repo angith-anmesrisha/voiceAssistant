@@ -102,7 +102,10 @@ SUMMARY_PROMPT = (
 _SCREEN_WORDS = re.compile(
     r"\b(on (my|the) (screen|display|monitor)|my screen|the screen|screenshot|"
     r"what am i (looking at|seeing)|what'?s (this|that) (error|window|page|message|code)|"
-    r"analy[sz]e (this|my screen|the screen|it)?|read (this|the screen)|this (error|window))\b",
+    r"analy[sz]e (this|my screen|the screen|it)?|read (this|the screen)|this (error|window)|"
+    r"explain (this|what'?s here)|help me with this (page|form|window|screen|app)|"
+    r"what (should|do) i (click|press|do) (here|now|next)|is this (a scam|safe|legit|real)|"
+    r"check this (page|email|form|message|chart|graph))\b",
     re.IGNORECASE,
 )
 

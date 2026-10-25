@@ -134,9 +134,13 @@ python -m jarvis --hidden   # starts in the tray
 
 ![JARVIS working through a task list](docs/renders/16-plan-running.png)
 
-- **Tasks and ideas.** "Add revise chapter 4 to my study tasks, due Friday", "save this
-  as a project idea: a plant-watering bot", "what's pending?", "mark the chapter 4 task
-  done". Kept on your PC with the rest of JARVIS's memory.
+- **Tasks and ideas, captured instantly.** "Add a study task: revise chapter 4 due
+  Friday", "idea: a plant-watering bot", "add milk to my shopping tasks", "quick note:
+  parked on level 3" are saved straight away with no AI involved (notes go to the Inbox
+  note in your memory folder). "What's pending?", "mark the chapter 4 task done" and
+  "what ideas did I have about robots?" work too. Kept on your PC with the rest of
+  JARVIS's memory. Requests for another app ("create a task in Notion…") are left to
+  that app.
 - **Workflows.** One phrase, several steps. Open the builder from the tray (Workflows…)
   or say "open the workflow builder": pick what starts it (a phrase you say, a time of
   day, JARVIS starting, or only when you run it), add steps from the menu (open a

@@ -112,11 +112,24 @@ def _memory_tools(registry: ToolRegistry, keep: Keep, memory: Memory | None) -> 
             hits = await memory.search(query)
             notes = [f"[{h.note}] {' '.join(h.text.split())[:500]}" for h in hits]
             data["notes"] = notes
-        if not lines and not notes:
+        words = {w for w in re.findall(r"\w+", query.lower()) if len(w) > 2}
+        tasks = []
+        if words:
+            for task in await keep.tasks(kind=None, done=None):
+                text = f"{task.text} {task.project}".lower()
+                if words & set(re.findall(r"\w+", text)):
+                    state = "done" if task.done else "open"
+                    where = f" [{task.project}]" if task.project else ""
+                    tasks.append(f"{task.kind} {task.id}{where} ({state}): {task.text}")
+            if tasks:
+                data["tasks_and_ideas"] = tasks[:12]
+        if not lines and not notes and not tasks:
             return ToolResult(True, "Nothing in memory matches that.")
         summary = f"{len(lines)} remembered facts"
         if notes:
             summary += f", {len(notes)} passages from past conversations and notes"
+        if tasks:
+            summary += f", {min(len(tasks), 12)} tasks or ideas"
         return ToolResult(True, summary + ".", data)
 
     async def forget(topic: str) -> ToolResult:

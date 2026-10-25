@@ -207,3 +207,107 @@ def contact_reply(text: str) -> str | None:
     if not contact or len(contact.split()) > _MAX_CONTACT_WORDS - 1:
         return None
     return contact
+
+
+# --- quick capture: tasks, ideas and notes saved without asking a model ---
+
+
+@dataclass(frozen=True, slots=True)
+class Capture:
+    kind: str  # task | idea | note
+    text: str
+    project: str = ""
+    due: str = ""  # as said ("friday 5 pm"), parsed by the task tool
+
+
+_SEP = r"\s*(?:[:\-\u2013\u2014]|,)?\s*"
+_CAPTURE_FORMS: tuple[tuple[str, re.Pattern[str]], ...] = (
+    (
+        "idea",
+        re.compile(
+            r"^(?:(?:save|add|capture|log|note|jot\s+down|write\s+down|keep)\s+"
+            r"(?:this\s+|that\s+)?(?:down\s+)?(?:as\s+)?(?:a\s+|an\s+|my\s+)?)?"
+            r"(?:new\s+|quick\s+)?(?P<kind>project\s+)?idea"
+            r"(?:\s+for\s+(?P<project>[\w .'-]{1,30}?))?\s*[:\-\u2013\u2014]\s*(?P<text>.+)$",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "idea",
+        re.compile(
+            r"^(?:save|add|capture|log|keep)\s+(?:a\s+|an\s+)?(?:new\s+)?(?P<kind>project\s+)?"
+            r"idea(?:\s+for\s+(?P<project>[\w.'-]{1,30}))?\s*,?\s+(?:that\s+|about\s+)?"
+            r"(?P<text>.{3,})$",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "task",
+        re.compile(
+            r"^(?:add|save|capture|log|create|make)\s+(?:a\s+|an\s+)?(?:new\s+)?"
+            r"(?:(?P<project>[\w.'-]{1,30})\s+)??(?:task|to-?do)"
+            r"(?:\s+for\s+(?P<project2>[\w .'-]{1,30}?))?" + _SEP + r"(?:to\s+)?(?P<text>.{3,})$",
+            re.IGNORECASE,
+        ),
+    ),
+    ("task", re.compile(r"^(?:to-?do|task)\s*[:\-\u2013\u2014]\s*(?P<text>.+)$", re.IGNORECASE)),
+    (
+        "task",
+        re.compile(
+            r"^(?:add|put)\s+(?P<text>.+?)\s+(?:to|on)\s+my\s+(?:(?P<project>[\w .'-]{1,30}?)\s+)?"
+            r"(?:to-?do\s+list|to-?dos|task\s+list|tasks|list\s+of\s+tasks)$",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "note",
+        re.compile(
+            r"^(?:quick\s+note|capture|inbox|note\s+to\s+self)\s*[:\-\u2013\u2014]\s*(?P<text>.+)$",
+            re.IGNORECASE,
+        ),
+    ),
+)
+_DUE_TAIL = re.compile(
+    r"[,;]?\s+(?:due|by|before|for|on)\s+(?P<due>(?:next\s+|this\s+)?"
+    r"(?:today|tonight|tomorrow|monday|tuesday|wednesday|thursday|friday|saturday|sunday|"
+    r"in\s+\d+\s+(?:days?|weeks?)|\d{4}-\d{2}-\d{2}|\d{1,2}\s+[a-z]{3,9}|[a-z]{3,9}\s+\d{1,2})"
+    r"(?:\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?)\s*$",
+    re.IGNORECASE,
+)
+_TRAILING_DAY = re.compile(
+    r"\s+(?P<due>today|tonight|tomorrow(?:\s+(?:at\s+)?\d{1,2}(?::\d{2})?\s*(?:am|pm)?)?)\s*$",
+    re.IGNORECASE,
+)
+
+
+_OTHER_APP = re.compile(
+    r"^(?:in|on|inside|using)\s|\b(?:in|on|into|using)\s+(?:notion|todoist|trello|jira|asana|"
+    r"outlook|teams|clickup|ticktick|google\s+tasks|microsoft\s+to\s?do|whatsapp|excel|"
+    r"notepad|onenote|obsidian|slack|discord)\b",
+    re.IGNORECASE,
+)
+
+
+def capture_command(text: str) -> Capture | None:
+    """A task, idea or note to save as it is ("idea: a plant-watering bot", "add a task to
+    call the bank tomorrow", "add milk to my shopping tasks"), else None."""
+    body = _LEAD.sub("", text).strip()
+    for kind, form in _CAPTURE_FORMS:
+        match = form.match(body)
+        if match is None:
+            continue
+        groups = match.groupdict()
+        words = (groups.get("text") or "").strip().strip("\"'“”").rstrip(".!")
+        project = (groups.get("project") or groups.get("project2") or "").strip()
+        if project.lower() in ("a", "an", "the", "new", "my", "this", "that", "quick"):
+            project = ""
+        due = ""
+        if kind == "task":
+            tail = _DUE_TAIL.search(words) or _TRAILING_DAY.search(words)
+            if tail is not None:
+                due = tail.group("due")
+                words = words[: tail.start()].rstrip(" ,;")
+        if len(words) < 2 or _OTHER_APP.search(words):
+            return None  # "create a task in Notion …" is for that app
+        return Capture(kind, words[:400], project.title() if project.islower() else project, due)
+    return None

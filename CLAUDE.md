@@ -176,6 +176,12 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   `run_workflow` tool only queues. Tasks/ideas: `tasks` table in keep, tools
   `add_task`/`list_tasks`/`complete_task` (group "tasks"), `parse_due`. `starters()`
   (Morning Briefing, Daily Planner, End-of-Day Review) are saved on first start.
+- Quick capture: `commands.capture_command` (idea:/add a task…/todo:/add X to my Y
+  tasks/quick note:) → `add_task` or `save_note` "Inbox" in `_handle` before the deck
+  check, no model (mode "capture"); a trailing due ("by friday", "tomorrow") is split
+  off; text naming another app (Notion, Todoist, WhatsApp…) is left alone.
+  `recall_memory` also lists matching tasks/ideas. More `wants_screen` phrasings
+  ("explain this", "what should I click", "is this a scam").
 - Calendar: read-only iCal from env `JARVIS_CALENDAR_ICS` (a secret URL, never logged;
   `tools/calendar_ics.py`, own parser: TZID/UTC/all-day, RRULE daily/weekly BYDAY/monthly
   incl. 2TU/-1FR/yearly, INTERVAL/COUNT/UNTIL, EXDATE, moved instances; 10-min cache;

@@ -14,7 +14,9 @@ from loguru import logger
 
 from jarvis.agent.commands import (
     AUTO,
+    Capture,
     WhatsAppRequest,
+    capture_command,
     contact_reply,
     diagnose_command,
     pair_command,
@@ -394,6 +396,9 @@ class Assistant:
                 return await self.run_workflow(workflow, spoken=spoken, conversation=conversation)
             if workflow_request(text):
                 return await self._propose_workflow(conversation, shown, text)
+        capture = capture_command(text) if self._registry.get("add_task") else None
+        if capture is not None:
+            return await self._capture(conversation, shown, capture)
         deck = deck_command(text) if self._registry.get("make_presentation") else None
         if deck is not None:
             return await self._presentation(conversation, shown, deck)
@@ -669,6 +674,35 @@ class Assistant:
         await self._emit(EntryKind.ASSISTANT, reply, mode=WORKFLOW)
         self._keep(shown, reply)
         return Reply(reply, ok=True)
+
+    async def _capture(self, conversation: int, shown: str, capture: Capture) -> Reply:
+        """Quick capture: save a task, idea or note as said, with no model involved."""
+        self._did = set()
+        if capture.kind == "note" and self._registry.get("save_note") is not None:
+            call = ToolCall("capture", "save_note", {"title": "Inbox", "text": capture.text})
+        else:
+            args: dict[str, Any] = {
+                "text": capture.text,
+                "kind": "task" if capture.kind == "task" else "idea",
+            }
+            if capture.project:
+                args["project"] = capture.project
+            if capture.due:
+                args["due"] = capture.due
+            call = ToolCall("capture", "add_task", args)
+        await self._state.transition(AppState.THINKING)
+        try:
+            outcome = await self._run_tool(call)
+        finally:
+            if self._state.state in (AppState.THINKING, AppState.ACTING):
+                await self._state.transition(AppState.IDLE)
+        reply = outcome.summary if outcome.ok else f"I couldn't save that: {outcome.summary}"
+        await self._store.add_message(
+            conversation, {"role": "assistant", "content": reply}, mode="capture"
+        )
+        await self._emit(EntryKind.ASSISTANT, reply, mode="capture", failed=not outcome.ok)
+        self._keep(shown, reply)
+        return Reply(reply, ok=outcome.ok)
 
     def _whatsapp_request(self, text: str) -> WhatsAppRequest | None:
         """A WhatsApp message to send without asking a model (it needs none)."""
