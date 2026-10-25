@@ -30,7 +30,7 @@ from jarvis.agent.planner import (
     step_request,
 )
 from jarvis.agent.prompts import chat_prompt, system_prompt, wants_screen
-from jarvis.agent.routing import is_conversation, wants_cloud
+from jarvis.agent.routing import NEEDS_TOOLS, is_conversation, wants_cloud
 from jarvis.agent.toolbudget import groups_for
 from jarvis.app.events import ChatEntry, EntryKind, EventBus, PlanStep, PlanUpdated, StepStatus
 from jarvis.app.state import AppState, StateMachine
@@ -108,6 +108,40 @@ class Reply:
     ok: bool
     provider: str | None = None
     model: str | None = None
+    streamed: bool = False  # already passed to ``on_text`` while it was written
+
+
+class _Relay:
+    """Passes a local reply on as it's written, once it's clearly an answer: not the
+    NEEDS_TOOLS hand-over and not a thinking block."""
+
+    def __init__(self, sink: Callable[[str], None]) -> None:
+        self._sink = sink
+        self._held = ""
+        self.open = False
+        self.blocked = False
+
+    def __call__(self, text: str) -> None:
+        if self.blocked:
+            return
+        if self.open:
+            self._sink(text)
+            return
+        self._held += text
+        held = self._held.lstrip()
+        if held.startswith("<think>"):
+            if "</think>" not in held:
+                return
+            held = held.split("</think>", 1)[1].lstrip()
+        head = held.lstrip("`*\"' ").upper()
+        if head.startswith(NEEDS_TOOLS):
+            self.blocked = True
+            return
+        if NEEDS_TOOLS.startswith(head):  # empty, or it may still turn out to be one
+            self._held = held
+            return
+        self.open = True
+        self._sink(held)
 
 
 class Assistant:
@@ -149,6 +183,8 @@ class Assistant:
         self._long_memory = long_memory
         self._local_first = local_first or (lambda: False)
         self._local_timeout_s = local_timeout_s
+        self._on_text: Callable[[str], None] | None = None  # this turn's live reply sink
+        self._streamed = False
         self._writes: set[asyncio.Task[None]] = set()
         self._whatsapp_draft: str | None = None  # a message waiting for "who to?"
         self._turn_context = ""
@@ -298,8 +334,18 @@ class Assistant:
     async def _emit(self, kind: EntryKind, text: str, **meta: Any) -> None:
         await self._bus.publish(ChatEntry(kind=kind, text=text, **meta))
 
-    async def handle(self, text: str, *, spoken: bool = False) -> Reply:
-        """Answer one request. Whether to look, act or just answer is decided here."""
+    async def handle(
+        self, text: str, *, spoken: bool = False, on_text: Callable[[str], None] | None = None
+    ) -> Reply:
+        """Answer one request. Whether to look, act or just answer is decided here.
+        ``on_text`` gets a local reply as it's written (the result says if it did)."""
+        self._on_text, self._streamed = on_text, False
+        try:
+            return await self._handle(text, spoken=spoken)
+        finally:
+            self._on_text = None
+
+    async def _handle(self, text: str, *, spoken: bool) -> Reply:
         text = text.strip()
         conversation = await self.conversation_id()
         shown = text or "What's on my screen?"
@@ -371,7 +417,13 @@ class Assistant:
             failed=self._failed or self._blocked or says_it_cannot(reply),
         )
         self._keep(shown, reply)
-        return Reply(reply, ok=True, provider=result.provider, model=result.model)
+        return Reply(
+            reply,
+            ok=True,
+            provider=result.provider,
+            model=result.model,
+            streamed=self._streamed,
+        )
 
     async def _presentation(self, conversation: int, shown: str, request: DeckRequest) -> Reply:
         """A slide deck: the tool runs directly (its own free model writes the slides)."""
@@ -616,11 +668,15 @@ class Assistant:
             {"role": "system", "content": chat_prompt(spoken=spoken, context=self._turn_context)},
             *turns[-10:],
         ]
+        relay = _Relay(self._on_text) if self._on_text is not None else None
         try:
-            result = await self._router.local_chat(messages, timeout_s=self._local_timeout_s)
+            result = await self._router.local_chat(
+                messages, timeout_s=self._local_timeout_s, on_text=relay
+            )
         except ProviderError as exc:
             logger.warning("Local model didn't answer ({}); asking the cloud", exc.kind.value)
             return None
+        self._streamed = relay is not None and relay.open
         if wants_cloud(without_thinking(result.content or "")):
             logger.info("Local model handed the request to the cloud")
             return None

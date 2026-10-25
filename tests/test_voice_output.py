@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import threading
 from pathlib import Path
 from typing import ClassVar
 
@@ -168,24 +169,41 @@ class FakeStream:
             self.on_block()
 
 
-def test_neural_playback_streams_sentences_and_stops(monkeypatch: pytest.MonkeyPatch) -> None:
+def play(speaker: Speaker, text: str) -> None:
+    from jarvis.voice.feed import SpeechFeed
+
+    feed = SpeechFeed(text, closed=True)
+    first = feed.take(60, single=True)
+    assert first
+    speaker._play_neural(feed, first)
+
+
+class OneSecondVoice:
+    voice = "bm_george"
+
+    def __init__(self) -> None:
+        self.made: list[str] = []
+
+    def synthesize(self, text: str) -> np.ndarray:
+        self.made.append(text)
+        return np.full(24_000, 0.1, dtype=np.float32)  # one second per piece
+
+
+def test_neural_playback_speaks_pieces_and_stops(monkeypatch: pytest.MonkeyPatch) -> None:
     import sys
     import types
 
     monkeypatch.setitem(sys.modules, "sounddevice", types.SimpleNamespace(OutputStream=FakeStream))
     FakeStream.made.clear()
-
-    class Voice:
-        voice = "bm_george"
-
-        def synthesize(self, text: str) -> np.ndarray:
-            return np.full(24_000, 0.1, dtype=np.float32)  # one second per sentence
-
     speaker = Speaker(engine="kokoro")
-    speaker._neural = Voice()
-    speaker._play_neural("First. Second.")
+    speaker._neural = voice = OneSecondVoice()
+    long_reply = "Certainly. " + "The weather is warm today, with showers after four. " * 6
+    play(speaker, long_reply)
     played = FakeStream.made[0]
-    assert played.frames == 2 * 24_000 + int(0.22 * 24_000) and not played.aborted
+    pieces = len(voice.made)
+    assert voice.made[0] == "Certainly." and pieces >= 3
+    assert played.frames == pieces * 24_000 + (pieces - 1) * int(0.22 * 24_000)
+    assert not played.aborted
 
     original = FakeStream.__init__
 
@@ -194,9 +212,58 @@ def test_neural_playback_streams_sentences_and_stops(monkeypatch: pytest.MonkeyP
         self.on_block = speaker.stop
 
     monkeypatch.setattr(FakeStream, "__init__", stopping)
-    speaker._play_neural("First. Second. Third.")
+    play(speaker, "First. Second. Third.")
     barged = FakeStream.made[1]
     assert barged.aborted and barged.frames == 1200  # one 50 ms block, then silence
+
+
+def test_pieces_grow_with_how_fast_speech_is_made() -> None:
+    speaker = Speaker(engine="kokoro")
+    speaker._seconds_per_char = 0.02
+    slow = speaker._budget(1.0)
+    speaker._learn("x" * 100, 0.5)  # this PC makes speech faster than assumed
+    assert speaker._budget(1.0) > slow
+    assert speaker._budget(30.0) == 280 and speaker._budget(0.0) >= 40
+
+
+def test_a_reply_is_spoken_while_it_is_written(monkeypatch: pytest.MonkeyPatch) -> None:
+    import sys
+    import threading
+    import types
+
+    from jarvis.voice.feed import SpeechFeed
+
+    monkeypatch.setitem(sys.modules, "sounddevice", types.SimpleNamespace(OutputStream=FakeStream))
+    speaker = Speaker(engine="kokoro")
+    speaker._neural = voice = OneSecondVoice()
+    feed = SpeechFeed()
+    feed.put("Of course. The first ")
+    first = feed.take(60, single=True)
+    assert first == "Of course."
+    assert feed.take(60) == ""  # "The first" isn't a whole clause yet
+
+    def write_rest() -> None:
+        feed.put("part is done, and ")
+        feed.put("the rest follows")
+        feed.close()
+
+    threading.Timer(0.05, write_rest).start()
+    speaker._play_neural(feed, first)
+    assert voice.made == ["Of course.", "The first part is done, and the rest follows."]
+
+
+def test_speech_feed_hands_out_whole_clauses() -> None:
+    from jarvis.voice.feed import SpeechFeed
+
+    feed = SpeechFeed("One, two. Three four five six seven, eight.", closed=True)
+    assert feed.take(5) == "One,"
+    assert feed.take(200) == "two. Three four five six seven, eight."
+    assert feed.take(10) is None and feed.finished
+    open_feed = SpeechFeed("no boundary yet")
+    assert open_feed.take(50) == ""
+    stop = threading.Event()
+    stop.set()
+    assert open_feed.take(50, wait_s=5, stop=stop) is None
 
 
 def test_echo_of_own_reply_is_recognised() -> None:

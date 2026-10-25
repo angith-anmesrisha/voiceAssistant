@@ -325,17 +325,44 @@ class ProviderRouter:
             and self.statuses[LOCAL].usable
         )
 
-    async def local_chat(self, messages: list[Message], *, timeout_s: float) -> ChatResult:
-        """Ask the local models only (no tools). ProviderError if they can't answer in
-        time; the caller then asks the cloud."""
+    async def local_chat(
+        self,
+        messages: list[Message],
+        *,
+        timeout_s: float,
+        on_text: Callable[[str], None] | None = None,
+    ) -> ChatResult:
+        """Ask the local models only (no tools). ProviderError if they can't start
+        answering within ``timeout_s``; the caller then asks the cloud. With ``on_text``,
+        the reply is passed on as it's written (so it can be spoken straight away)."""
         local = self._providers[LOCAL]
         self._set_activity(f"Asking {local.display_name} (on this PC)…")
+        too_slow = ProviderError(
+            local.display_name, ErrorKind.TIMEOUT, f"no answer within {timeout_s:.0f} s"
+        )
         try:
-            result = await asyncio.wait_for(local.chat(messages), timeout_s)
-        except TimeoutError as exc:
-            raise ProviderError(
-                local.display_name, ErrorKind.TIMEOUT, f"no answer within {timeout_s:.0f} s"
-            ) from exc
+            if on_text is None:
+                try:
+                    result = await asyncio.wait_for(local.chat(messages), timeout_s)
+                except TimeoutError as exc:
+                    raise too_slow from exc
+            else:
+                started = asyncio.Event()
+
+                def heard(text: str) -> None:
+                    started.set()
+                    on_text(text)
+
+                answer = asyncio.ensure_future(local.stream_chat(messages, heard))  # type: ignore[attr-defined]
+                first = asyncio.ensure_future(started.wait())
+                done, _ = await asyncio.wait(
+                    {answer, first}, timeout=timeout_s, return_when=asyncio.FIRST_COMPLETED
+                )
+                first.cancel()
+                if not done:
+                    answer.cancel()
+                    raise too_slow
+                result = await answer  # it has started: let it finish
         finally:
             self._set_activity("")
         self.skipped = []

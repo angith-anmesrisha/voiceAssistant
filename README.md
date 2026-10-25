@@ -82,6 +82,9 @@ python -m jarvis --hidden   # starts in the tray
   Gemini from now on", "switch to the local model", "go back to automatic". The choice is
   remembered. If the chosen one isn't available, JARVIS says so and uses the next one,
   and every answer is labelled with the provider that really produced it.
+- **Answers without the wait.** A local reply is spoken while it's still being written,
+  sentences follow each other without gaps, and JARVIS knows you've finished after 0.6 s
+  of quiet (`voice.end_silence_s`; `voice.speak_while_writing` turns streaming off).
 - **Local first.** Everyday conversation (questions, explanations, advice, writing) is
   answered on your PC by Ollama's `qwen3.5:4b`, then `gemma3:4b`, so it's free, private
   and works offline. Anything that needs to act on the PC, see the screen, or know

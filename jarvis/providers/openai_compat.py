@@ -6,6 +6,7 @@ import base64
 import json
 import time
 import uuid
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -368,6 +369,97 @@ class OpenAICompatibleProvider(Provider):
         if not isinstance(data, dict):
             raise ProviderError(self.display_name, ErrorKind.UNAVAILABLE, "unexpected response")
         return data
+
+    async def stream_chat(
+        self, messages: list[Message], on_text: Callable[[str], None]
+    ) -> ChatResult:
+        """A reply without tools, passing each piece of text to ``on_text`` as it arrives
+        (so it can be spoken while it's written). The next model is tried only if one
+        fails before saying anything."""
+        outgoing = self.outgoing(messages)
+        errors: list[tuple[str, ProviderError]] = []
+        for model in self._candidates(Capability.CHAT):
+            body: dict[str, Any] = {"model": model, "messages": outgoing, "stream": True}
+            if effort := self.reasoning_for(model):
+                body["reasoning_effort"] = effort
+            if self.settings.max_output_tokens:
+                body["max_tokens"] = self.settings.max_output_tokens
+            said: list[str] = []
+
+            def heard(text: str, said: list[str] = said) -> None:
+                said.append(text)
+                on_text(text)
+
+            try:
+                answered = await self._stream("chat/completions", body, heard)
+            except ProviderError as exc:
+                logger.warning("{} {} failed: {}", self.display_name, model, exc.message[:200])
+                errors.append((model, exc))
+                if said or exc.kind not in (ErrorKind.UNAVAILABLE, ErrorKind.BAD_REQUEST):
+                    raise _combined(self.display_name, errors) from exc
+                continue
+            self._use_model(Capability.CHAT, model)
+            content = "".join(said).strip()
+            return ChatResult(
+                provider=self.display_name,
+                model=answered or model,
+                content=content,
+                tool_calls=[],
+                message={"role": "assistant", "content": content},
+            )
+        raise (
+            _combined(self.display_name, errors)
+            if errors
+            else ProviderError(
+                self.display_name, ErrorKind.BAD_REQUEST, "none of the configured models works"
+            )
+        )
+
+    async def _stream(self, path: str, body: dict[str, Any], on_text: Callable[[str], None]) -> str:
+        """POST with ``stream: true`` and read server-sent events; returns the model name
+        the server gave."""
+        if (reason := self.missing_config()) is not None:
+            raise ProviderError(self.display_name, ErrorKind.NO_KEY, reason)
+        model = ""
+        try:
+            async with self._client.stream(
+                "POST",
+                self._url(path),
+                json=body,
+                headers=self._headers(),
+                timeout=self.settings.timeout_s,
+            ) as response:
+                if response.status_code >= 400:
+                    await response.aread()
+                    message = _error_message(response)
+                    raise self.explain(
+                        ProviderError(
+                            self.display_name,
+                            _kind_for_status(response.status_code, message),
+                            f"HTTP {response.status_code}: {message}",
+                            status=response.status_code,
+                        )
+                    )
+                async for line in response.aiter_lines():
+                    data = line.removeprefix("data:").strip()
+                    if not line.startswith("data:") or not data or data == "[DONE]":
+                        continue
+                    try:
+                        event = json.loads(data)
+                        model = model or str(event.get("model") or "")
+                        delta = event["choices"][0].get("delta") or {}
+                    except (ValueError, KeyError, IndexError, TypeError, AttributeError):
+                        continue
+                    text = delta.get("content") if isinstance(delta, dict) else None
+                    if text:
+                        on_text(str(text))
+        except httpx.TimeoutException as exc:
+            raise ProviderError(self.display_name, ErrorKind.TIMEOUT, "timed out") from exc
+        except httpx.HTTPError as exc:
+            raise ProviderError(
+                self.display_name, ErrorKind.NETWORK, f"can't connect ({type(exc).__name__})"
+            ) from exc
+        return model
 
     async def probe(self) -> ProviderStatus:
         if not self.settings.enabled:

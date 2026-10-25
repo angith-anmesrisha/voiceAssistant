@@ -78,7 +78,9 @@ class LocalRouter(ScriptedRouter):
     def local_ready(self) -> bool:
         return self.ready
 
-    async def local_chat(self, messages: list[Any], *, timeout_s: float) -> ChatResult:
+    async def local_chat(
+        self, messages: list[Any], *, timeout_s: float, on_text: Any = None
+    ) -> ChatResult:
         self.local_requests.append(messages)
         result = self.local.pop(0)
         if isinstance(result, Exception):
@@ -204,3 +206,64 @@ async def test_the_local_model_is_kept_loaded() -> None:
     for minutes in (0, 5, 11):
         await job.tick(start + timedelta(minutes=minutes))
     assert len(warmed) == 2
+
+
+def sse(*pieces: str, model: str = "qwen3.5:4b") -> bytes:
+    events = [
+        "data: " + json.dumps({"model": model, "choices": [{"delta": {"content": p}}]})
+        for p in pieces
+    ]
+    return ("\n\n".join([*events, "data: [DONE]"]) + "\n\n").encode()
+
+
+async def test_a_local_reply_streams_as_it_is_written() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert json.loads(request.content)["stream"] is True
+        return httpx.Response(200, content=sse("Paris ", "is the ", "capital."))
+
+    heard: list[str] = []
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        ollama = OllamaProvider("ollama", "Ollama", ProvidersConfig().ollama, client)
+        router = ProviderRouter({"ollama": ollama}, ["ollama"], {"ollama": 0})
+        router.statuses["ollama"] = ProviderStatus(ProviderState.READY)
+        result = await router.local_chat([], timeout_s=5, on_text=heard.append)
+    assert heard == ["Paris ", "is the ", "capital."]
+    assert (result.content, result.model) == ("Paris is the capital.", "qwen3.5:4b")
+
+
+async def test_streaming_moves_to_gemma_only_before_anything_is_said() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if json.loads(request.content)["model"] == "qwen3.5:4b":
+            return httpx.Response(500, json={"error": {"message": "busy"}})
+        return httpx.Response(200, content=sse("Hello.", model="gemma3:4b"))
+
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        ollama = OllamaProvider("ollama", "Ollama", ProvidersConfig().ollama, client)
+        result = await ollama.stream_chat([], lambda _t: None)
+    assert result.model == "gemma3:4b"
+
+
+async def test_a_spoken_hand_over_is_never_said(tmp_path: Path) -> None:
+    class Streaming(LocalRouter):
+        def __init__(self, pieces: list[str], *cloud: ChatResult) -> None:
+            super().__init__([], *cloud)
+            self.pieces = pieces
+
+        async def local_chat(
+            self, messages: list[Any], *, timeout_s: float, on_text: Any = None
+        ) -> ChatResult:
+            for piece in self.pieces:
+                on_text(piece)
+            return text_reply("".join(self.pieces), provider="Ollama")
+
+    said: list[str] = []
+    router = Streaming(["NEED", "S_TO", "OLS"], text_reply("It's 31 degrees.", provider="Groq"))
+    rig = local_rig(tmp_path, router)
+    reply = await rig.assistant.handle("Is it hot?", spoken=True, on_text=said.append)
+    assert said == [] and not reply.streamed and reply.provider == "Groq"
+
+    router = Streaming(["<think></think>", "Cats ", "purr."])
+    (tmp_path / "b").mkdir()
+    rig = local_rig(tmp_path / "b", router)
+    reply = await rig.assistant.handle("Why do cats purr?", spoken=True, on_text=said.append)
+    assert "".join(said) == "Cats purr." and reply.streamed and reply.text == "Cats purr."

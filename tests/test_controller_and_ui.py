@@ -43,11 +43,17 @@ class FakeAssistant:
     def __init__(self, state: StateMachine) -> None:
         self.calls: list[tuple[str, bool]] = []
         self.state = state
+        self.stream_pieces: list[str] = []
 
-    async def handle(self, text: str, *, spoken: bool = False) -> Reply:
+    async def handle(self, text: str, *, spoken: bool = False, on_text: Any = None) -> Reply:
         self.calls.append((text, spoken))
         await self.state.transition(AppState.THINKING)
         await asyncio.sleep(0)
+        if self.stream_pieces and on_text is not None:
+            for piece in self.stream_pieces:
+                on_text(piece)
+                await asyncio.sleep(0)
+            return Reply("".join(self.stream_pieces), ok=True, provider="Ollama", streamed=True)
         await self.state.transition(AppState.IDLE)
         return Reply(f"answer to {text}", ok=True, provider="Groq", model="m")
 
@@ -83,6 +89,23 @@ class FakeSpeaker:
 
     async def speak(self, text: str) -> None:
         self.spoken.append(text)
+
+    def open_stream(self) -> Any:
+        speaker = self
+
+        class Live:
+            def __init__(self) -> None:
+                self.pieces: list[str] = []
+
+            def put(self, text: str) -> None:
+                self.pieces.append(text)
+
+            def close(self) -> None: ...
+
+            async def wait(self) -> None:
+                speaker.spoken.append("".join(self.pieces))
+
+        return Live()
 
     def stop(self) -> None:
         self.stopped += 1
@@ -298,7 +321,7 @@ class SlowAssistant(FakeAssistant):
         self.release = asyncio.Event()
         self.cancelled = 0
 
-    async def handle(self, text: str, *, spoken: bool = False) -> Reply:
+    async def handle(self, text: str, *, spoken: bool = False, on_text: Any = None) -> Reply:
         self.calls.append((text, spoken))
         await self.state.transition(AppState.THINKING)
         try:
@@ -378,3 +401,16 @@ async def test_interrupting_off_keeps_the_old_behaviour() -> None:
     controller.submit("first")
     await settle()
     assert not controller.submit("second")
+
+
+async def test_a_local_reply_is_spoken_while_it_is_written() -> None:
+    from jarvis.app.events import WakeWordHeard
+
+    controller, rig = make_controller(FakeRouter(text="tell me a joke about cats"))
+    rig.assistant.stream_pieces = ["Why did the cat ", "sit on the laptop? ", "To keep an eye."]
+    await rig.bus.publish(WakeWordHeard())
+    rig.mic.on_chunk(b"\x10\x00" * 16_000)
+    await controller.stop_listening()
+    await settle()
+    assert rig.speaker.spoken[-1] == "Why did the cat sit on the laptop? To keep an eye."
+    assert rig.speaker.spoken.count(rig.speaker.spoken[-1]) == 1  # not said twice

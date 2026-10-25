@@ -212,6 +212,11 @@ class VoiceSettings(BaseModel):
     tts_voice: str = ""
     tts_rate: int = 1  # SAPI rate, -10..10
     max_recording_s: float = 60.0
+    # Speak a local reply while it's still being written, instead of after it's finished.
+    speak_while_writing: bool = True
+    # Quiet that ends a hands-free request (wake word, follow-ups). Shorter answers
+    # sooner; too short can cut off a long pause mid-sentence. Was 1.1 before 2026-10-25.
+    end_silence_s: float = Field(default=0.6, ge=0.3, le=3.0)
     # Offline wake word (Windows speech recognition). Say it, pause, then speak.
     wake_word: bool = True
     wake_phrases: list[str] = Field(default_factory=lambda: ["Jarvis", "Hey Jarvis"])

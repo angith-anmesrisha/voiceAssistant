@@ -101,6 +101,7 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   en-gb; model files from kokoro-onnx's model-files-v1.1 release, SHA-256 pinned),
   `spoken_text.py` (`speakable`: strips Markdown, think blocks, code, emoji; links →
   site name, paths → file name, lines → sentences, ₹/$/£/€ → words),
+  `feed.py` (`SpeechFeed`: clause pieces for the voice, filled while a reply is written),
   `dictation.py` (`Dictation.paste`: refuses `blocked_reason` windows, clipboard paste,
   no Enter), `vocabulary.py` (`vocabulary`, `VocabularyRefresh` job), `whistle.py`
   (`WhistleStt`, `OfflineStt` chain), `confirm.py` (spoken yes/no), `hotkeys.py` (global push-to-talk; Windows hook swallows the
@@ -367,6 +368,16 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   docked bottom-right. QPainter only (no blur effects), static layers cached as pixmaps,
   time-based easing; 60 fps when active, 30 when calm or if a frame takes >10 ms; stops
   when hidden, for Iris Xe. The owner liked this UI; keep its look.
+- Voice lag (owner, 2026-10-25: "laggy and late to respond"; measured: the first piece
+  is ready in ~0.35 s, but the next long sentence left a ~2 s gap, and the whole reply was
+  awaited): `Speaker` reads a `SpeechFeed` (voice/feed.py) of whole clauses; the first
+  piece is one clause, each next one is sized from the learned seconds-per-char so it's
+  made while the current one plays (`_budget`, 40-280 chars). `open_stream` speaks a
+  local reply while it's written: `router.local_chat(on_text=)` streams SSE from Ollama
+  (`stream_chat`; next model only before any text), `_Relay` holds text until it can't
+  be NEEDS_TOOLS (or a think block), the controller moves to SPEAKING on the first piece
+  and doesn't speak `Reply.streamed` replies again. `voice.speak_while_writing`,
+  `voice.end_silence_s`. Samples: /mnt/project-files/jarvis/voice-samples/.
 - Voice (owner asked for a free, unlimited JARVIS-like voice, 2026-10-24): local Kokoro
   `bm_george` at speed 1.05 (0.95 felt slow to the owner), 0.22 s between sentences,
   first piece cut at its first comma when over 70 chars so audio starts sooner, a
@@ -408,7 +419,8 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 - Wake word: SAPI in-process recognizer on the default mic with a command grammar of
   `voice.wake_phrases`; only matches at or above `wake_min_confidence` count; paused
   whenever the app state isn't IDLE. The user says "Jarvis", pauses, then speaks; the
-  hands-free recording ends after ~1.1 s of quiet (or 6 s with no speech, then dropped).
+  hands-free recording ends after `voice.end_silence_s` (0.6 s, was 1.1) of quiet (or 6 s
+  with no speech, then dropped).
 - When activated while the main window isn't the active window, a frameless, no-focus,
   always-on-top `OrbOverlay` shows at the bottom-right; it hides 4.5 s after IDLE (7 s
   after a failure). Screen capture hides it too.

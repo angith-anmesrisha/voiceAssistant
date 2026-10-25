@@ -166,7 +166,7 @@ async def test_slow_spoken_requests_get_a_short_acknowledgement(
     controller, rig = make_controller()
     original = rig.assistant.handle
 
-    async def slow(text: str, *, spoken: bool = False) -> Any:
+    async def slow(text: str, *, spoken: bool = False, on_text: Any = None) -> Any:
         await rig.state.transition(AppState.THINKING)
         await asyncio.sleep(0.1)
         await rig.state.transition(AppState.IDLE)

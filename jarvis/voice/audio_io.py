@@ -137,9 +137,12 @@ class EndOfSpeech:
 class Recorder:
     """Collects mic audio between start() and stop(); exposes a smoothed level."""
 
-    def __init__(self, microphone: MicrophoneLike, sample_rate: int) -> None:
+    def __init__(
+        self, microphone: MicrophoneLike, sample_rate: int, *, silence_s: float = 0.6
+    ) -> None:
         self._mic = microphone
         self._rate = sample_rate
+        self._silence_s = silence_s
         self._pcm = bytearray()
         self.level = 0.0
         self.recording = False
@@ -158,7 +161,11 @@ class Recorder:
         (or after ``no_speech_s`` if nobody speaks)."""
         self._pcm.clear()
         self.level = 0.0
-        self._endpoint = EndOfSpeech(no_speech_s=no_speech_s) if on_done is not None else None
+        self._endpoint = (
+            EndOfSpeech(silence_s=self._silence_s, no_speech_s=no_speech_s)
+            if on_done is not None
+            else None
+        )
         self._on_done = on_done
         self._mic.start(self._on_chunk)
         self.recording = True

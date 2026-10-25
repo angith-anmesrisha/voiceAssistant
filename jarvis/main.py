@@ -205,6 +205,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     recorder = Recorder(
         Microphone(settings.voice.input_sample_rate, device=settings.voice.input_device),
         settings.voice.input_sample_rate,
+        silence_s=settings.voice.end_silence_s,
     )
     from jarvis.voice.whistle import OfflineStt, WhistleStt
 

@@ -36,7 +36,7 @@ from jarvis.tools.registry import Risk
 from jarvis.voice.audio_io import AudioDeviceError, Recorder
 from jarvis.voice.confirm import is_echo, is_stop_command, parse_yes_no, spoken_question
 from jarvis.voice.local_stt import DISPLAY_NAME as LOCAL_STT_NAME
-from jarvis.voice.tts import Speaker
+from jarvis.voice.tts import Speaker, SpokenStream
 
 _MIN_RECORDING_S = 0.4
 _ANSWER_WAIT_S = 6.0  # silence before a spoken confirmation counts as no
@@ -356,12 +356,32 @@ class AppController:
         if voiced and self._voice.acknowledge:
             loop = asyncio.get_running_loop()
             ack = loop.call_later(_ACK_AFTER_S, lambda: self._spawn(self._acknowledge()))
+        live: SpokenStream | None = None
+
+        def speak_as_written(piece: str) -> None:
+            # A local reply is spoken while it's still being written.
+            nonlocal live
+            if live is None:
+                live = self._speaker.open_stream()
+                self._spawn(self._move_to(AppState.SPEAKING))
+            live.put(piece)
+
         try:
-            reply = await self._assistant.handle(text, spoken=spoken)
+            reply = await self._assistant.handle(
+                text,
+                spoken=spoken,
+                on_text=speak_as_written if voiced and self._voice.speak_while_writing else None,
+            )
         finally:
             if ack is not None:
                 ack.cancel()
-        if voiced and reply.ok:
+            if live is not None:
+                live.close()
+        if live is not None:
+            await live.wait()  # the rest of it, as it plays
+        if reply.streamed:
+            self._last_said = reply.text
+        elif voiced and reply.ok:
             await self._move_to(AppState.SPEAKING)
             await self._say(reply.text)
 
