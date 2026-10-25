@@ -80,6 +80,7 @@ UNTRUSTED_TOOLS = frozenset(
         "research",
         "check_email",
         "read_email",
+        "recall_work",
         "list_folder",
         "find_items",
         "look_at_screen",

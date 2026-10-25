@@ -13,6 +13,7 @@ from urllib.parse import quote_plus, urlparse
 import httpx
 
 from jarvis.app.config import ToolSettings
+from jarvis.storage.db import HistoryStore
 from jarvis.storage.keep import Keep
 from jarvis.storage.memory import Memory
 from jarvis.tools.apps import AppIndex
@@ -28,6 +29,7 @@ from jarvis.tools.media import CameraFn, DescribeFn, register_media_tools
 from jarvis.tools.messaging import register_messaging_tools
 from jarvis.tools.pc import register_pc_tools
 from jarvis.tools.personal import register_personal_tools
+from jarvis.tools.recall import register_recall_tool, work_folders
 from jarvis.tools.registry import Risk, ToolRegistry, ToolResult, ToolSpec
 from jarvis.tools.shortcuts import SHORTCUTS, KeyComboError, combo_risk, parse_combo
 from jarvis.tools.slides import DeckWriter, PickFn, register_slide_tools
@@ -124,6 +126,7 @@ def build_registry(
     slides: SlideTools | None = None,
     calendar: Calendar | None = None,
     writing: WritingTools | None = None,
+    history: HistoryStore | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     journal = undo if undo is not None else UndoJournal()
@@ -572,6 +575,7 @@ def build_registry(
     if keep is not None:
         register_task_tools(registry, keep)
         register_day_tools(registry, keep, calendar)
+        register_recall_tool(registry, keep, history, memory, work_folders)
     if slides is not None:
         register_slide_tools(
             registry,

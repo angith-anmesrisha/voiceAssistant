@@ -139,6 +139,20 @@ _TROUBLE = re.compile(
     r"battery drain\w*)\b",
     re.IGNORECASE,
 )
+_RECALL_WORDS = re.compile(
+    r"\b(continue (the|my|with) (project|work|thing)|where (did )?i (left|leave) off|"
+    r"pick up where|what was i (working on|doing)|resume (my )?(work|project)|"
+    r"(worked|working) on (yesterday|last)|carry on (with )?(the|my) (project|work)|"
+    r"catch me up on (my|the) (project|work))",
+    re.IGNORECASE,
+)
+_RECALL = (
+    "Picking up past work: call recall_work first (the period the user named, and the "
+    "project if they named one). Then, in a few lines: what they were doing and where it "
+    "stands (done, half-done, open), the loose ends, and one concrete next step. Offer "
+    "to open the most recently changed file or folder. Never invent work that isn't in "
+    "the material; if there's little, say so."
+)
 _DECIDE = (
     "Decision help: state the real goal in one line; list the options (add an obvious "
     "one if missing, such as waiting); pick three to five criteria that matter for this "
@@ -164,6 +178,8 @@ def guidance(text: str) -> str:
         parts.append(_DECIDE)
     if _TROUBLE.search(text):
         parts.append(_TROUBLESHOOT)
+    if _RECALL_WORDS.search(text):
+        parts.append(_RECALL)
     return "\n\n".join(parts)
 
 

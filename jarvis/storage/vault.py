@@ -229,6 +229,14 @@ class Vault:
             f"\n- {when.strftime('%H:%M')} **You:** {asked}\n  **JARVIS:** {answered}\n",
         )
 
+    def daily_text(self, day: date) -> str:
+        """That day's note as written ("" if there's none). Read only."""
+        path = self.root / "Daily" / f"{day.isoformat()}.md"
+        try:
+            return path.read_text(encoding="utf-8") if path.is_file() else ""
+        except OSError:
+            return ""
+
     def add_summary(self, day: date, summary: str) -> None:
         self._append(
             self._daily(day), f"\n> [!summary] Conversation\n> {' '.join(summary.split())}\n"

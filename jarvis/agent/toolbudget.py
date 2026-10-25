@@ -100,6 +100,11 @@ _GROUPS: dict[str, re.Pattern[str]] = {
         r"alert me|let me know when|watchtower|new files?|downloads? folder)\b",
         re.IGNORECASE,
     ),
+    "recall": re.compile(
+        r"\b(continue|resume|pick up|carry on|left off|leave off|worked on|working on|"
+        r"was i doing|last (session|time)|yesterday|last week|where was i|catch me up)\b",
+        re.IGNORECASE,
+    ),
     "tasks": re.compile(
         r"\b(tasks?|to-?dos?|to do list|pending|ideas?|deadlines?|due|assignments?|"
         r"homework|projects?|checklist|backlog|finished|completed?|done with|tick off|"

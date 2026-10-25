@@ -166,6 +166,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         memory=memory,
         slides=_slide_tools(settings, router, lambda: pick_upload(), bus, spawn),
         calendar=calendar,
+        history=store,
         writing=_writing_tools(settings, router, lambda: pick_upload(), bus, spawn, guard),
     )
 

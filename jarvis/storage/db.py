@@ -163,6 +163,28 @@ class HistoryStore:
         result: list[StoredMessage] = await self._run(self._messages_after, after_id, limit)
         return result
 
+    async def messages_between(
+        self, start: datetime, end: datetime, *, role: str = "user", limit: int = 400
+    ) -> list[StoredMessage]:
+        """Messages (of ``role``; "" = any) written between ``start`` and ``end``."""
+        low = start.astimezone(UTC).isoformat(timespec="seconds")
+        high = end.astimezone(UTC).isoformat(timespec="seconds")
+
+        def go() -> list[StoredMessage]:
+            rows = self._conn.execute(
+                "SELECT id, role, content, payload, provider, model, mode, created_at FROM "
+                "messages WHERE created_at >= ? AND created_at < ? AND (? = '' OR role = ?) "
+                "ORDER BY id LIMIT ?",
+                (low, high, role, role, limit),
+            ).fetchall()
+            return [
+                StoredMessage(r[0], r[1], r[2], json.loads(r[3]), r[4], r[5], r[6], r[7])
+                for r in rows
+            ]
+
+        result: list[StoredMessage] = await self._run(go)
+        return result
+
     async def last_message_id(self) -> int:
         def go() -> int:
             row = self._conn.execute("SELECT MAX(id) FROM messages").fetchone()

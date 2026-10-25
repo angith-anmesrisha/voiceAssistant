@@ -216,6 +216,12 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   `stop_watching_folder`, `list_watches` (group "watch"). UI: `ui/watchtower.py`
   `WatchtowerPanel` + `AutomationWindow` (tabs Workflows/Watchtower); "open
   Watchtower" opens that tab; options saved with `save_choice("watchtower", …)`.
+- Recall: `tools/recall.py` `recall_work(when, project)` (group "recall", screened):
+  `period` (yesterday/today/last week/this week/last N days/weekday/ISO; "" = 7 days),
+  keep summaries and tasks, `HistoryStore.messages_between` (user requests, project
+  words first), `Vault.daily_text` (≤3 days, last 2,500 chars), vault search for the
+  project, `recent_files` (Desktop/Documents/Downloads, depth ≤4, ≤6,000 dirs, skips
+  node_modules/.git/venv/AppData; names only). `prompts._RECALL` guidance.
 - Calendar: read-only iCal from env `JARVIS_CALENDAR_ICS` (a secret URL, never logged;
   `tools/calendar_ics.py`, own parser: TZID/UTC/all-day, RRULE daily/weekly BYDAY/monthly
   incl. 2TU/-1FR/yearly, INTERVAL/COUNT/UNTIL, EXDATE, moved instances; 10-min cache;

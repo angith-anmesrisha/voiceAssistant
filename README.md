@@ -158,6 +158,12 @@ python -m jarvis --hidden   # starts in the tray
   outline, save it, make the deck). Workflows live in `workflows.json` in JARVIS's data
   folder.
 
+- **Recall.** "Continue the project I worked on yesterday", "where did I leave off with
+  the robot arm?", "what was I working on last week?": JARVIS gathers that period's day
+  notes and conversation summaries, what you asked it, tasks added, finished and still
+  open, and the files you changed in Desktop, Documents and Downloads (it lists them,
+  it doesn't read them), then tells you where things stand and the next step, and
+  offers to open the latest file.
 - **Remembers you.** Tell it "my sister is Ayşe" or "I live in Kochi" and it keeps that
   on your PC (`keep.sqlite3`), uses it later, and forgets it when you ask. After each
   conversation it also picks up lasting facts you mentioned on your own.
