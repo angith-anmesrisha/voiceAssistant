@@ -82,7 +82,7 @@ _GROUPS: dict[str, re.Pattern[str]] = {
     ),
     "writing": re.compile(
         r"\b(research|investigate|look into|find out (about|whether|if|how|why)|report|"
-        r"citations?|sources|essay|article|letter|cover letter|draft|write (a|an|me|up)|"
+        r"citations?|sources|essay|article|letter|cover letter|draft|word file|"
         r"blog|proposal|speech|summari[sz]e|summary|documents?|pdf|docx|word (doc|file)|"
         r"study notes|action items|key points|explain (this|the) (doc|file|pdf|paper)|"
         r"papers?|quiz me|flashcards)\b",
