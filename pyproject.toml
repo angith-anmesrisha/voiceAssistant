@@ -24,6 +24,7 @@ dependencies = [
     "pycaw>=20240316; sys_platform == 'win32'",
     "pypdf>=5.0",
     "python-pptx>=1.0.2",
+    "python-docx>=1.1",  # the writing assistant's Word files (MIT)
     "tzdata>=2024.1; sys_platform == 'win32'",  # time zones for calendar feeds
     "winrt-runtime>=3.0; sys_platform == 'win32'",
     "winrt-Windows.Devices.Radios>=3.0; sys_platform == 'win32'",

@@ -182,6 +182,15 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   off; text naming another app (Notion, Todoist, WhatsApp…) is left alone.
   `recall_memory` also lists matching tasks/ideas. More `wants_screen` phrasings
   ("explain this", "what should I click", "is this a scam").
+- Writing (owner's 14 workflows): `tools/writer.py` `FreeWriter` (free OpenRouter
+  `slides.models` → Groq when ≤5,500 chars → `router.chat` when ≤24K chars; `Written.credit`
+  names the model). `tools/writing.py` (group "writing", screened): `study_document`
+  (summary/key_points/action_items/answer/explain/study_notes; 'upload' = dropped/picked;
+  `excerpt` of ≤400 PDF pages), `research` (DuckDuckGo → pages → `page_text` → Prompt
+  Guard per page (flagged dropped, counted) → cited report; `with_sources` rebuilds the
+  source list from citations in the body; saved Documents\JARVIS Research, opened),
+  `write_document` (Markdown → `markdown_to_docx` via python-docx (MIT), "xb", Documents\
+  JARVIS Writing). `paths.writing_dir/research_dir`.
 - Calendar: read-only iCal from env `JARVIS_CALENDAR_ICS` (a secret URL, never logged;
   `tools/calendar_ics.py`, own parser: TZID/UTC/all-day, RRULE daily/weekly BYDAY/monthly
   incl. 2TU/-1FR/yearly, INTERVAL/COUNT/UNTIL, EXDATE, moved instances; 10-min cache;

@@ -80,6 +80,14 @@ _GROUPS: dict[str, re.Pattern[str]] = {
         r"\b(ppt|pptx|power ?point|presentations?|slides?|slide ?deck|deck|keynote)\b",
         re.IGNORECASE,
     ),
+    "writing": re.compile(
+        r"\b(research|investigate|look into|find out (about|whether|if|how|why)|report|"
+        r"citations?|sources|essay|article|letter|cover letter|draft|write (a|an|me|up)|"
+        r"blog|proposal|speech|summari[sz]e|summary|documents?|pdf|docx|word (doc|file)|"
+        r"study notes|action items|key points|explain (this|the) (doc|file|pdf|paper)|"
+        r"papers?|quiz me|flashcards)\b",
+        re.IGNORECASE,
+    ),
     "tasks": re.compile(
         r"\b(tasks?|to-?dos?|to do list|pending|ideas?|deadlines?|due|assignments?|"
         r"homework|projects?|checklist|backlog|finished|completed?|done with|tick off|"

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -43,6 +43,8 @@ from jarvis.tools.ui import (
 from jarvis.tools.undo import UndoJournal
 from jarvis.tools.windows import WindowControl
 from jarvis.tools.windows import find as find_windows
+from jarvis.tools.writer import FreeWriter
+from jarvis.tools.writing import register_writing_tools
 
 SEARCH_ENGINES = {
     "google": "https://www.google.com/search?q={}",
@@ -91,6 +93,16 @@ class SlideTools:
     max_slides: int = 30
 
 
+@dataclass
+class WritingTools:
+    writer: FreeWriter
+    writing_folder: Path
+    research_folder: Path
+    pick_file: PickFn | None = None
+    screen: Callable[[str], Awaitable[bool]] | None = None
+    open_when_done: bool = True
+
+
 def build_registry(
     settings: ToolSettings,
     desktop: Desktop,
@@ -109,6 +121,7 @@ def build_registry(
     memory: Memory | None = None,
     slides: SlideTools | None = None,
     calendar: Calendar | None = None,
+    writing: WritingTools | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     journal = undo if undo is not None else UndoJournal()
@@ -566,6 +579,18 @@ def build_registry(
             pick_file=slides.pick_file,
             open_file=desktop.open_path if slides.open_when_done else None,
             max_slides=slides.max_slides,
+        )
+    if writing is not None:
+        register_writing_tools(
+            registry,
+            writing.writer,
+            area,
+            writing_folder=writing.writing_folder,
+            research_folder=writing.research_folder,
+            http=http,
+            pick_file=writing.pick_file,
+            open_file=desktop.open_path if writing.open_when_done else None,
+            screen=writing.screen,
         )
     if http is not None:
         register_live_tools(

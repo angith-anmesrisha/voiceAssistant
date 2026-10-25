@@ -93,3 +93,17 @@ def presentations_dir(configured: str = "") -> Path:
     if os.environ.get("JARVIS_DATA_DIR"):
         return data_dir() / "presentations"
     return documents_dir() / "JARVIS Presentations"
+
+
+def writing_dir() -> Path:
+    """Where the writing and document assistants save: Documents/JARVIS Writing."""
+    if os.environ.get("JARVIS_DATA_DIR"):
+        return data_dir() / "writing"
+    return documents_dir() / "JARVIS Writing"
+
+
+def research_dir() -> Path:
+    """Where research reports go: Documents/JARVIS Research."""
+    if os.environ.get("JARVIS_DATA_DIR"):
+        return data_dir() / "research"
+    return documents_dir() / "JARVIS Research"

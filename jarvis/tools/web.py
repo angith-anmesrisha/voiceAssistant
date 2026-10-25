@@ -15,6 +15,7 @@ import httpx
 
 _UA = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) JARVIS/1.0"}
 _TIMEOUT = 12.0
+UA = _UA
 
 # WMO weather interpretation codes (open-meteo.com/en/docs).
 _WEATHER = {

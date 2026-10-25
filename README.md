@@ -231,6 +231,23 @@ python -m jarvis --hidden   # starts in the tray
   space.png my wallpaper", "close Spotify". If an app is already open it is brought to
   the front instead of opened twice, and JARVIS only says an app opened once its
   window has actually appeared.
+- **Document Assistant.** "Summarise the PDF I'll upload", "what are the action items
+  in minutes.docx?", "explain this paper simply", "make study notes from chapter3.pdf",
+  "what does the contract say about notice periods?". Name the file, drop it on the
+  window, or pick it when asked. Long documents are covered from start to end, and
+  "save it" keeps the result in Documents\JARVIS Writing.
+- **Research Agent.** "Research whether heat pumps are worth it in Kerala" searches the
+  web, reads the best pages (more with "deep research"), leaves out any page that looks
+  like it's trying to give JARVIS instructions, and writes a report where every claim
+  carries a numbered citation, with the real source list at the end. Saved in
+  Documents\JARVIS Research and opened.
+- **Writing Assistant.** "Write a cover letter for the data analyst job at Infosys",
+  "draft a short speech for my sister's wedding", "write a report from notes.md": a new
+  Word file in Documents\JARVIS Writing (never overwriting one), opened for you, with
+  [placeholders] for details it doesn't know. For shorter things ("rewrite this email
+  more politely") it just answers.
+- Long documents, research and writing use the same free OpenRouter models as the decks
+  (then Groq for short ones, then the usual providers), and say which model wrote them.
 - **PowerPoint decks, free models only.** "Make a 12 slide presentation on black holes",
   or "make a 20 slide ppt for the pdf I'll upload": a file picker opens (or drop the file
   on the JARVIS window first, then ask). The deck is written by a free OpenRouter model

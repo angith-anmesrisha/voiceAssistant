@@ -143,6 +143,12 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
 
     # Reads and operates app windows (UI Automation) for multi-step tasks inside apps.
     ui = WindowsUi(desktop.previous_window_handle, desktop.press, desktop.type_text)
+    # Llama Prompt Guard on Groq screens clipboard, file and screen text for injections.
+    groq = router.provider("groq")
+    guard = PromptGuard(
+        groq if isinstance(groq, OpenAICompatibleProvider) else None,
+        settings.providers.groq.guard_threshold,
+    )
     registry = build_registry(
         settings.tools,
         desktop,
@@ -160,6 +166,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         memory=memory,
         slides=_slide_tools(settings, router, lambda: pick_upload(), bus, spawn),
         calendar=calendar,
+        writing=_writing_tools(settings, router, lambda: pick_upload(), bus, spawn, guard),
     )
 
     from jarvis.agent.workflows import (
@@ -187,12 +194,6 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         part.strip().title() for part in settings.hotkeys.push_to_talk.split("+")
     )
     window = MainWindow(hotkey_label)
-    # Llama Prompt Guard on Groq screens clipboard, file and screen text for injections.
-    groq = router.provider("groq")
-    guard = PromptGuard(
-        groq if isinstance(groq, OpenAICompatibleProvider) else None,
-        settings.providers.groq.guard_threshold,
-    )
     assistant = Assistant(
         router,
         store,
@@ -727,6 +728,39 @@ def _slide_tools(
         pick_file=pick_file,
         open_when_done=plan.open_when_done,
         max_slides=plan.max_slides,
+    )
+
+
+def _writing_tools(
+    settings: Settings,
+    router: ProviderRouter,
+    pick_file: Callable[[], Awaitable[Path | None]],
+    bus: Any,
+    spawn: Callable[[Any], Any],
+    guard: Any,
+) -> Any:
+    """Document Assistant, Research Agent and Writing Assistant (free models first)."""
+    from jarvis.app.paths import research_dir, writing_dir
+    from jarvis.tools.builtin import WritingTools
+    from jarvis.tools.writer import FreeWriter
+
+    plan = settings.slides  # the same free models as the decks
+    writer = FreeWriter(
+        router.provider("openrouter"),
+        router.provider("groq"),
+        plan.models,
+        groq_model=plan.groq_model,
+        timeout_s=plan.timeout_s,
+        notify=lambda text: spawn(bus.publish(UserNotice("Writing", text))),
+        fallback=router.chat,
+    )
+    return WritingTools(
+        writer,
+        writing_dir(),
+        research_dir(),
+        pick_file=pick_file,
+        screen=guard.suspicious,
+        open_when_done=plan.open_when_done,
     )
 
 
