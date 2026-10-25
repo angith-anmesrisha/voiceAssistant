@@ -96,13 +96,17 @@ _GROUPS: dict[str, re.Pattern[str]] = {
         re.IGNORECASE,
     ),
     "watch": re.compile(
-        r"\b(watch(ing|ed)?|monitor\w*|keep an eye|keep watch|notify me|tell me when|"
-        r"alert me|let me know when|watchtower|new files?|downloads? folder)\b",
+        r"\b(watch(ing)? (my |the |this |over )?(\w+ )?(folders?|downloads|documents|"
+        r"desktop|directory)|watched folders?|stop watching|what are you watching|"
+        r"monitor\w*|keep an eye on (my |the )?(\w+ )?(folder|downloads|documents|files)|"
+        r"watchtower|(tell|notify|alert) me when .*files?|new files?)\b",
         re.IGNORECASE,
     ),
     "recall": re.compile(
-        r"\b(continue|resume|pick up|carry on|left off|leave off|worked on|working on|"
-        r"was i doing|last (session|time)|yesterday|last week|where was i|catch me up)\b",
+        r"\b(continue (the|my|with) (project|work)|where (did )?i (left|leave) off|"
+        r"pick up where|what was i (working on|doing)|what did i (do|work on)|"
+        r"resume (my )?(work|project)|(worked|working) on (yesterday|last)|"
+        r"carry on (with )?(the|my) (project|work)|catch me up on)\b",
         re.IGNORECASE,
     ),
     "tasks": re.compile(
