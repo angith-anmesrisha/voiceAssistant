@@ -272,7 +272,7 @@ JARVIS does). Four British male voices are included; set `voice.neural_voice` to
 | `bm_fable` | also rated well; worth comparing with George |
 | `bm_lewis`, `bm_daniel` | rated lower by Kokoro's authors, but some prefer them |
 
-`voice.neural_speed` sets the pace (1.05 by default; lower is slower and more measured; 0.7 to 1.3). Set
+`voice.neural_speed` sets the pace (1.15 by default; lower is slower and more measured; 0.7 to 1.3). Set
 `voice.tts_engine` to `"sapi"` to use only Windows' voice, or `voice.download_voice` to
 `false` to never download. A short pause separates sentences, and Markdown, links, code,
 emoji and file paths are never read aloud (a link becomes the site's name).

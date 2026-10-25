@@ -379,7 +379,7 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   and doesn't speak `Reply.streamed` replies again. `voice.speak_while_writing`,
   `voice.end_silence_s`. Samples: /mnt/project-files/jarvis/voice-samples/.
 - Voice (owner asked for a free, unlimited JARVIS-like voice, 2026-10-24): local Kokoro
-  `bm_george` at speed 1.05 (0.95 felt slow to the owner), 0.22 s between sentences,
+  `bm_george` at speed 1.15 (0.95 felt slow; owner picked 1.15 over 1.05 on 2026-10-25), 0.22 s between sentences,
   first piece cut at its first comma when over 70 chars so audio starts sooner, a
   warm-up synthesis at load, low-latency output stream; fp32 model (325 MB) because it ran
   3x faster than int8 on x86 CPUs (RTF ~0.33 vs ~1). Downloaded in the background on

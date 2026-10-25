@@ -205,7 +205,7 @@ class VoiceSettings(BaseModel):
     tts_engine: Literal["kokoro", "sapi"] = "kokoro"
     # Kokoro voice: bm_george (default), bm_fable, bm_lewis or bm_daniel (British male).
     neural_voice: str = "bm_george"
-    neural_speed: float = Field(default=1.05, ge=0.7, le=1.3)  # under 1 is more measured
+    neural_speed: float = Field(default=1.15, ge=0.7, le=1.3)  # under 1 is more measured
     download_voice: bool = True
     # Windows SAPI voice name substring (e.g. "David", "Hazel"); empty = system default.
     # Used until the neural voice is ready, or always with tts_engine "sapi".

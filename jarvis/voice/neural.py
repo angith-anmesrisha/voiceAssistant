@@ -139,7 +139,7 @@ def _split_phonemes(phonemes: str, limit: int = _MAX_PHONEMES) -> list[str]:
 class KokoroVoice:
     """Loaded model plus one voice. ``synthesize`` is safe to call from one thread at a time."""
 
-    def __init__(self, folder: Path, voice: str = DEFAULT_VOICE, speed: float = 1.05) -> None:
+    def __init__(self, folder: Path, voice: str = DEFAULT_VOICE, speed: float = 1.15) -> None:
         import espeakng_loader
         import numpy as np
         import onnxruntime as rt

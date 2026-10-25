@@ -81,7 +81,7 @@ class Speaker:
         *,
         engine: str = "sapi",
         neural_voice: str = "bm_george",
-        neural_speed: float = 1.05,
+        neural_speed: float = 1.15,
         model_folder: Path | None = None,
     ) -> None:
         self._voice_hint = voice_hint.lower()
