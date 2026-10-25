@@ -29,11 +29,12 @@ from jarvis.agent.planner import (
     planner_prompt,
     step_request,
 )
-from jarvis.agent.prompts import system_prompt, wants_screen
+from jarvis.agent.prompts import chat_prompt, system_prompt, wants_screen
+from jarvis.agent.routing import is_conversation, wants_cloud
 from jarvis.agent.toolbudget import groups_for
 from jarvis.app.events import ChatEntry, EntryKind, EventBus, PlanStep, PlanUpdated, StepStatus
 from jarvis.app.state import AppState, StateMachine
-from jarvis.providers.base import Capability, ChatResult, Message, ToolCall
+from jarvis.providers.base import Capability, ChatResult, Message, ProviderError, ToolCall
 from jarvis.providers.openai_compat import image_part
 from jarvis.providers.router import NO_VISION, AllProvidersFailedError, Diagnosis, ProviderRouter
 from jarvis.storage.db import HistoryStore
@@ -128,6 +129,8 @@ class Assistant:
         memory: Callable[[], Awaitable[str]] | None = None,
         on_pair: Callable[[], Awaitable[tuple[str, str]]] | None = None,
         long_memory: Memory | None = None,
+        local_first: Callable[[], bool] | None = None,
+        local_timeout_s: float = 90.0,
     ) -> None:
         self._router = router
         self._store = store
@@ -144,6 +147,8 @@ class Assistant:
         self._memory = memory
         self._on_pair = on_pair  # -> (shown, spoken)
         self._long_memory = long_memory
+        self._local_first = local_first or (lambda: False)
+        self._local_timeout_s = local_timeout_s
         self._writes: set[asyncio.Task[None]] = set()
         self._whatsapp_draft: str | None = None  # a message waiting for "who to?"
         self._turn_context = ""
@@ -546,6 +551,10 @@ class Assistant:
             messages.append({"role": "user", "content": text})
 
         groups = groups_for(text, self._carry)
+        if history and self._local_first() and is_conversation(text, groups):
+            answered = await self._ask_local(text, messages[1:], spoken)
+            if answered is not None:
+                return answered
         tools = self._registry.declarations(groups)
         if _WHATSAPP_SEND.match(text):
             tools = [t for t in tools if t["function"]["name"] not in _APP_DRIVING]
@@ -598,6 +607,24 @@ class Assistant:
             {"role": "user", "content": "Stop using tools now and tell me what was done."}
         )
         return await self._router.chat(messages)
+
+    async def _ask_local(self, text: str, turns: list[Message], spoken: bool) -> ChatResult | None:
+        """Conversation on the local models; None means ask the cloud instead."""
+        if not self._router.local_ready():
+            return None
+        messages: list[Message] = [
+            {"role": "system", "content": chat_prompt(spoken=spoken, context=self._turn_context)},
+            *turns[-10:],
+        ]
+        try:
+            result = await self._router.local_chat(messages, timeout_s=self._local_timeout_s)
+        except ProviderError as exc:
+            logger.warning("Local model didn't answer ({}); asking the cloud", exc.kind.value)
+            return None
+        if wants_cloud(without_thinking(result.content or "")):
+            logger.info("Local model handed the request to the cloud")
+            return None
+        return result
 
     async def _look_tool(self, call: ToolCall, spoken: bool) -> ToolResult:
         """The model asked to see the screen: a vision model describes it as text."""

@@ -119,7 +119,9 @@ def _ollama() -> ProviderSettings:
         # Preferred model for looking at the screen. If it isn't installed or can't see
         # images, any installed model with vision is used instead (see OllamaProvider).
         vision_model="qwen3.5:4b",
-        fallback_models=["qwen3.5:latest"],
+        # Gemma 3 4B (owner's second local model) answers when Qwen can't; it has no
+        # thinking switch and no tool calls, so it's used for conversation and images.
+        fallback_models=["gemma3:4b", "qwen3.5:latest"],
         reasoning_effort="none",
         # Local models on an iGPU are slow, the first request also loads the model, and the
         # tool list makes for a long prompt. A timeout isn't retried.
@@ -160,6 +162,9 @@ class ProvidersConfig(BaseModel):
                 part = data.get(name)
                 if isinstance(part, dict):
                     data[name] = {**default().model_dump(), **part}
+            ollama = data.get("ollama")
+            if isinstance(ollama, dict) and ollama.get("fallback_models") == ["qwen3.5:latest"]:
+                ollama["fallback_models"] = _ollama().fallback_models  # the old default
         return data
 
     def get(self, name: str) -> ProviderSettings:
@@ -167,6 +172,21 @@ class ProvidersConfig(BaseModel):
         if not isinstance(settings, ProviderSettings):
             raise KeyError(name)
         return settings
+
+
+class RoutingSettings(BaseModel):
+    """Where requests go (owner, 2026-10-25: everyday conversation on the local models,
+    the cloud only for what needs it)."""
+
+    # Conversation (no PC actions, no screen, nothing current or online) is answered by
+    # Ollama on this PC; anything else, or a local failure, goes to the cloud providers.
+    # A provider chosen by the user ("use Groq from now on") still wins.
+    local_first: bool = True
+    # Longest wait for a local answer before asking the cloud instead.
+    local_timeout_s: float = 90.0
+    # Keep the local model loaded (Ollama unloads it after 5 idle minutes, and loading
+    # it again adds seconds to the next answer). "" = Ollama's default.
+    keep_alive: str = "30m"
 
 
 class HotkeySettings(BaseModel):
@@ -359,6 +379,7 @@ class Settings(BaseModel):
     dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
     memory: MemorySettings = Field(default_factory=MemorySettings)
     slides: SlideSettings = Field(default_factory=SlideSettings)
+    routing: RoutingSettings = Field(default_factory=RoutingSettings)
 
 
 def load_settings(path: Path | None = None) -> Settings:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import httpx
+from loguru import logger
 
 from jarvis.app.config import ProvidersConfig
 from jarvis.providers.base import (
@@ -214,6 +215,26 @@ class OllamaProvider(OpenAICompatibleProvider):
         if self._vision_model:
             caps.add(Capability.VISION)
         return caps
+
+    def reasoning_for(self, model: str) -> str:
+        # Only Qwen has a thinking switch; Gemma rejects the field.
+        return self.settings.reasoning_effort if model.startswith("qwen") else ""
+
+    async def keep_warm(self, keep_alive: str) -> bool:
+        """Load the chat model now and keep it loaded for ``keep_alive`` (Ollama's own
+        API: an empty prompt only loads the model)."""
+        root = self.settings.base_url.rstrip("/").removesuffix("/v1")
+        model = self.model_for(Capability.CHAT)
+        try:
+            response = await self._client.post(
+                f"{root}/api/generate",
+                json={"model": model, "prompt": "", "keep_alive": keep_alive},
+                timeout=self.settings.timeout_s,
+            )
+        except httpx.HTTPError as exc:
+            logger.debug("Ollama warm-up failed: {}", type(exc).__name__)
+            return False
+        return response.status_code < 400
 
     def model_for(self, capability: Capability) -> str:
         if capability is Capability.VISION:

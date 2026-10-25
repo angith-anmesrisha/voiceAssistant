@@ -37,6 +37,7 @@ _ERROR_STATE = {
 
 
 _PING = "Reply with just the word OK."
+LOCAL = "ollama"  # the provider that runs on this PC
 NO_VISION = "no model that can see images is installed"
 _PING_TIMEOUT_S = 30.0  # longer than a normal request: this is to find out, not to chat
 
@@ -312,6 +313,34 @@ class ProviderRouter:
         self.last_used = (result.provider, result.model)
         if self._on_change is not None:
             self._on_change()
+        return result
+
+    def local_ready(self) -> bool:
+        """Ollama is running with a chat model (and the user hasn't picked a provider)."""
+        local = self._providers.get(LOCAL)
+        return (
+            self.preferred in (None, LOCAL)
+            and local is not None
+            and LOCAL in self._priority
+            and self.statuses[LOCAL].usable
+        )
+
+    async def local_chat(self, messages: list[Message], *, timeout_s: float) -> ChatResult:
+        """Ask the local models only (no tools). ProviderError if they can't answer in
+        time; the caller then asks the cloud."""
+        local = self._providers[LOCAL]
+        self._set_activity(f"Asking {local.display_name} (on this PC)…")
+        try:
+            result = await asyncio.wait_for(local.chat(messages), timeout_s)
+        except TimeoutError as exc:
+            raise ProviderError(
+                local.display_name, ErrorKind.TIMEOUT, f"no answer within {timeout_s:.0f} s"
+            ) from exc
+        finally:
+            self._set_activity("")
+        self.skipped = []
+        self.last_used = (result.provider, result.model)
+        self._notify()
         return result
 
     async def transcribe(self, wav: bytes) -> Transcription:

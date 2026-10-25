@@ -190,6 +190,8 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         memory=lambda: _memory(keep, memory_prompt),
         on_pair=lambda: _pair_phone(dashboard),
         long_memory=memory,
+        local_first=lambda: settings.routing.local_first,
+        local_timeout_s=settings.routing.local_timeout_s,
     )
     speaker = Speaker(
         settings.voice.tts_voice,
@@ -604,6 +606,12 @@ def _routines(
         jobs.append(HardwareWatch(battery_low=plan.battery_low))
     if plan.check_in_hours > 0:
         jobs.append(CheckIns(plan.check_in_hours, quiet_hours=quiet_hours))
+    local = router.provider("ollama")
+    if settings.routing.local_first and settings.routing.keep_alive and local is not None:
+        from jarvis.agent.routing import KeepLocalWarm
+
+        keep_alive = settings.routing.keep_alive
+        jobs.append(KeepLocalWarm(router.local_ready, lambda: local.keep_warm(keep_alive)))  # type: ignore[attr-defined]
     if plan.summaries:
         jobs.append(
             SessionSummaries(

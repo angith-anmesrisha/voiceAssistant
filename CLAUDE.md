@@ -87,7 +87,8 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   `prompts.py` (one system prompt; `wants_screen` regex; `context` block marked as
   information), `context.py` (`situation`: active window, other open windows, AI choice),
   `guard.py` (`PromptGuard`: Llama Prompt Guard 2 scores outside text for injections),
-  `toolbudget.py` (`groups_for`: which tool groups a request gets), `background.py`
+  `toolbudget.py` (`groups_for`: which tool groups a request gets), `routing.py`
+  (`is_conversation`, `wants_cloud`, `KeepLocalWarm`), `background.py`
   (`Background`: reminders and other jobs → `Announce`), `routines.py` (`Briefing`, `TopicWatch`, `HardwareWatch`,
   `CheckIns`, `SessionSummaries`: jobs `Background` ticks every 10 s; `idle_seconds` via
   GetLastInputInfo), `planner.py` (`needs_plan`, planner prompt, `parse_plan` → `Task`s, `step_request`),
@@ -123,6 +124,18 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 - `assets/fonts/`: Orbitron, Rajdhani, Inter (OFL).
 
 ## Decisions
+- Local first (owner, 2026-10-25: "all normal conversations should be routed here [local].
+  only the ones that actually require cloud models ... to cloud"): `routing.local_first`.
+  A request is conversation when `groups_for` finds no tool group, it isn't a screen
+  question or a plan, and `is_conversation` sees no action verb at the start and nothing
+  current/online/personal (weather, news, today, prices, my files...). Conversation goes
+  to `router.local_chat` (Ollama only, no tools, `chat_prompt`: identity + "reply exactly
+  NEEDS_TOOLS if this needs tools", `local_timeout_s` 90) on qwen3.5:4b, then gemma3:4b
+  (Ollama `fallback_models`; Gemma gets no `reasoning_effort`). NEEDS_TOOLS, an empty
+  reply, a timeout or an error → the normal cloud path with tools. A provider the user
+  chose wins (`local_ready` is false unless preferred is None or ollama). `KeepLocalWarm`
+  reloads the chat model with `keep_alive` (30m) every 20 min via Ollama's /api/generate.
+  Speech-to-text, the screen, tools, plans, slides and session summaries stay cloud.
 - All three providers use their OpenAI-compatible chat-completions endpoints, so history and
   tool calls move between providers unchanged. Groq STT uses `/audio/transcriptions`; Gemini
   STT goes through chat with an `input_audio` part; Ollama has no STT.

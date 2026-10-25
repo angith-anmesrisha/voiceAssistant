@@ -82,6 +82,12 @@ python -m jarvis --hidden   # starts in the tray
   Gemini from now on", "switch to the local model", "go back to automatic". The choice is
   remembered. If the chosen one isn't available, JARVIS says so and uses the next one,
   and every answer is labelled with the provider that really produced it.
+- **Local first.** Everyday conversation (questions, explanations, advice, writing) is
+  answered on your PC by Ollama's `qwen3.5:4b`, then `gemma3:4b`, so it's free, private
+  and works offline. Anything that needs to act on the PC, see the screen, or know
+  something current goes to the cloud, and so does anything the local model hands back.
+  Choosing a provider ("use Groq from now on") overrides this; `routing.local_first`
+  turns it off.
 - **Automatic fallback:** Groq, then Gemini, then OpenRouter (if you add a key), then
   your local `qwen3.5:4b`. Inside Groq, a rate-limited qwen hands over to MiniMax M2.7
   (a strong agentic model, free on Groq), then GPT-OSS 120B and Llama 3.3 70B; Gemini
