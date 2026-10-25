@@ -321,6 +321,16 @@ class RoutineSettings(BaseModel):
     quiet_until: int = Field(default=8, ge=0, le=23)
 
 
+class WatchtowerSettings(BaseModel):
+    """Local monitoring: folders you chose, task deadlines, calendar events."""
+
+    enabled: bool = True
+    interval_s: float = Field(default=30.0, ge=10.0, le=3600.0)  # how often folders are listed
+    deadline_alerts: bool = True  # a day before, an hour before, and when overdue
+    calendar_alerts: bool = True  # a heads-up before calendar events
+    calendar_minutes: int = Field(default=10, ge=1, le=120)
+
+
 class MemorySettings(BaseModel):
     """Long-term memory as Markdown notes (a folder you can open in Obsidian)."""
 
@@ -385,6 +395,7 @@ class Settings(BaseModel):
     memory: MemorySettings = Field(default_factory=MemorySettings)
     slides: SlideSettings = Field(default_factory=SlideSettings)
     routing: RoutingSettings = Field(default_factory=RoutingSettings)
+    watchtower: WatchtowerSettings = Field(default_factory=WatchtowerSettings)
 
 
 def load_settings(path: Path | None = None) -> Settings:

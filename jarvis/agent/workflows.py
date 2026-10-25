@@ -472,8 +472,9 @@ def tool_call(step: Step) -> tuple[str, dict[str, Any]] | None:
     return spec.tool, args
 
 
-def fill(value: Any, outputs: list[str]) -> Any:
-    """``{previous}``, ``{step 2}``, ``{today}`` in a setting, replaced by earlier output."""
+def fill(value: Any, outputs: list[str], variables: dict[str, str] | None = None) -> Any:
+    """``{previous}``, ``{step 2}``, ``{today}`` in a setting, replaced by earlier output;
+    ``{file}`` (the file that started a folder workflow) and other ``variables`` too."""
     if not isinstance(value, str):
         return value
 
@@ -483,6 +484,8 @@ def fill(value: Any, outputs: list[str]) -> Any:
             return outputs[-1] if outputs else ""
         if key == "today":
             return datetime.now().strftime("%A %d %B %Y")
+        if variables and key in variables:
+            return variables[key]
         if number := re.fullmatch(r"step\s*(\d+)", key):
             index = int(number.group(1)) - 1
             return outputs[index] if 0 <= index < len(outputs) else ""
@@ -491,8 +494,8 @@ def fill(value: Any, outputs: list[str]) -> Any:
     return re.sub(r"\{([a-z ]+\d*)\}", swap, value)
 
 
-def filled(step: Step, outputs: list[str]) -> Step:
-    return Step(step.action, {k: fill(v, outputs) for k, v in step.settings.items()})
+def filled(step: Step, outputs: list[str], variables: dict[str, str] | None = None) -> Step:
+    return Step(step.action, {k: fill(v, outputs, variables) for k, v in step.settings.items()})
 
 
 def checklist_text(settings: dict[str, Any]) -> str:
@@ -909,6 +912,28 @@ def _due(trigger: Trigger, now: datetime, late_min: int) -> bool:
     at = now.replace(hour=clock[0], minute=clock[1], second=0, microsecond=0)
     late = (now - at).total_seconds()
     return 0 <= late <= late_min * 60
+
+
+def folder_watches(store: WorkflowStore, resolve: Callable[[str], Path]) -> list[Any]:
+    """Watches for the enabled folder-triggered workflows (ids "wf-<workflow id>"); a
+    folder JARVIS may not read is skipped."""
+    from jarvis.agent.watchtower import Watch
+
+    watches = []
+    for workflow in store.with_trigger("folder"):
+        trigger = workflow.trigger
+        try:
+            folder = resolve(trigger.folder)
+        except Exception as exc:
+            logger.info("Folder workflow {} skipped: {}", workflow.id, type(exc).__name__)
+            continue
+        events = ["new", "changed"] if trigger.event == "both" else [trigger.event or "new"]
+        watches.append(
+            Watch(
+                str(folder), trigger.pattern or "*", events, announce=False, id=f"wf-{workflow.id}"
+            )
+        )
+    return watches
 
 
 def register_workflow_tools(

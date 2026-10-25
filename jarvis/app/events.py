@@ -185,3 +185,4 @@ class RunWorkflow(Event):
 
     workflow_id: str
     reason: str = ""
+    file: str = ""  # the file that started a folder workflow ({file} in its steps)

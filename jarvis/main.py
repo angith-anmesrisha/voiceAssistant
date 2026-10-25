@@ -188,6 +188,32 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         await bus.publish(RunWorkflow(workflow.id, reason))
 
     register_workflow_tools(registry, workflows, queue_workflow)
+    from jarvis.agent.watchtower import Watchtower, register_watch_tools
+    from jarvis.agent.workflows import folder_watches
+    from jarvis.tools.files import FileAccessError, default_area
+
+    area = default_area()
+
+    async def folder_changed(change: Any) -> None:
+        if change.watch.id.startswith("wf-"):
+            workflow_id = change.watch.id.removeprefix("wf-")
+            await bus.publish(
+                RunWorkflow(workflow_id, f"{change.path.name} arrived", file=str(change.path))
+            )
+
+    watch_plan = settings.watchtower
+    tower = Watchtower(
+        keep,
+        interval_s=watch_plan.interval_s,
+        deadlines=watch_plan.deadline_alerts,
+        calendar=calendar,
+        calendar_alerts=watch_plan.calendar_alerts,
+        calendar_minutes=watch_plan.calendar_minutes,
+        on_change=folder_changed,
+        quiet_hours=(settings.routines.quiet_from, settings.routines.quiet_until),
+        extra=lambda: folder_watches(workflows, area.resolve),
+    )
+    register_watch_tools(registry, tower, area)
     briefing = _briefing(settings, keep, client, calendar)
 
     hotkey_label = "+".join(
@@ -221,7 +247,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         local_timeout_s=settings.routing.local_timeout_s,
         workflows=workflows,
         briefing=lambda: briefing.compose(datetime.now().astimezone()),
-        on_open_workflows=lambda: open_workflows(),
+        on_open_workflows=lambda tab: open_workflows(tab),
     )
     speaker = Speaker(
         settings.voice.tts_voice,
@@ -335,21 +361,45 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
 
     window.on_file_dropped = on_drop
 
-    builder: list[Any] = []
+    automation: list[Any] = []
 
-    def open_workflows() -> None:
+    def open_workflows(tab: str = "workflows") -> None:
+        from jarvis.ui.watchtower import AutomationWindow, WatchtowerPanel
         from jarvis.ui.workflows import WorkflowBuilder
 
-        if not builder:
-            builder.append(
-                WorkflowBuilder(
-                    workflows, lambda workflow: controller.run_workflow(workflow, "test")
-                )
+        if not automation:
+
+            async def add_watch(
+                folder: str, pattern: str, events: list[str], deep: bool
+            ) -> str | None:
+                try:
+                    await tower.add(area, folder, pattern, events, deep)
+                except FileAccessError as exc:
+                    return f"I can't watch that: {exc}."
+                return None
+
+            async def remove_watch(watch_id: str) -> None:
+                await tower.remove(None, watch_id)
+
+            def set_option(key: str, on: bool) -> None:
+                setattr(tower, "deadlines" if key == "deadline_alerts" else key, on)
+                save_choice("watchtower", key, on)
+
+            panel = WatchtowerPanel(
+                tower.watches,
+                add_watch,
+                remove_watch,
+                options={
+                    "deadline_alerts": tower.deadlines,
+                    "calendar_alerts": tower.calendar_alerts,
+                },
+                on_option=set_option,
             )
-        builder[0].refresh()
-        builder[0].show()
-        builder[0].raise_()
-        builder[0].activateWindow()
+            builder = WorkflowBuilder(
+                workflows, lambda workflow: controller.run_workflow(workflow, "test")
+            )
+            automation.append(AutomationWindow(builder, panel))
+        automation[0].open(tab)
 
     tray = Tray(
         bus,
@@ -358,7 +408,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         on_pair=lambda: spawn(pair_from_tray()),
         on_unpair=lambda: spawn(unpair_from_tray()),
         on_stop=lambda: spawn(stop_jarvis()),
-        on_workflows=open_workflows,
+        on_workflows=lambda: open_workflows(),
     )
     tray.show()
     if not args.hidden:
@@ -429,6 +479,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
             memory,
             briefing=briefing,
             workflows=WorkflowTriggers(workflows, keep, queue_workflow),
+            watchtower=tower if settings.watchtower.enabled else None,
         ),
     )
     background.start()
@@ -602,6 +653,7 @@ def _routines(
     memory: Memory | None = None,
     briefing: Job | None = None,
     workflows: Job | None = None,
+    watchtower: Job | None = None,
 ) -> list[Job]:
     """The things JARVIS brings up by itself, as configured in ``routines``."""
     from jarvis.agent.prompts import SUMMARY_PROMPT
@@ -644,6 +696,8 @@ def _routines(
         jobs.append(briefing)
     if workflows is not None:
         jobs.append(workflows)
+    if watchtower is not None:
+        jobs.append(watchtower)
     if plan.market_watch:
         jobs.append(MarketWatch(keep, price, quiet_hours))
     if plan.hardware_alerts:

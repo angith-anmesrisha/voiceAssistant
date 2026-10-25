@@ -75,6 +75,17 @@ QPushButton:disabled {{ color: {theme.css(theme.TEXT_MUTED)};
   border-color: {theme.css(theme.rgba(theme.STEEL, 80))}; }}
 QPushButton#primary {{ background: {theme.css(theme.rgba(theme.ELECTRIC, 120))}; }}
 QPushButton#danger {{ border-color: {theme.css(theme.rgba(theme.DANGER, 140))}; }}
+QCheckBox::indicator {{ width: 14px; height: 14px; border-radius: 3px;
+  border: 1px solid {theme.css(theme.rgba(theme.CYAN, 130))};
+  background: {theme.css(theme.BG_DEEP)}; }}
+QCheckBox::indicator:checked {{ background: {theme.css(theme.ELECTRIC)};
+  border-color: {theme.css(theme.CYAN)}; }}
+QTabWidget::pane {{ border: none; }}
+QTabBar::tab {{ background: {theme.css(theme.BG_DEEP)}; color: {theme.css(theme.TEXT_DIM)};
+  padding: 8px 18px; border-bottom: 2px solid transparent;
+  font-family: "{theme.LABEL_FAMILY}"; font-size: 11pt; letter-spacing: 1px; }}
+QTabBar::tab:selected {{ color: {theme.css(theme.CYAN)};
+  border-bottom: 2px solid {theme.css(theme.CYAN)}; }}
 QMenu {{ background: {theme.css(theme.BG_DEEP)}; border: 1px solid {theme.css(theme.STEEL)}; }}
 QMenu::item:selected {{ background: {theme.css(theme.rgba(theme.ELECTRIC, 90))}; }}
 """

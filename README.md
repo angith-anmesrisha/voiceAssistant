@@ -182,6 +182,16 @@ python -m jarvis --hidden   # starts in the tray
   are the international spot price (Indian shop prices add duty and GST). "Watch
   bitcoin and tell me if it moves 3%" checks every 30 minutes, and the morning briefing
   reads `routines.briefing_markets` (Nifty, Sensex and gold by default).
+- **Watchtower.** "Watch my Downloads for new PDFs", "tell me when anything in
+  Documents\Projects changes", "what are you watching?", "stop watching Downloads", or
+  the Watchtower tab (tray › Workflows and Watchtower…, or "open Watchtower"). JARVIS
+  lists those folders every 30 seconds on your PC (it never opens the files) and
+  mentions new or changed files once they've finished downloading or saving. Only
+  folders inside your own folders can be watched. A workflow can start from a folder
+  too ("When a new PDF is in Scans": its steps can use `{file}`). It also gives one
+  heads-up for each task deadline (the day before, an hour before, and when it's
+  overdue) and ten minutes before calendar events; both can be switched off in the tab
+  or under `watchtower` in settings.json.
 - **Reminders and timers.** "Remind me at 6 pm to call Mom", "set a 10 minute timer",
   "remind me every weekday at 9 to check mail": it says them out loud when due, even
   after a restart, and a repeating one sets itself up again (daily, weekdays, weekly,

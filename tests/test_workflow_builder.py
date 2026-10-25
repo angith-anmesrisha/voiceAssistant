@@ -127,7 +127,9 @@ async def test_the_controller_runs_a_triggered_workflow_once_free(tmp_path: Path
     store.put(workflow)
     ran: list[tuple[str, bool, str]] = []
 
-    async def run_workflow(w: Workflow, *, spoken: bool = False, reason: str = "") -> Reply:
+    async def run_workflow(
+        w: Workflow, *, spoken: bool = False, reason: str = "", variables: Any = None
+    ) -> Reply:
         ran.append((w.name, spoken, reason))
         return Reply("Hello is done. Hi", ok=True)
 

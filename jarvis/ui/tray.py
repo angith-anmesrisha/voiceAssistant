@@ -52,7 +52,7 @@ class Tray:
             self._menu.addAction(stop)
         self._menu.addAction(self._autostart)
         for label, callback in (
-            ("Workflows…", on_workflows),
+            ("Workflows and Watchtower…", on_workflows),
             ("Pair a phone…", on_pair),
             ("Unpair phones", on_unpair),
         ):

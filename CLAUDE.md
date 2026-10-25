@@ -203,6 +203,19 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   "system", LOW, read-only): psutil uptime/CPU/memory/busiest by process name/disks/
   battery, DNS + TCP 443 to 1.1.1.1 and google, Windows System/Application error events
   (24 h, ≤10, source + id only) via win32evtlog.
+- Watchtower (owner: "run monitoring locally… let users configure which folders and
+  events"): `agent/watchtower.py`. Watches (folder resolved through `FileArea`, pattern,
+  events new/changed, recursive, max 20) in keep state `watchtower`; `FolderWatcher`
+  lists (os.scandir, ≤5000 files, never opens), first look silent, a change is reported
+  on the first scan where it's unchanged since the one before; temp/partial downloads
+  ignored. Background job every `interval_s` (30): Said kind "watch"; `on_change` →
+  `RunWorkflow(file=)` for folder workflows (`folder_watches`, ids "wf-<id>",
+  announce off; `{file}` variable). Deadline alerts once per stage (day: not in quiet
+  hours / hour / overdue ≤7 days; state `deadline_alerts`), calendar heads-up
+  `calendar_minutes` before (state `event_alerts`). Tools `watch_folder`,
+  `stop_watching_folder`, `list_watches` (group "watch"). UI: `ui/watchtower.py`
+  `WatchtowerPanel` + `AutomationWindow` (tabs Workflows/Watchtower); "open
+  Watchtower" opens that tab; options saved with `save_choice("watchtower", …)`.
 - Calendar: read-only iCal from env `JARVIS_CALENDAR_ICS` (a secret URL, never logged;
   `tools/calendar_ics.py`, own parser: TZID/UTC/all-day, RRULE daily/weekly BYDAY/monthly
   incl. 2TU/-1FR/yearly, INTERVAL/COUNT/UNTIL, EXDATE, moved instances; 10-min cache;

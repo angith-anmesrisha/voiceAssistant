@@ -95,6 +95,11 @@ _GROUPS: dict[str, re.Pattern[str]] = {
         r"newsletters?|messages from)\b",
         re.IGNORECASE,
     ),
+    "watch": re.compile(
+        r"\b(watch(ing|ed)?|monitor\w*|keep an eye|keep watch|notify me|tell me when|"
+        r"alert me|let me know when|watchtower|new files?|downloads? folder)\b",
+        re.IGNORECASE,
+    ),
     "tasks": re.compile(
         r"\b(tasks?|to-?dos?|to do list|pending|ideas?|deadlines?|due|assignments?|"
         r"homework|projects?|checklist|backlog|finished|completed?|done with|tick off|"

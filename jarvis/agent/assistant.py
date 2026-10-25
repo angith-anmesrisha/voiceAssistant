@@ -187,7 +187,7 @@ class Assistant:
         local_timeout_s: float = 90.0,
         workflows: WorkflowStore | None = None,
         briefing: Callable[[], Awaitable[str]] | None = None,
-        on_open_workflows: Callable[[], None] | None = None,
+        on_open_workflows: Callable[[str], None] | None = None,
     ) -> None:
         self._router = router
         self._store = store
@@ -390,9 +390,11 @@ class Assistant:
         if whatsapp is not None:
             return await self._whatsapp(conversation, whatsapp)
         if self.workflows is not None:
-            if self._on_open_workflows is not None and _OPEN_BUILDER.search(text):
-                self._on_open_workflows()
-                reply = "The workflow builder is open."
+            opened = _OPEN_BUILDER.search(text) if self._on_open_workflows else None
+            if opened is not None and self._on_open_workflows is not None:
+                tower = "watch" in opened.group("what").lower()
+                self._on_open_workflows("watchtower" if tower else "workflows")
+                reply = "Watchtower is open." if tower else "The workflow builder is open."
                 await self._emit(EntryKind.ASSISTANT, reply, mode=WORKFLOW)
                 return Reply(reply, ok=True)
             workflow = self.workflows.match(text)
@@ -508,6 +510,7 @@ class Assistant:
         spoken: bool = False,
         conversation: int | None = None,
         reason: str = "",
+        variables: dict[str, str] | None = None,
     ) -> Reply:
         """Run a saved workflow's steps in order, on the plan card, each with its own
         risk level and confirmations. ``reason`` says what started it (for the log)."""
@@ -520,7 +523,9 @@ class Assistant:
         if self._state.state is not AppState.THINKING:
             await self._state.transition(AppState.THINKING)
         try:
-            steps, shown_parts, said_parts = await self._workflow_steps(workflow, spoken)
+            steps, shown_parts, said_parts = await self._workflow_steps(
+                workflow, spoken, variables or {}
+            )
         finally:
             if self._state.state in (AppState.THINKING, AppState.ACTING):
                 await self._state.transition(AppState.IDLE)
@@ -539,7 +544,7 @@ class Assistant:
         return Reply(said if spoken else reply, ok=True)
 
     async def _workflow_steps(
-        self, workflow: Workflow, spoken: bool
+        self, workflow: Workflow, spoken: bool, variables: dict[str, str]
     ) -> tuple[list[PlanStep], list[str], list[str]]:
         steps = [PlanStep(step.describe()) for step in workflow.steps]
         outputs: list[str] = []
@@ -557,7 +562,7 @@ class Assistant:
                 continue
             steps[i] = PlanStep(steps[i].title, StepStatus.RUNNING)
             await publish()
-            step = filled(raw, outputs)
+            step = filled(raw, outputs, variables)
             ok, note, output, show = await self._workflow_step(i, step, outputs, spoken)
             if step.action == "confirm" and not ok:
                 stopped = True
@@ -986,7 +991,8 @@ class Assistant:
 _DECLINED = "The user declined this action."
 _OPEN_BUILDER = re.compile(
     r"^\W*(?:(?:hey\s+)?jarvis\W+)?(?:please\s+)?(?:open|show|edit|manage)\s+(?:me\s+)?"
-    r"(?:the\s+|my\s+)?(?:workflow builder|workflows|routines|command chains)\W*$",
+    r"(?:the\s+|my\s+)?(?P<what>workflow builder|workflows|routines|command chains|"
+    r"watchtower|watched folders|watch tower)\W*$",
     re.IGNORECASE,
 )
 
