@@ -159,6 +159,8 @@ class PlanUpdated(Event):
 
     steps: tuple[PlanStep, ...]
     finished: bool = False
+    workflow_id: str = ""  # set when a workflow runs: which one, and each step's node id
+    ids: tuple[str, ...] = ()
 
     @property
     def current(self) -> int:

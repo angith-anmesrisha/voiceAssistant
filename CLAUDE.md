@@ -93,8 +93,8 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   (`is_conversation`, `wants_cloud`, `KeepLocalWarm`), `background.py`
   (`Background`: reminders and other jobs → `Announce`), `routines.py` (`Briefing`, `TopicWatch`, `HardwareWatch`,
   `CheckIns`, `SessionSummaries`: jobs `Background` ticks every 10 s; `idle_seconds` via
-  GetLastInputInfo), `workflows.py` (`Trigger`/`Step`/`Workflow`, `ACTIONS` mapped to
-  tools, `fill` for `{previous}`/`{step N}`/`{today}`, `WorkflowStore` (`workflows.json`),
+  GetLastInputInfo), `workflows.py` (`Trigger`/`Step`/`Link`/`Workflow`, `ACTIONS` mapped to
+  tools or a JARVIS request, `GROUPS`, `run_order`, `would_loop`, `condition_met`, `fill` for `{previous}`/`{step N}`/`{today}`, `WorkflowStore` (`workflows.json`),
   `parse_proposal`, `templates`, `WorkflowTriggers` job, `register_workflow_tools`),
   `planner.py` (`needs_plan`, planner prompt, `parse_plan` → `Task`s, `step_request`),
   `assistant.py` (keeps the last 8 actions for context; one turn:
@@ -120,8 +120,12 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   AI or the history.
 - `controller.py`: glues UI, voice, and assistant; owns busy/listening.
 - `ui/`: `theme.py`, `main_window.py` (HUD stage, tweens, layout), `tray.py`, `icons.py`,
-  `workflows.py` (`WorkflowBuilder` window: list, trigger form, steps with Add menu/
-  `StepEditor` form/drag/Up/Down/Remove, Test, Save; `problems` validation),
+  `workflows.py` (`WorkflowBuilder`: sidebar list, top bar name/Active/Save, `CanvasPane`
+  (canvas + floating +, zoom/fit/tidy/undo/redo, Test workflow), `NodePanel` (+ panel by
+  group, search), `Inspector` (live settings via `setting_field`), logs, `TemplateGallery`;
+  `problems`, `warnings`, `layout`), `canvas.py` (`FlowScene`/`FlowView`/`NodeItem`/
+  `LinkItem`: dotted grid, bezier links, ports, + stubs, drag-to-link, run status),
+  `node_icons.py` (QPainter line icons, `GROUP_STYLE`),
   `widgets/`: `orb.py` (particle globe when idle, morphs into the glowing ring), `stage.py`
   (backdrop, top bar, clock/state caption, reply card, status strip, `Tween`), `panels.py`
   (provider/network/safety panels in the details overlay, command bar, confirm overlay),
@@ -176,6 +180,20 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   `run_workflow` tool only queues. Tasks/ideas: `tasks` table in keep, tools
   `add_task`/`list_tasks`/`complete_task` (group "tasks"), `parse_due`. `starters()`
   (Morning Briefing, Daily Planner, End-of-Day Review) are saved on first start.
+- Workflow canvas (owner, 2026-10-25: "something like [n8n] so its easier for me to add
+  workflows ... cool templates and useful nodes like gmail, calender, notes"): steps
+  have `id`/`x`/`y`, the trigger `x`/`y`; `Workflow.links` (`Link(src, port, dst)`,
+  src may be `TRIGGER_ID`) is None for older/proposed workflows (= steps chained in
+  order, `graph()`), written out on the first canvas edit. Runner: `run_order` (Kahn's,
+  left to right), a step runs when a fired link leads to it; `{previous}` is the output
+  of the node that led there; If (`condition`) fires true/false, `confirm` yes/no (a no
+  with nothing linked still fails like before); off-path steps are SKIPPED "Not on this
+  path" and left out of the reply. `PlanUpdated` carries `workflow_id`/`ids` so the
+  builder lights nodes up (main subscribes `builder.show_run`). Agent nodes
+  (`Action.request`: inbox summary, draft replies (draft_reply MEDIUM, Drafts only),
+  emails → tasks, summarise, translate, action items) go through `_converse`. Colours
+  stay in the HUD palette (no greens); icons are drawn, no image files. 49 nodes,
+  17 templates, MAX_STEPS 30.
 - Quick capture: `commands.capture_command` (idea:/add a task…/todo:/add X to my Y
   tasks/quick note:) → `add_task` or `save_note` "Inbox" in `_handle` before the deck
   check, no model (mode "capture"); a trailing due ("by friday", "tomorrow") is split
@@ -529,6 +547,8 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 - The deck maker, the file picker and drag-and-drop are untested on Windows; OpenRouter's
   free model list changes, so `slides.models` may need updating (`openrouter/free` is the
   catch-all).
+- The workflow canvas (dragging, linking, zoom, live node status) is untested on real
+  Windows; offscreen renders and scripted tests only.
 - No settings window yet; edit `settings.json` in the data dir.
 - File tools, clipboard, the Recycle Bin call and window-title context are untested on
   real Windows. `press_keys`/`type_text` could still drive an address bar; both ask first

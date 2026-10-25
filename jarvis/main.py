@@ -25,6 +25,7 @@ from jarvis.app.events import (
     EntryKind,
     EventBus,
     NoticeLevel,
+    PlanUpdated,
     ProvidersChanged,
     PushToTalkPressed,
     PushToTalkReleased,
@@ -399,6 +400,11 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
             builder = WorkflowBuilder(
                 workflows, lambda workflow: controller.run_workflow(workflow, "test")
             )
+
+            async def light_up(event: PlanUpdated) -> None:
+                builder.show_run(event)  # nodes glow as a tested workflow runs
+
+            bus.subscribe(PlanUpdated, light_up)
             automation.append(AutomationWindow(builder, panel))
         automation[0].open(tab)
 

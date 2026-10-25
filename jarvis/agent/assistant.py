@@ -35,13 +35,17 @@ from jarvis.agent.prompts import chat_prompt, guidance, system_prompt, wants_scr
 from jarvis.agent.routing import NEEDS_TOOLS, is_conversation, wants_cloud
 from jarvis.agent.toolbudget import groups_for
 from jarvis.agent.workflows import (
+    ACTIONS,
+    TRIGGER_ID,
     ProposalError,
     Workflow,
     WorkflowStore,
     checklist_text,
+    condition_met,
     filled,
     parse_proposal,
     proposal_prompt,
+    run_order,
     tool_call,
     workflow_request,
 )
@@ -530,6 +534,8 @@ class Assistant:
         finally:
             if self._state.state in (AppState.THINKING, AppState.ACTING):
                 await self._state.transition(AppState.IDLE)
+        # Steps on a branch that wasn't taken (or not linked at all) aren't counted.
+        steps = [s for s in steps if not (s.status is StepStatus.SKIPPED and s.note in _OFF_PATH)]
         done = sum(step.status is StepStatus.DONE for step in steps)
         failed = any(step.status is StepStatus.FAILED for step in steps)
         if done == len(steps):
@@ -547,82 +553,108 @@ class Assistant:
     async def _workflow_steps(
         self, workflow: Workflow, spoken: bool, variables: dict[str, str]
     ) -> tuple[list[PlanStep], list[str], list[str]]:
-        steps = [PlanStep(step.describe()) for step in workflow.steps]
-        outputs: list[str] = []
+        """Run the steps the trigger leads to, in order; a step runs once a link into it
+        fires (an If or Ask node fires only one of its outputs)."""
+        order = run_order(workflow)
+        links = workflow.graph()
+        shown_order = order + [i for i in range(len(workflow.steps)) if i not in order]
+        cards = {i: PlanStep(workflow.steps[i].describe()) for i in shown_order}
+        ids = tuple(workflow.steps[i].id for i in shown_order)
+        position = {step.id: i for i, step in enumerate(workflow.steps)}
+        outputs = [""] * len(workflow.steps)
+        fired = {(TRIGGER_ID, "out")}
         shown: list[str] = []
         said: list[str] = []
-        stopped = False
 
         async def publish(finished: bool = False) -> None:
-            await self._bus.publish(PlanUpdated(tuple(steps), finished=finished))
+            steps = tuple(cards[i] for i in shown_order)
+            update = PlanUpdated(steps, finished=finished, workflow_id=workflow.id, ids=ids)
+            await self._bus.publish(update)
 
-        for i, raw in enumerate(workflow.steps):
-            if stopped:
-                steps[i] = PlanStep(steps[i].title, StepStatus.SKIPPED)
-                outputs.append("")
+        for i in order:
+            raw = workflow.steps[i]
+            into = [link for link in links if link.dst == raw.id and (link.src, link.port) in fired]
+            if not into:
+                cards[i] = PlanStep(cards[i].title, StepStatus.SKIPPED, _OFF_PATH[0])
                 continue
-            steps[i] = PlanStep(steps[i].title, StepStatus.RUNNING)
+            source = into[0].src
+            previous = "" if source == TRIGGER_ID else outputs[position[source]]
+            cards[i] = PlanStep(cards[i].title, StepStatus.RUNNING)
             await publish()
-            step = filled(raw, outputs, variables)
-            ok, note, output, show = await self._workflow_step(i, step, outputs, spoken)
-            if step.action == "confirm" and not ok:
-                stopped = True
-            outputs.append(output)
+            step = filled(raw, outputs, variables, previous)
+            branches = {link.port for link in links if link.src == raw.id}
+            ok, note, output, show, port = await self._workflow_step(
+                i, step, previous, spoken, branches
+            )
+            outputs[i] = output
+            if port:
+                fired.add((raw.id, port))
+            spec = ACTIONS.get(step.action)
             if show and output:
                 shown.append(output)
-                if step.action in ("say", "briefing", "ask_jarvis"):
+                if spec is not None and spec.speaks:
                     said.append(output)
             status = StepStatus.DONE if ok else StepStatus.FAILED
-            steps[i] = PlanStep(steps[i].title, status, note)
+            cards[i] = PlanStep(cards[i].title, status, note)
+        for i in shown_order[len(order) :]:
+            cards[i] = PlanStep(cards[i].title, StepStatus.SKIPPED, _OFF_PATH[1])
         await publish(finished=True)
-        return steps, shown, said
+        return [cards[i] for i in shown_order], shown, said
 
     async def _workflow_step(
-        self, index: int, step: Any, outputs: list[str], spoken: bool
-    ) -> tuple[bool, str, str, bool]:
-        """(ok, note for the plan card, output for later steps, show it in the reply)."""
+        self, index: int, step: Any, previous: str, spoken: bool, branches: set[str]
+    ) -> tuple[bool, str, str, bool, str]:
+        """(ok, note for the plan card, output for later steps, show it in the reply, the
+        output that fires)."""
         settings = step.settings
+        spec = ACTIONS.get(step.action)
+        if spec is None:
+            return False, f"Unknown action “{step.action}”", "", False, ""
         if step.action == "show_checklist":
-            text = checklist_text(settings)
-            return True, "Shown", text, True
+            return True, "Shown", checklist_text(settings), True, "out"
         if step.action == "say":
-            text = str(settings.get("text") or "")
-            return True, "Said", text, True
+            return True, "Said", str(settings.get("text") or ""), True, "out"
         if step.action == "wait":
             try:
                 seconds = max(0.0, min(300.0, float(settings.get("seconds") or 0)))
             except (TypeError, ValueError):
                 seconds = 0.0
             await asyncio.sleep(seconds)
-            return True, f"Waited {seconds:g} s", outputs[-1] if outputs else "", False
+            return True, f"Waited {seconds:g} s", previous, False, "out"
         if step.action == "confirm":
             question = str(settings.get("question") or "Shall I carry on?")
             approved = await self._confirm(ConfirmRequest("workflow", Risk.MEDIUM, question))
-            if not approved:
-                return False, "You said no, so the rest was skipped", "", False
-            return True, "You said yes", outputs[-1] if outputs else "", False
+            if approved:
+                return True, "You said yes", previous, False, "yes"
+            if "no" in branches:
+                return True, "You said no", previous, False, "no"
+            return False, "You said no, so the rest was skipped", "", False, "no"
+        if step.action == "condition":
+            met = condition_met(settings)
+            return True, "True" if met else "False", previous, False, "true" if met else "false"
         if step.action == "briefing":
             if self._briefing is None:
-                return False, "The briefing isn't available", "", False
-            text = await self._briefing()
-            return True, "Given", text, True
-        if step.action == "ask_jarvis":
-            request = str(settings.get("request") or "").strip()
+                return False, "The briefing isn't available", "", False, "out"
+            return True, "Given", await self._briefing(), True, "out"
+        if step.action == "ask_jarvis" or spec.request is not None:
+            if spec.request is not None:
+                request = spec.request(settings).strip()
+            else:
+                request = str(settings.get("request") or "").strip()
             if not request:
-                return False, "No request was set", "", False
+                return False, "No request was set", "", False, "out"
             result = await self._converse(request, spoken, history=False)
             text = without_thinking(result.content or "")
             failed = self._failed or self._blocked or says_it_cannot(text)
             self._failed = self._blocked = False
-            return not failed, text[:200] or "Done", text, True
+            return not failed, text[:200] or "Done", text, True, "out"
         call = tool_call(step)
         if call is None:
-            return False, f"Unknown action “{step.action}”", "", False
+            return False, f"Unknown action “{step.action}”", "", False, "out"
         name, args = call
         tool = ToolCall(f"workflow_{index}", name, args)
         outcome = await self._screen(tool, await self._run_tool(tool))
-        shown = outcome.ok and step.action in _SHOWN_ACTIONS
-        return outcome.ok, outcome.summary, _result_text(outcome), shown
+        return outcome.ok, outcome.summary, _result_text(outcome), outcome.ok and spec.shows, "out"
 
     async def _propose_workflow(self, conversation: int, shown: str, text: str) -> Reply:
         """Turn "Whenever I start work, open … and show …" into a workflow, show it, and
@@ -998,8 +1030,8 @@ _OPEN_BUILDER = re.compile(
 )
 
 
-# Workflow steps whose results go in the reply (the rest show on the plan card only).
-_SHOWN_ACTIONS = frozenset({"show_tasks", "check_email", "study_document", "research"})
+# Notes on workflow steps that didn't run because no link led to them.
+_OFF_PATH = ("Not on this path", "Not linked")
 
 
 def _result_text(outcome: ToolResult) -> str:

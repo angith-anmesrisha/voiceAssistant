@@ -7,6 +7,11 @@ that tool's risk level and asks first exactly as it would if you asked for it di
 A command chain ("Prepare my presentation") is a workflow whose steps pass their results
 on: ``{previous}`` and ``{step 2}`` in a step's text are replaced by earlier output.
 
+In the builder a workflow is a canvas of nodes: the trigger, then steps joined by
+links. A step runs once a link into it fires; an "If" node fires its true or false
+output and an "Ask me" node its yes or no output, so a workflow can branch. A workflow
+with no links (older files, and ones JARVIS proposes) simply runs its steps in order.
+
 Workflows are kept in ``workflows.json`` in the data folder (plain JSON you can read).
 Nothing runs until you save it: a workflow JARVIS proposes from your words is shown to
 you first and saved only after a yes.
@@ -34,7 +39,12 @@ TRIGGER_TITLES = {
     "manual": "Only when I run it",
 }
 DAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
-MAX_STEPS = 20
+MAX_STEPS = 30
+TRIGGER_ID = "trigger"  # the trigger node's id in links
+
+
+def _new_id() -> str:
+    return uuid.uuid4().hex[:8]
 
 
 @dataclass
@@ -46,6 +56,8 @@ class Trigger:
     folder: str = ""  # folder: a folder JARVIS may read
     pattern: str = "*"  # folder: "*.pdf"
     event: str = "new"  # folder: new | changed
+    x: float | None = field(default=None, compare=False)  # where it sits on the canvas
+    y: float | None = field(default=None, compare=False)
 
     def describe(self) -> str:
         if self.kind == "phrase":
@@ -70,6 +82,14 @@ class Trigger:
 class Step:
     action: str
     settings: dict[str, Any] = field(default_factory=dict)
+    id: str = field(default_factory=_new_id, compare=False)
+    x: float | None = field(default=None, compare=False)
+    y: float | None = field(default=None, compare=False)
+
+    @property
+    def outputs(self) -> tuple[str, ...]:
+        spec = ACTIONS.get(self.action)
+        return spec.outputs if spec is not None else ("out",)
 
     def describe(self) -> str:
         spec = ACTIONS.get(self.action)
@@ -81,6 +101,15 @@ class Step:
             return spec.title
 
 
+@dataclass(frozen=True)
+class Link:
+    """From a node's output (``port``) to the next node; ``src`` may be the trigger."""
+
+    src: str
+    port: str
+    dst: str
+
+
 @dataclass
 class Workflow:
     name: str
@@ -89,32 +118,152 @@ class Workflow:
     enabled: bool = True
     description: str = ""
     id: str = field(default_factory=lambda: uuid.uuid4().hex[:12])
+    links: list[Link] | None = None  # None = the steps in order (no canvas yet)
 
     def describe(self) -> str:
         lines = [f"{self.name}: {self.trigger.describe()}"]
-        lines += [f"{i}. {step.describe()}" for i, step in enumerate(self.steps, 1)]
+        number = {step.id: i for i, step in enumerate(self.steps, 1)}
+        order = run_order(self)
+        for i in order:
+            step = self.steps[i]
+            when = ""
+            for link in self.links or []:
+                source = self.step(link.src) if link.dst == step.id else None
+                if source is not None and len(source.outputs) > 1:
+                    when = f" (if {link.port}, after step {number[source.id]})"
+                    break
+            lines.append(f"{number[step.id]}. {step.describe()}{when}")
+        for i, step in enumerate(self.steps):
+            if i not in order:
+                lines.append(f"{i + 1}. {step.describe()} (not connected, won't run)")
         return "\n".join(lines)
 
+    def step(self, step_id: str) -> Step | None:
+        return next((s for s in self.steps if s.id == step_id), None)
+
+    def index(self, step_id: str) -> int:
+        return next((i for i, s in enumerate(self.steps) if s.id == step_id), -1)
+
+    def graph(self) -> list[Link]:
+        """The links, or the steps chained in order for a workflow with no canvas yet."""
+        if self.links is not None:
+            return list(self.links)
+        chain, src, port = [], TRIGGER_ID, "out"
+        for step in self.steps:
+            chain.append(Link(src, port, step.id))
+            src, port = step.id, step.outputs[0]
+        return chain
+
     def to_json(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        if self.links is None:
+            data.pop("links")
+        return data
 
     @classmethod
     def from_json(cls, data: dict[str, Any]) -> Workflow:
         trigger = data.get("trigger") or {}
         known = Trigger.__dataclass_fields__
-        steps = [
-            Step(str(s.get("action", "")), dict(s.get("settings") or {}))
-            for s in data.get("steps") or []
-            if isinstance(s, dict)
-        ]
+        steps: list[Step] = []
+        seen: set[str] = {TRIGGER_ID}
+        for raw in data.get("steps") or []:
+            if not isinstance(raw, dict):
+                continue
+            step_id = str(raw.get("id") or "")[:20]
+            if not step_id or step_id in seen:
+                step_id = _new_id()
+            seen.add(step_id)
+            steps.append(
+                Step(
+                    str(raw.get("action", "")),
+                    dict(raw.get("settings") or {}),
+                    step_id,
+                    _coord(raw.get("x")),
+                    _coord(raw.get("y")),
+                )
+            )
+        steps = steps[:MAX_STEPS]
+        kept = {TRIGGER_ID} | {s.id for s in steps}
+        links: list[Link] | None = None if data.get("links") is None else []
+        for raw in data.get("links") or []:
+            if not isinstance(raw, dict):
+                continue
+            link = Link(
+                str(raw.get("src", "")), str(raw.get("port") or "out"), str(raw.get("dst", ""))
+            )
+            fits = link.src in kept and link.dst in kept and link.dst != TRIGGER_ID
+            if fits and link.src != link.dst and links is not None and link not in links:
+                links.append(link)
+        trigger_data = {k: v for k, v in trigger.items() if k in known}
+        for key in ("x", "y"):
+            trigger_data[key] = _coord(trigger_data.get(key))
         return cls(
             name=str(data.get("name") or "Workflow")[:60],
-            trigger=Trigger(**{k: v for k, v in trigger.items() if k in known}),
-            steps=steps[:MAX_STEPS],
+            trigger=Trigger(**trigger_data),
+            steps=steps,
             enabled=bool(data.get("enabled", True)),
             description=str(data.get("description") or "")[:300],
             id=str(data.get("id") or uuid.uuid4().hex[:12]),
+            links=links,
         )
+
+
+def _coord(value: Any) -> float | None:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if -100000 < number < 100000 else None
+
+
+def run_order(workflow: Workflow) -> list[int]:
+    """Step indexes in the order they can run: each after every step that leads into it,
+    left to right on the canvas when it doesn't matter. Steps the trigger can't reach
+    (not linked, or only in a loop) are left out."""
+    links = workflow.graph()
+    reach = {TRIGGER_ID}
+    grew = True
+    while grew:
+        grew = False
+        for link in links:
+            if link.src in reach and link.dst not in reach:
+                reach.add(link.dst)
+                grew = True
+    index = {step.id: i for i, step in enumerate(workflow.steps)}
+    waiting = {
+        step.id: {link.src for link in links if link.dst == step.id and link.src in reach}
+        for step in workflow.steps
+        if step.id in reach
+    }
+    done = {TRIGGER_ID}
+    order: list[int] = []
+    while True:
+        ready = [sid for sid, before in waiting.items() if before <= done]
+        if not ready:
+            break
+        ready.sort(key=lambda sid: (workflow.steps[index[sid]].x or 0.0, index[sid]))
+        sid = ready[0]
+        del waiting[sid]
+        done.add(sid)
+        order.append(index[sid])
+    return order
+
+
+def would_loop(workflow: Workflow, src: str, dst: str) -> bool:
+    """True when a link from ``src`` to ``dst`` would make a loop."""
+    if src == dst:
+        return True
+    links = workflow.graph()
+    stack, seen = [dst], set()
+    while stack:
+        node = stack.pop()
+        if node == src:
+            return True
+        if node in seen:
+            continue
+        seen.add(node)
+        stack += [link.dst for link in links if link.src == node]
+    return False
 
 
 # --- the actions ---
@@ -131,15 +280,36 @@ class Setting:
     hint: str = ""
 
 
+GROUPS = (
+    "Gmail",
+    "Calendar",
+    "Notes & memory",
+    "Tasks & reminders",
+    "JARVIS AI",
+    "Web & info",
+    "Apps & files",
+    "Messaging",
+    "PC",
+    "Core",
+)
+
+
 @dataclass(frozen=True)
 class Action:
     name: str
-    title: str  # in the builder's Add menu
+    title: str  # in the builder's node panel
     settings: tuple[Setting, ...]
     describe: Callable[[dict[str, Any]], str]
     tool: str = ""  # the JARVIS tool it runs ("" = handled by the runner itself)
     args: Callable[[dict[str, Any]], dict[str, Any]] | None = None
-    group: str = "Do"
+    group: str = "Core"
+    icon: str = ""  # drawn by the builder (see jarvis/ui/node_icons.py)
+    # Asks JARVIS (with its tools) this request instead of running one tool.
+    request: Callable[[dict[str, Any]], str] | None = None
+    outputs: tuple[str, ...] = ("out",)
+    shows: bool = False  # its result goes in the reply
+    speaks: bool = False  # ... and is said out loud
+    blurb: str = ""  # one line in the node panel
 
 
 def _get(settings: dict[str, Any], key: str, default: Any = "") -> Any:
@@ -171,6 +341,68 @@ def _tool_args(settings: dict[str, Any]) -> dict[str, Any]:
     return raw if isinstance(raw, dict) else {}
 
 
+def _count_setting(
+    settings: dict[str, Any], default: int, key: str = "count", top: int = 25
+) -> int:
+    try:
+        return max(1, min(top, int(float(_get(settings, key, default)))))
+    except (TypeError, ValueError):
+        return default
+
+
+_TESTS = {
+    "contains": "contains",
+    "doesn't contain": "doesn't contain",
+    "is empty": "is empty",
+    "isn't empty": "isn't empty",
+    "equals": "is exactly",
+    "number above": "is a number above",
+    "number below": "is a number below",
+    "has errors": "says something failed",
+}
+
+
+def _describe_condition(settings: dict[str, Any]) -> str:
+    test = str(_get(settings, "test", "contains"))
+    value = str(_get(settings, "value", "{previous}"))
+    subject = "the result" if value.strip() == "{previous}" else f"“{value[:30]}”"
+    words = _TESTS.get(test, test)
+    if test in ("is empty", "isn't empty", "has errors"):
+        return f"If {subject} {words}"
+    return f"If {subject} {words} “{_get(settings, 'compare', '')}”"
+
+
+def condition_met(settings: dict[str, Any]) -> bool:
+    """An "If" node's answer (its settings already filled in)."""
+    value = str(settings.get("value", "") or "")
+    compare = str(settings.get("compare", "") or "").strip()
+    test = str(_get(settings, "test", "contains"))
+    low, wanted = value.lower(), compare.lower()
+    if test == "contains":
+        return bool(wanted) and wanted in low
+    if test == "doesn't contain":
+        return not wanted or wanted not in low
+    if test == "is empty":
+        return not value.strip()
+    if test == "isn't empty":
+        return bool(value.strip())
+    if test == "equals":
+        return " ".join(low.split()) == " ".join(wanted.split())
+    if test in ("number above", "number below"):
+        found = re.search(r"-?\d[\d,]*(?:\.\d+)?", value)
+        try:
+            number = float(found.group(0).replace(",", "")) if found else None
+            limit = float(compare.replace(",", ""))
+        except ValueError:
+            return False
+        if number is None:
+            return False
+        return number > limit if test == "number above" else number < limit
+    if test == "has errors":
+        return bool(re.search(r"\b(fail|failed|error|couldn't|can't|cannot|unable)\b", low))
+    return False
+
+
 _ACTIONS: list[Action] = [
     Action(
         "open_folder",
@@ -179,7 +411,8 @@ _ACTIONS: list[Action] = [
         lambda s: f"Open the folder {_get(s, 'folder', '?')}",
         "open_path",
         lambda s: {"path": _get(s, "folder")},
-        "Open",
+        group="Apps & files",
+        icon="folder",
     ),
     Action(
         "open_file",
@@ -188,7 +421,8 @@ _ACTIONS: list[Action] = [
         lambda s: f"Open {Path(str(_get(s, 'file', '?'))).name}",
         "open_path",
         lambda s: {"path": _get(s, "file")},
-        "Open",
+        group="Apps & files",
+        icon="file",
     ),
     Action(
         "open_app",
@@ -197,7 +431,8 @@ _ACTIONS: list[Action] = [
         lambda s: f"Open {_get(s, 'app', '?')}",
         "open_app",
         lambda s: {"name": _get(s, "app")},
-        "Open",
+        group="Apps & files",
+        icon="app",
     ),
     Action(
         "open_website",
@@ -206,7 +441,8 @@ _ACTIONS: list[Action] = [
         lambda s: f"Open {_get(s, 'url', '?')}",
         "open_url",
         lambda s: {"url": _get(s, "url")},
-        "Open",
+        group="Web & info",
+        icon="globe",
     ),
     Action(
         "show_tasks",
@@ -222,7 +458,9 @@ _ACTIONS: list[Action] = [
         ),
         "list_tasks",
         lambda s: {"project": _get(s, "project"), "kind": _get(s, "kind", "task")},
-        "Show",
+        group="Tasks & reminders",
+        icon="list",
+        shows=True,
     ),
     Action(
         "add_task",
@@ -239,7 +477,8 @@ _ACTIONS: list[Action] = [
             "project": _get(s, "project"),
             "due": _get(s, "due"),
         },
-        "Do",
+        group="Tasks & reminders",
+        icon="check",
     ),
     Action(
         "start_timer",
@@ -251,7 +490,8 @@ _ACTIONS: list[Action] = [
         lambda s: f"Start a {_minutes(s):g}-minute timer",
         "set_reminder",
         lambda s: {"text": _get(s, "label", "Time's up"), "in_minutes": _minutes(s)},
-        "Do",
+        group="Tasks & reminders",
+        icon="timer",
     ),
     Action(
         "show_checklist",
@@ -261,21 +501,29 @@ _ACTIONS: list[Action] = [
             Setting("items", "Items (one per line)", "list", True),
         ),
         lambda s: f"Show the checklist “{_get(s, 'title', 'Checklist')}” ({len(_items(s))} items)",
-        group="Show",
+        group="Core",
+        icon="list",
+        shows=True,
     ),
     Action(
         "say",
         "Say something",
         (Setting("text", "What to say", "long", True),),
         lambda s: f"Say “{str(_get(s, 'text', ''))[:60]}”",
-        group="Show",
+        group="Core",
+        icon="speaker",
+        shows=True,
+        speaks=True,
     ),
     Action(
         "briefing",
         "Morning briefing (weather, news, calendar, tasks)",
         (),
         lambda s: "Give the briefing: weather, headlines, calendar, tasks",
-        group="Show",
+        group="JARVIS AI",
+        icon="sun",
+        shows=True,
+        speaks=True,
     ),
     Action(
         "note",
@@ -284,7 +532,8 @@ _ACTIONS: list[Action] = [
         lambda s: f"Save the note “{_get(s, 'title', '?')}”",
         "save_note",
         lambda s: {"title": _get(s, "title"), "text": _get(s, "text")},
-        "Do",
+        group="Notes & memory",
+        icon="note",
     ),
     Action(
         "find_files",
@@ -296,7 +545,8 @@ _ACTIONS: list[Action] = [
         lambda s: f"Find files named “{_get(s, 'name', '?')}” in {_get(s, 'folder', 'documents')}",
         "find_items",
         lambda s: {"name": _get(s, "name"), "folder": _get(s, "folder", "documents")},
-        "Files",
+        group="Apps & files",
+        icon="search",
     ),
     Action(
         "read_document",
@@ -305,7 +555,8 @@ _ACTIONS: list[Action] = [
         lambda s: f"Read {Path(str(_get(s, 'file', '?'))).name}",
         "read_document",
         lambda s: {"path": _get(s, "file")},
-        "Files",
+        group="Apps & files",
+        icon="file",
     ),
     Action(
         "save_text",
@@ -317,14 +568,19 @@ _ACTIONS: list[Action] = [
         lambda s: f"Save {Path(str(_get(s, 'path', '?'))).name}",
         "save_text",
         lambda s: {"path": _get(s, "path"), "text": _get(s, "text", "{previous}")},
-        "Files",
+        group="Apps & files",
+        icon="save",
     ),
     Action(
         "ask_jarvis",
-        "Ask JARVIS (it can use its tools)",
+        "Ask JARVIS",
         (Setting("request", "Request", "long", True, hint="Use {previous} for the last result"),),
         lambda s: str(_get(s, "request", "Ask JARVIS"))[:80],
-        group="Think",
+        group="JARVIS AI",
+        icon="spark",
+        shows=True,
+        speaks=True,
+        blurb="Any request, in your words; it can use all its tools",
     ),
     Action(
         "make_presentation",
@@ -344,7 +600,8 @@ _ACTIONS: list[Action] = [
             "slides": int(float(_get(s, "slides", 10))),
             "source_file": _get(s, "source_file"),
         },
-        "Think",
+        group="JARVIS AI",
+        icon="deck",
     ),
     Action(
         "research",
@@ -356,7 +613,9 @@ _ACTIONS: list[Action] = [
         lambda s: f"Research “{str(_get(s, 'question', '?'))[:60]}”",
         "research",
         lambda s: {"question": _get(s, "question"), "depth": _get(s, "depth", "quick")},
-        "Think",
+        group="JARVIS AI",
+        icon="search",
+        shows=True,
     ),
     Action(
         "study_document",
@@ -389,7 +648,9 @@ _ACTIONS: list[Action] = [
             "task": _get(s, "task", "summary"),
             "question": _get(s, "question"),
         },
-        "Think",
+        group="JARVIS AI",
+        icon="book",
+        shows=True,
     ),
     Action(
         "write_document",
@@ -414,36 +675,44 @@ _ACTIONS: list[Action] = [
             "kind": _get(s, "kind", "report"),
             "length": _get(s, "length", "medium"),
         },
-        "Think",
+        group="JARVIS AI",
+        icon="pen",
     ),
     Action(
         "check_email",
-        "Check email (read-only)",
+        "Check email",
         (
             Setting("count", "How many", "number", default=10),
             Setting("unread_only", "Unread only", "bool", default=True),
+            Setting("query", "With words (optional)", hint="e.g. invoice, from:Priya"),
         ),
-        lambda s: "Check email",
+        lambda s: "Check email" + (f" for “{_get(s, 'query')}”" if _get(s, "query") else ""),
         "check_email",
         lambda s: {
-            "count": int(float(_get(s, "count", 10))),
+            "count": _count_setting(s, 10),
             "unread_only": bool(s.get("unread_only", True)),
+            "query": _get(s, "query"),
         },
-        "Show",
+        group="Gmail",
+        icon="mail",
+        shows=True,
     ),
     Action(
         "confirm",
         "Ask me before going on",
         (Setting("question", "Question", required=True, default="Shall I carry on?"),),
         lambda s: f"Ask: {_get(s, 'question', 'Shall I carry on?')}",
-        group="Flow",
+        group="Core",
+        icon="question",
+        outputs=("yes", "no"),
     ),
     Action(
         "wait",
         "Wait",
         (Setting("seconds", "Seconds", "number", True, 5),),
         lambda s: f"Wait {_get(s, 'seconds', 5)} seconds",
-        group="Flow",
+        group="Core",
+        icon="timer",
     ),
     Action(
         "tool",
@@ -453,7 +722,403 @@ _ACTIONS: list[Action] = [
             Setting("arguments", "Arguments (JSON)", "long", default="{}"),
         ),
         lambda s: f"Run {_get(s, 'name', '?')}",
-        group="Flow",
+        group="Core",
+        icon="gear",
+    ),
+    # --- Gmail (any IMAP mailbox; read-only, replies only ever go to Drafts) ---
+    Action(
+        "email_summary",
+        "Summarise my inbox",
+        (
+            Setting("count", "How many emails", "number", default=15),
+            Setting("focus", "Focus on (optional)", hint="e.g. college, invoices, from Priya"),
+        ),
+        lambda s: "Summarise the inbox" + (f" ({_get(s, 'focus')})" if _get(s, "focus") else ""),
+        group="Gmail",
+        icon="mail",
+        request=lambda s: (
+            f"Check my unread email (up to {_count_setting(s, 15)} messages) and read the "
+            "ones that look important"
+            + (f", especially anything about {_get(s, 'focus')}" if _get(s, "focus") else "")
+            + ". Summarise in a few lines, then list the action items with any deadlines, "
+            "and say which messages need a reply. Don't draft replies."
+        ),
+        shows=True,
+        speaks=True,
+        blurb="Reads unread mail and sums it up with action items",
+    ),
+    Action(
+        "email_drafts",
+        "Draft email replies",
+        (
+            Setting(
+                "which", "Which emails", required=True, default="unread emails that need a reply"
+            ),
+            Setting(
+                "how", "How to reply", "long", hint="e.g. polite, short, say I'll reply Monday"
+            ),
+        ),
+        lambda s: f"Draft replies to {_get(s, 'which', 'emails')}",
+        group="Gmail",
+        icon="reply",
+        request=lambda s: (
+            f"Find these in my email: {_get(s, 'which', 'unread emails that need a reply')}. "
+            "Read each one and save a reply draft for it with draft_reply (drafts are saved "
+            "to the Drafts folder and never sent)."
+            + (f" How to reply: {_get(s, 'how')}." if _get(s, "how") else "")
+            + " Then list the drafts you saved."
+        ),
+        shows=True,
+        blurb="Writes replies into Drafts after you say yes; never sends",
+    ),
+    Action(
+        "email_tasks",
+        "Turn emails into tasks",
+        (Setting("count", "How many emails", "number", default=15),),
+        lambda s: "Add tasks from the inbox",
+        group="Gmail",
+        icon="check",
+        request=lambda s: (
+            f"Check my unread email (up to {_count_setting(s, 15)} messages), find the "
+            "concrete things I need to do, and add each one as a task with add_task "
+            "(with the due date if the email gives one). Then list what you added."
+        ),
+        shows=True,
+        blurb="Finds to-dos in unread mail and adds them as tasks",
+    ),
+    # --- Calendar (read-only iCal) ---
+    Action(
+        "agenda",
+        "My day (calendar + tasks)",
+        (
+            Setting("when", "Day", default="today", hint="today, tomorrow, monday"),
+            Setting("review", "Review the day instead", "bool", default=False),
+        ),
+        lambda s: ("Review " if s.get("review") else "Agenda for ") + str(_get(s, "when", "today")),
+        "my_day",
+        lambda s: {"when": _get(s, "when", "today"), "review": bool(s.get("review", False))},
+        group="Calendar",
+        icon="calendar",
+        shows=True,
+        blurb="Events, tasks due and reminders for one day",
+    ),
+    Action(
+        "calendar_events",
+        "Upcoming events",
+        (
+            Setting("start", "From", default="today", hint="today, tomorrow, 2026-11-02"),
+            Setting("days", "Days ahead", "number", default=7),
+        ),
+        lambda s: (
+            f"Events for {_count_setting(s, 7, 'days')} days from {_get(s, 'start', 'today')}"
+        ),
+        "calendar_events",
+        lambda s: {"start": _get(s, "start", "today"), "days": _count_setting(s, 7, "days", 31)},
+        group="Calendar",
+        icon="calendar",
+        shows=True,
+        blurb="What's on your calendar in the coming days",
+    ),
+    # --- Notes & memory ---
+    Action(
+        "search_notes",
+        "Search my notes and memory",
+        (Setting("query", "Look for", required=True, hint="e.g. plant ideas, Arjun's birthday"),),
+        lambda s: f"Search notes for “{_get(s, 'query', '?')}”",
+        "recall_memory",
+        lambda s: {"query": _get(s, "query")},
+        group="Notes & memory",
+        icon="search",
+        shows=True,
+        blurb="Notes, day logs, facts, tasks and ideas that match",
+    ),
+    Action(
+        "remember",
+        "Remember a fact",
+        (
+            Setting("topic", "About", required=True, hint="e.g. gym_days"),
+            Setting("fact", "Fact", "long", True),
+        ),
+        lambda s: f"Remember {_get(s, 'topic', '?')}",
+        "remember",
+        lambda s: {"topic": _get(s, "topic"), "fact": _get(s, "fact")},
+        group="Notes & memory",
+        icon="brain",
+        blurb="Keeps a fact JARVIS will know from now on",
+    ),
+    # --- Tasks & reminders ---
+    Action(
+        "complete_task",
+        "Tick off a task",
+        (Setting("text", "Task", required=True, hint="words from the task"),),
+        lambda s: f"Tick off “{_get(s, 'text', '?')}”",
+        "complete_task",
+        lambda s: {"text": _get(s, "text")},
+        group="Tasks & reminders",
+        icon="check",
+    ),
+    Action(
+        "reminder",
+        "Set a reminder",
+        (
+            Setting("text", "Remind me to", required=True),
+            Setting("at", "When", required=True, hint="5 pm, tomorrow 9:00, in 2 hours"),
+            Setting(
+                "repeat",
+                "Repeat",
+                "choice",
+                default="never",
+                choices=("never", "daily", "weekdays", "weekly", "monthly"),
+            ),
+        ),
+        lambda s: f"Remind: {_get(s, 'text', '?')} ({_get(s, 'at', '?')})",
+        "set_reminder",
+        lambda s: {
+            "text": _get(s, "text"),
+            "at": _get(s, "at"),
+            "repeat": "" if _get(s, "repeat") == "never" else _get(s, "repeat"),
+        },
+        group="Tasks & reminders",
+        icon="bell",
+    ),
+    # --- JARVIS AI ---
+    Action(
+        "summarise",
+        "Summarise text",
+        (
+            Setting("text", "Text", "long", True, "{previous}"),
+            Setting(
+                "style",
+                "As",
+                "choice",
+                default="bullets",
+                choices=("bullets", "paragraph", "one line"),
+            ),
+        ),
+        lambda s: f"Summarise as {_get(s, 'style', 'bullets')}",
+        group="JARVIS AI",
+        icon="spark",
+        request=lambda s: (
+            {
+                "bullets": "Summarise this in up to five bullet points",
+                "paragraph": "Summarise this in one short paragraph",
+                "one line": "Sum this up in one line",
+            }.get(str(_get(s, "style", "bullets")), "Summarise this")
+            + ". Use only what it says; don't use tools.\n\n"
+            + str(_get(s, "text"))
+        ),
+        shows=True,
+        speaks=True,
+        blurb="Shortens the previous result (or any text)",
+    ),
+    Action(
+        "translate",
+        "Translate text",
+        (
+            Setting("text", "Text", "long", True, "{previous}"),
+            Setting("language", "Into", required=True, default="Hindi"),
+        ),
+        lambda s: f"Translate into {_get(s, 'language', '?')}",
+        group="JARVIS AI",
+        icon="globe",
+        request=lambda s: (
+            f"Translate this into {_get(s, 'language', 'English')}. Reply with only the "
+            "translation; don't use tools.\n\n" + str(_get(s, "text"))
+        ),
+        shows=True,
+    ),
+    Action(
+        "action_items",
+        "Pull out action items",
+        (
+            Setting("text", "From", "long", True, "{previous}"),
+            Setting("add_tasks", "Add them as tasks", "bool", default=False),
+        ),
+        lambda s: "Find the action items" + (" and add tasks" if s.get("add_tasks") else ""),
+        group="JARVIS AI",
+        icon="list",
+        request=lambda s: (
+            "List the concrete action items in this, each with its owner and deadline if "
+            "given."
+            + (" Add each one for me with add_task." if s.get("add_tasks") else " Don't use tools.")
+            + "\n\n"
+            + str(_get(s, "text"))
+        ),
+        shows=True,
+    ),
+    # --- Web & info ---
+    Action(
+        "weather",
+        "Weather",
+        (Setting("place", "Place (optional)", hint="blank = your home city"),),
+        lambda s: "Weather" + (f" in {_get(s, 'place')}" if _get(s, "place") else ""),
+        "get_weather",
+        lambda s: {"place": _get(s, "place")},
+        group="Web & info",
+        icon="cloud",
+        shows=True,
+        speaks=True,
+    ),
+    Action(
+        "news",
+        "News headlines",
+        (Setting("topic", "About", default="top stories", hint="e.g. cricket, AI, Kerala"),),
+        lambda s: f"News: {_get(s, 'topic', 'top stories')}",
+        "look_up",
+        lambda s: {"query": _get(s, "topic", "top stories"), "kind": "news"},
+        group="Web & info",
+        icon="news",
+        shows=True,
+    ),
+    Action(
+        "web_search",
+        "Search the web",
+        (Setting("query", "Search for", required=True),),
+        lambda s: f"Search the web for “{_get(s, 'query', '?')}”",
+        "look_up",
+        lambda s: {"query": _get(s, "query"), "kind": "search"},
+        group="Web & info",
+        icon="search",
+        shows=True,
+    ),
+    Action(
+        "price",
+        "Price check",
+        (Setting("name", "Of", required=True, hint="Nifty, gold, bitcoin, Reliance"),),
+        lambda s: f"Price of {_get(s, 'name', '?')}",
+        "get_price",
+        lambda s: {"name": _get(s, "name")},
+        group="Web & info",
+        icon="chart",
+        shows=True,
+        speaks=True,
+    ),
+    Action(
+        "wikipedia",
+        "Wikipedia summary",
+        (Setting("topic", "Topic", required=True),),
+        lambda s: f"Wikipedia: {_get(s, 'topic', '?')}",
+        "wikipedia",
+        lambda s: {"topic": _get(s, "topic")},
+        group="Web & info",
+        icon="book",
+        shows=True,
+    ),
+    Action(
+        "youtube",
+        "Play on YouTube",
+        (Setting("query", "Play", required=True, hint="e.g. lofi study music"),),
+        lambda s: f"Play “{_get(s, 'query', '?')}” on YouTube",
+        "play_youtube",
+        lambda s: {"query": _get(s, "query")},
+        group="Web & info",
+        icon="play",
+    ),
+    # --- Messaging ---
+    Action(
+        "whatsapp",
+        "Send a WhatsApp message",
+        (
+            Setting("contact", "To", required=True, hint="the name as saved in WhatsApp"),
+            Setting("message", "Message", "long", True),
+        ),
+        lambda s: f"WhatsApp {_get(s, 'contact', '?')}",
+        "send_whatsapp",
+        lambda s: {"contact": _get(s, "contact"), "message": _get(s, "message")},
+        group="Messaging",
+        icon="chat",
+        blurb="Asks you before it sends, every time",
+    ),
+    # --- PC ---
+    Action(
+        "volume",
+        "Set the volume",
+        (Setting("percent", "Volume %", "number", True, 30),),
+        lambda s: f"Volume to {_count_setting(s, 30, 'percent', 100)}%",
+        "set_volume",
+        lambda s: {"percent": _count_setting(s, 30, "percent", 100)},
+        group="PC",
+        icon="speaker",
+    ),
+    Action(
+        "dark_mode",
+        "Dark or light mode",
+        (Setting("on", "Dark mode", "bool", default=True),),
+        lambda s: "Dark mode on" if s.get("on", True) else "Light mode on",
+        "set_dark_mode",
+        lambda s: {"on": bool(s.get("on", True))},
+        group="PC",
+        icon="moon",
+    ),
+    Action(
+        "check_pc",
+        "PC health check",
+        (
+            Setting(
+                "area",
+                "Check",
+                "choice",
+                default="general",
+                choices=("general", "slow", "network", "storage", "battery", "crashes"),
+            ),
+        ),
+        lambda s: f"Check the PC ({_get(s, 'area', 'general')})",
+        "check_pc",
+        lambda s: {"area": _get(s, "area", "general")},
+        group="PC",
+        icon="pulse",
+        shows=True,
+    ),
+    Action(
+        "close_app",
+        "Close an app",
+        (Setting("app", "App", required=True),),
+        lambda s: f"Close {_get(s, 'app', '?')}",
+        "close_app",
+        lambda s: {"name": _get(s, "app")},
+        group="PC",
+        icon="close",
+    ),
+    Action(
+        "tidy_desktop",
+        "Tidy the desktop",
+        (),
+        lambda s: "Tidy the desktop into folders",
+        "organize_desktop",
+        lambda s: {},
+        group="PC",
+        icon="folder",
+    ),
+    Action(
+        "lock_pc",
+        "Lock the PC",
+        (),
+        lambda s: "Lock the PC",
+        "lock_pc",
+        lambda s: {},
+        group="PC",
+        icon="lock",
+    ),
+    # --- Core ---
+    Action(
+        "condition",
+        "If",
+        (
+            Setting("value", "Check", "long", default="{previous}"),
+            Setting(
+                "test",
+                "It",
+                "choice",
+                default="contains",
+                choices=tuple(_TESTS),
+            ),
+            Setting("compare", "Value", hint="the words or number to compare with"),
+        ),
+        lambda s: _describe_condition(s),
+        group="Core",
+        icon="branch",
+        outputs=("true", "false"),
+        blurb="Goes one way or the other (true / false)",
     ),
 ]
 ACTIONS: dict[str, Action] = {action.name: action for action in _ACTIONS}
@@ -472,15 +1137,23 @@ def tool_call(step: Step) -> tuple[str, dict[str, Any]] | None:
     return spec.tool, args
 
 
-def fill(value: Any, outputs: list[str], variables: dict[str, str] | None = None) -> Any:
+def fill(
+    value: Any,
+    outputs: list[str],
+    variables: dict[str, str] | None = None,
+    previous: str | None = None,
+) -> Any:
     """``{previous}``, ``{step 2}``, ``{today}`` in a setting, replaced by earlier output;
-    ``{file}`` (the file that started a folder workflow) and other ``variables`` too."""
+    ``{file}`` (the file that started a folder workflow) and other ``variables`` too.
+    ``previous`` is the output of the node that led here (default: the last output)."""
     if not isinstance(value, str):
         return value
 
     def swap(match: re.Match[str]) -> str:
         key = match.group(1).strip().lower()
         if key == "previous":
+            if previous is not None:
+                return previous
             return outputs[-1] if outputs else ""
         if key == "today":
             return datetime.now().strftime("%A %d %B %Y")
@@ -494,8 +1167,14 @@ def fill(value: Any, outputs: list[str], variables: dict[str, str] | None = None
     return re.sub(r"\{([a-z ]+\d*)\}", swap, value)
 
 
-def filled(step: Step, outputs: list[str], variables: dict[str, str] | None = None) -> Step:
-    return Step(step.action, {k: fill(v, outputs, variables) for k, v in step.settings.items()})
+def filled(
+    step: Step,
+    outputs: list[str],
+    variables: dict[str, str] | None = None,
+    previous: str | None = None,
+) -> Step:
+    settings = {k: fill(v, outputs, variables, previous) for k, v in step.settings.items()}
+    return Step(step.action, settings, step.id, step.x, step.y)
 
 
 def checklist_text(settings: dict[str, Any]) -> str:
@@ -717,9 +1396,152 @@ def starters() -> list[Workflow]:
     ]
 
 
+def _linked(
+    name: str,
+    trigger: Trigger,
+    steps: list[Step],
+    links: list[tuple[int, str, int]],
+    description: str,
+) -> Workflow:
+    """A workflow with branches: ``links`` are (from step, output, to step), -1 being
+    the trigger."""
+    ids = [step.id for step in steps]
+    return Workflow(
+        name,
+        trigger,
+        steps,
+        description=description,
+        links=[Link(TRIGGER_ID if a < 0 else ids[a], port, ids[b]) for a, port, b in links],
+    )
+
+
+def _canvas_templates() -> list[Workflow]:
+    """The newer templates, which use Gmail, Calendar, notes and If branches."""
+    return [
+        Workflow(
+            "Inbox zero",
+            Trigger("phrase", ["inbox zero", "clear my inbox", "deal with my email"]),
+            [
+                Step("email_summary", {"count": 20}),
+                Step("email_tasks", {"count": 20}),
+                Step("confirm", {"question": "Shall I draft replies to the ones that need one?"}),
+                Step(
+                    "email_drafts",
+                    {"which": "unread emails that need a reply", "how": "short and friendly"},
+                ),
+            ],
+            description="Gmail: sums up unread mail, adds its to-dos as tasks, then drafts "
+            "replies into Drafts if you say yes. Nothing is ever sent.",
+        ),
+        _linked(
+            "Rain check",
+            Trigger("time", at="07:30", days=["mon", "tue", "wed", "thu", "fri"]),
+            [
+                Step("weather", {}),
+                Step("condition", {"value": "{previous}", "test": "contains", "compare": "rain"}),
+                Step("say", {"text": "Rain is likely today. Take an umbrella."}),
+                Step("say", {"text": "No rain expected today."}),
+            ],
+            [(-1, "out", 0), (0, "out", 1), (1, "true", 2), (1, "false", 3)],
+            "If: checks the weather on weekday mornings and tells you whether to take an umbrella.",
+        ),
+        Workflow(
+            "Meeting prep",
+            Trigger("phrase", ["prepare for my meetings", "meeting prep", "prep my meetings"]),
+            [
+                Step("agenda", {"when": "today"}),
+                Step(
+                    "ask_jarvis",
+                    {
+                        "request": "For each meeting in this agenda, search my notes and "
+                        "email for anything related, then give me a short brief per "
+                        "meeting: what it's about, what I promised, and what to ask.\n\n"
+                        "{previous}"
+                    },
+                ),
+                Step("note", {"title": "Meeting prep {today}", "text": "{previous}"}),
+            ],
+            description="Calendar: today's meetings, a brief for each from your notes and "
+            "mail, saved as a note.",
+        ),
+        Workflow(
+            "Focus mode",
+            Trigger("phrase", ["focus mode", "deep work", "start a focus session"]),
+            [
+                Step("dark_mode", {"on": True}),
+                Step("volume", {"percent": 25}),
+                Step("youtube", {"query": "lofi focus music"}),
+                Step("start_timer", {"minutes": 50, "label": "Focus session done. Stretch."}),
+                Step("show_tasks", {}),
+            ],
+            description="Dark mode, quieter sound, focus music, a 50-minute timer and your tasks.",
+        ),
+        Workflow(
+            "Scan reader",
+            Trigger("folder", folder="downloads", pattern="*.pdf", event="new"),
+            [
+                Step("study_document", {"file": "{file}", "task": "key_points"}),
+                Step("note", {"title": "PDF notes {today}", "text": "{previous}"}),
+                Step("say", {"text": "I've read the new PDF and saved its key points."}),
+            ],
+            description="Watchtower: when a PDF lands in Downloads, its key points are "
+            "saved as a note.",
+        ),
+        _linked(
+            "PC check-up",
+            Trigger("time", at="18:00", days=["fri"]),
+            [
+                Step("check_pc", {"area": "general"}),
+                Step("condition", {"value": "{previous}", "test": "has errors"}),
+                Step(
+                    "ask_jarvis",
+                    {
+                        "request": "Explain these PC check results in plain words and "
+                        "suggest the simplest fixes:\n{previous}"
+                    },
+                ),
+                Step("say", {"text": "Your PC looks healthy this week."}),
+            ],
+            [(-1, "out", 0), (0, "out", 1), (1, "true", 2), (1, "false", 3)],
+            "If: a Friday health check; explains anything wrong, or tells you all's well.",
+        ),
+        Workflow(
+            "Weekly review",
+            Trigger("time", at="17:30", days=["fri"]),
+            [
+                Step(
+                    "ask_jarvis",
+                    {
+                        "request": "Review my week: call recall_work for 'this week', then "
+                        "say what got done, what's still open and the three priorities for "
+                        "next week. Don't invent anything."
+                    },
+                ),
+                Step("note", {"title": "Week review {today}", "text": "{previous}"}),
+                Step("action_items", {"text": "{step 1}", "add_tasks": False}),
+            ],
+            description="Fridays: what got done, what's open and next week's priorities, "
+            "kept in your notes.",
+        ),
+        Workflow(
+            "Shut down for the day",
+            Trigger("phrase", ["shut down for the day", "i'm done for the day", "end my day"]),
+            [
+                Step("ask_jarvis", {"request": _REVIEW_DAY}),
+                Step("note", {"title": "Day review {today}", "text": "{previous}"}),
+                Step("tidy_desktop", {}),
+                Step("lock_pc", {}),
+            ],
+            description="Reviews the day, saves it, tidies the desktop and locks the PC "
+            "(both ask first).",
+        ),
+    ]
+
+
 def templates() -> list[Workflow]:
     return [
         *starters(),
+        *_canvas_templates(),
         Workflow(
             "Study Mode",
             Trigger("phrase", ["activate study mode", "start study mode", "study mode"]),

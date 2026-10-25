@@ -141,22 +141,34 @@ python -m jarvis --hidden   # starts in the tray
   "what ideas did I have about robots?" work too. Kept on your PC with the rest of
   JARVIS's memory. Requests for another app ("create a task in Notion…") are left to
   that app.
-- **Workflows.** One phrase, several steps. Open the builder from the tray (Workflows…)
-  or say "open the workflow builder": pick what starts it (a phrase you say, a time of
-  day, JARVIS starting, or only when you run it), add steps from the menu (open a
-  folder, file, app or website, show pending tasks, start a timer, show a checklist,
-  say something, give the briefing, save a note, find files, read a document, save
-  text, ask JARVIS, make a deck, ask before going on, wait, or run any tool), edit
-  their settings, drag or move them up and down, Test, then Save. Templates: Study Mode,
-  Start work, Development environment and Prepare my presentation. Or describe it:
-  "Whenever I start work, open my project folder and show my pending tasks." JARVIS
-  shows the workflow it would make and saves it only if you say yes. Then saying
-  "activate study mode" runs every step on the card, ticking each off; risky steps
-  still ask first, an "ask before going on" step you say no to skips the rest, and a
-  step can use the one before it (`{previous}`, `{step 2}`, `{today}`), so a workflow
-  can be a **command chain** (find the sources, pull out the key points, write the
-  outline, save it, make the deck). Workflows live in `workflows.json` in JARVIS's data
-  folder.
+- **Workflows.** One phrase, several steps, built on a node canvas like n8n's. Open the
+  builder from the tray (Workflows…) or say "open the workflow builder". The trigger
+  (a phrase you say, a time of day, JARVIS starting, a file arriving in a folder, or
+  only when you run it) sits on the left with a bolt; press + (or Tab, or the + at the
+  end of any node) to add the next node from the panel: **Gmail** (check email,
+  summarise my inbox, draft replies into Drafts, turn emails into tasks), **Calendar**
+  (my day, upcoming events), **Notes & memory** (save a note, search notes, remember a
+  fact), **Tasks & reminders**, **JARVIS AI** (ask JARVIS, summarise, translate, pull
+  out action items, research, study a document, write a document, make a deck, the
+  briefing), **Web & info** (weather, news, web search, prices, Wikipedia, YouTube),
+  **Apps & files**, **Messaging** (WhatsApp, asks every time), **PC** (volume, dark
+  mode, health check, close an app, tidy the desktop, lock) and **Core** (say, show a
+  checklist, wait, ask me yes/no, **If** with true/false outputs, any tool). Drag
+  nodes around, drag from a node's dot to another to link them (or to empty canvas to
+  add a node there), hover a link and click its ✕ to remove it; the right-hand panel
+  edits the selected node as you type. Zoom, fit, tidy up, undo/redo sit bottom left;
+  **Test workflow** runs it as it stands while each node lights up and the log fills;
+  Save keeps it. Templates (a gallery of cards): Inbox zero, Rain check (If), Meeting
+  prep, Focus mode, Scan reader (folder), PC check-up (If), Weekly review, Shut down
+  for the day, Study Mode, Start work, Development environment, Research brief,
+  Prepare my presentation and more. Or describe it: "Whenever I start work, open my
+  project folder and show my pending tasks." JARVIS shows the workflow it would make
+  and saves it only if you say yes. Then saying "activate study mode" runs every step
+  on the card, ticking each off; risky steps still ask first, and a node can use the
+  result of the one before it (`{previous}`, `{step 2}`, `{today}`, `{file}`), so a
+  workflow can be a **command chain** (find the sources, pull out the key points,
+  write the outline, save it, make the deck). Workflows live in `workflows.json` in
+  JARVIS's data folder; older ones without links still run in order.
 
 - **Recall.** "Continue the project I worked on yesterday", "where did I leave off with
   the robot arm?", "what was I working on last week?": JARVIS gathers that period's day

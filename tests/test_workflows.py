@@ -13,16 +13,21 @@ import pytest
 from jarvis.agent.assistant import Assistant, ConfirmRequest
 from jarvis.agent.workflows import (
     ACTIONS,
+    TRIGGER_ID,
+    Link,
     ProposalError,
     Step,
     Trigger,
     Workflow,
     WorkflowStore,
+    condition_met,
     fill,
     parse_proposal,
+    run_order,
     templates,
     tool_call,
     workflow_request,
+    would_loop,
 )
 from jarvis.app.config import ToolSettings
 from jarvis.app.events import EntryKind, PlanUpdated, StepStatus
@@ -290,3 +295,144 @@ async def test_tasks_and_ideas(tmp_path: Path) -> None:
     assert "plant care" in ideas.data["ideas"][0]
     assert (await registry.run(done, {"text": "essay"})).ok
     assert (await registry.run(listed, {})).summary == "No pending tasks."
+
+
+# --- the canvas: links, branches and node kinds ---
+
+
+def branching() -> Workflow:
+    steps = [
+        Step("say", {"text": "Rain is likely after 3 pm."}),
+        Step("condition", {"value": "{previous}", "test": "contains", "compare": "rain"}),
+        Step("say", {"text": "Take an umbrella."}),
+        Step("say", {"text": "No umbrella needed."}),
+    ]
+    ids = [s.id for s in steps]
+    return Workflow(
+        "Rain",
+        Trigger("phrase", ["rain check"]),
+        steps,
+        links=[
+            Link(TRIGGER_ID, "out", ids[0]),
+            Link(ids[0], "out", ids[1]),
+            Link(ids[1], "true", ids[2]),
+            Link(ids[1], "false", ids[3]),
+        ],
+    )
+
+
+def test_old_workflows_run_in_order_and_canvas_ones_keep_their_links() -> None:
+    old = Workflow.from_json(study_mode().to_json())
+    assert old.links is None and "links" not in old.to_json()
+    assert run_order(old) == [0, 1, 2, 3]
+    assert [link.dst for link in old.graph()] == [s.id for s in old.steps]
+    flow = branching()
+    flow.steps[2].x, flow.steps[2].y = 360.0, -80.0
+    again = Workflow.from_json(json.loads(json.dumps(flow.to_json())))
+    assert again.links == flow.links and again.steps[2].x == 360.0
+    assert [s.id for s in again.steps] == [s.id for s in flow.steps]
+    # A step nothing leads to doesn't run, and links can't make loops.
+    flow.steps.append(Step("say", {"text": "Alone"}))
+    assert sorted(run_order(flow)) == [0, 1, 2, 3]
+    assert "not connected" in flow.describe()
+    assert would_loop(flow, flow.steps[3].id, flow.steps[0].id)
+    assert not would_loop(flow, flow.steps[0].id, flow.steps[4].id)
+    # Links to steps that don't exist are dropped when loading.
+    data = flow.to_json()
+    data["links"].append({"src": "nope", "port": "out", "dst": flow.steps[0].id})
+    assert len(Workflow.from_json(data).links or []) == 4
+
+
+@pytest.mark.parametrize(
+    ("settings", "met"),
+    [
+        ({"value": "Light rain at 4 pm", "test": "contains", "compare": "rain"}, True),
+        ({"value": "Sunny", "test": "contains", "compare": "rain"}, False),
+        ({"value": "Sunny", "test": "doesn't contain", "compare": "rain"}, True),
+        ({"value": "", "test": "is empty"}, True),
+        ({"value": "3 unread", "test": "isn't empty"}, True),
+        ({"value": " Done ", "test": "equals", "compare": "done"}, True),
+        ({"value": "Nifty is at 24,310.5", "test": "number above", "compare": "24000"}, True),
+        ({"value": "Gold ₹7,100 per gram", "test": "number below", "compare": "7000"}, False),
+        ({"value": "no number", "test": "number above", "compare": "1"}, False),
+        ({"value": "The check failed: disk full", "test": "has errors"}, True),
+        ({"value": "All good", "test": "has errors"}, False),
+    ],
+)
+def test_if_nodes(settings: dict[str, Any], met: bool) -> None:
+    assert condition_met(settings) is met
+
+
+def test_every_node_runs_a_tool_that_exists() -> None:
+    source = "\n".join(p.read_text(encoding="utf-8") for p in Path("jarvis").rglob("*.py"))
+    for action in ACTIONS.values():
+        if action.tool:
+            assert f'"{action.tool}",' in source, action.name
+    groups = {action.group for action in ACTIONS.values()}
+    assert {"Gmail", "Calendar", "Notes & memory", "Tasks & reminders"} <= groups
+
+
+async def test_an_if_node_takes_one_branch(tmp_path: Path) -> None:
+    rig = WorkflowRig(tmp_path, ScriptedRouter())
+    flow = branching()
+    rig.workflows.put(flow)
+    reply = await rig.assistant.handle("rain check")
+    assert reply.text.startswith("Rain is done.") and "No umbrella" not in reply.text
+    assert reply.text.split("\n\n")[-1] == "Take an umbrella."
+    final = rig.plans[-1]
+    assert final.workflow_id == flow.id and final.ids == tuple(s.id for s in flow.steps)
+    assert [s.status for s in final.steps] == [
+        StepStatus.DONE,
+        StepStatus.DONE,
+        StepStatus.DONE,
+        StepStatus.SKIPPED,
+    ]
+    assert final.steps[1].note == "True"
+
+
+async def test_a_no_branch_runs_when_you_say_no(tmp_path: Path) -> None:
+    rig = WorkflowRig(tmp_path, ScriptedRouter(), approve=False)
+    steps = [
+        Step("confirm", {"question": "Draft replies?"}),
+        Step("say", {"text": "Drafting."}),
+        Step("say", {"text": "Fine, no drafts."}),
+    ]
+    ids = [s.id for s in steps]
+    links = [
+        Link(TRIGGER_ID, "out", ids[0]),
+        Link(ids[0], "yes", ids[1]),
+        Link(ids[0], "no", ids[2]),
+    ]
+    rig.workflows.put(Workflow("Ask", Trigger("phrase", ["ask me"]), steps, links=links))
+    reply = await rig.assistant.handle("ask me")
+    statuses = [s.status for s in rig.plans[-1].steps]
+    assert statuses == [StepStatus.DONE, StepStatus.SKIPPED, StepStatus.DONE]
+    assert reply.text.split("\n\n")[-1] == "Fine, no drafts."
+
+
+async def test_ai_nodes_ask_jarvis_with_the_previous_result(tmp_path: Path) -> None:
+    router = ScriptedRouter(text_reply("- Growth doubled"))
+    rig = WorkflowRig(tmp_path, router)
+    rig.workflows.put(
+        Workflow(
+            "Sum up",
+            Trigger("phrase", ["sum it up"]),
+            [
+                Step("say", {"text": "Sales grew from 10 to 20 this year."}),
+                Step("summarise", {"text": "{previous}", "style": "bullets"}),
+            ],
+        )
+    )
+    reply = await rig.assistant.handle("sum it up")
+    asked = router.requests[0]["messages"][-1]["content"]
+    assert asked.startswith("Summarise this in up to five bullet points")
+    assert asked.endswith("Sales grew from 10 to 20 this year.")
+    assert "Growth doubled" in reply.text
+
+
+def test_every_template_is_ready_to_save() -> None:
+    from jarvis.ui.workflows import problems
+
+    for template in templates():
+        assert problems(template) == [], template.name
+        assert len(run_order(template)) == len(template.steps), template.name
