@@ -615,7 +615,7 @@ class Assistant:
         name, args = call
         tool = ToolCall(f"workflow_{index}", name, args)
         outcome = await self._screen(tool, await self._run_tool(tool))
-        shown = step.action == "show_tasks" and outcome.ok
+        shown = outcome.ok and step.action in _SHOWN_ACTIONS
         return outcome.ok, outcome.summary, _result_text(outcome), shown
 
     async def _propose_workflow(self, conversation: int, shown: str, text: str) -> Reply:
@@ -989,6 +989,10 @@ _OPEN_BUILDER = re.compile(
     r"(?:the\s+|my\s+)?(?:workflow builder|workflows|routines|command chains)\W*$",
     re.IGNORECASE,
 )
+
+
+# Workflow steps whose results go in the reply (the rest show on the plan card only).
+_SHOWN_ACTIONS = frozenset({"show_tasks", "check_email", "study_document", "research"})
 
 
 def _result_text(outcome: ToolResult) -> str:

@@ -347,6 +347,91 @@ _ACTIONS: list[Action] = [
         "Think",
     ),
     Action(
+        "research",
+        "Research a question (cited report)",
+        (
+            Setting("question", "Question", "long", True),
+            Setting("depth", "Depth", "choice", default="quick", choices=("quick", "deep")),
+        ),
+        lambda s: f"Research “{str(_get(s, 'question', '?'))[:60]}”",
+        "research",
+        lambda s: {"question": _get(s, "question"), "depth": _get(s, "depth", "quick")},
+        "Think",
+    ),
+    Action(
+        "study_document",
+        "Summarise or question a document",
+        (
+            Setting("file", "File", "file", True, hint="or 'upload' to pick one each time"),
+            Setting(
+                "task",
+                "What to do",
+                "choice",
+                default="summary",
+                choices=(
+                    "summary",
+                    "key_points",
+                    "action_items",
+                    "answer",
+                    "explain",
+                    "study_notes",
+                ),
+            ),
+            Setting("question", "Question (for 'answer')"),
+        ),
+        lambda s: (
+            f"{str(_get(s, 'task', 'summary')).replace('_', ' ').capitalize()} of "
+            f"{Path(str(_get(s, 'file', 'a document'))).name}"
+        ),
+        "study_document",
+        lambda s: {
+            "file": _get(s, "file"),
+            "task": _get(s, "task", "summary"),
+            "question": _get(s, "question"),
+        },
+        "Think",
+    ),
+    Action(
+        "write_document",
+        "Write a document (Word)",
+        (
+            Setting("brief", "What to write", "long", True, hint="Use {previous} for notes"),
+            Setting(
+                "kind",
+                "Kind",
+                "choice",
+                default="report",
+                choices=("report", "letter", "email", "essay", "article", "proposal", "notes"),
+            ),
+            Setting(
+                "length", "Length", "choice", default="medium", choices=("short", "medium", "long")
+            ),
+        ),
+        lambda s: f"Write a {_get(s, 'kind', 'report')}",
+        "write_document",
+        lambda s: {
+            "brief": _get(s, "brief"),
+            "kind": _get(s, "kind", "report"),
+            "length": _get(s, "length", "medium"),
+        },
+        "Think",
+    ),
+    Action(
+        "check_email",
+        "Check email (read-only)",
+        (
+            Setting("count", "How many", "number", default=10),
+            Setting("unread_only", "Unread only", "bool", default=True),
+        ),
+        lambda s: "Check email",
+        "check_email",
+        lambda s: {
+            "count": int(float(_get(s, "count", 10))),
+            "unread_only": bool(s.get("unread_only", True)),
+        },
+        "Show",
+    ),
+    Action(
         "confirm",
         "Ask me before going on",
         (Setting("question", "Question", required=True, default="Shall I carry on?"),),
@@ -689,6 +774,25 @@ def templates() -> list[Workflow]:
                 Step("open_website", {"url": "https://github.com"}),
             ],
             description="App launcher: your editor, project folder and GitHub in one go.",
+        ),
+        Workflow(
+            "Research brief",
+            Trigger("phrase", ["research brief"]),
+            [
+                Step("research", {"question": "What changed this year in my field?"}),
+                Step(
+                    "ask_jarvis",
+                    {
+                        "request": "From this research, give me the five things that matter "
+                        "most and one thing to do about each:\n{previous}"
+                    },
+                ),
+                Step(
+                    "note",
+                    {"title": "Research brief {today}", "text": "{previous}"},
+                ),
+            ],
+            description="Command chain: research → the five things that matter → a note.",
         ),
         Workflow(
             "Prepare my presentation",
