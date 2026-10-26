@@ -349,6 +349,15 @@ class WatchtowerSettings(BaseModel):
     calendar_minutes: int = Field(default=10, ge=1, le=120)
 
 
+class WorkflowSettings(BaseModel):
+    """Owner, 2026-10-26: "i dont want it to ask for permission for any workflows"."""
+
+    # False: a workflow's steps run without asking (MEDIUM, logins and sends included);
+    # HIGH steps (shutdown, run_python, deleting a folder) still need CONFIRM typed, and
+    # "Ask me before going on" nodes still ask.
+    ask_first: bool = False
+
+
 class MemorySettings(BaseModel):
     """Long-term memory as Markdown notes (a folder you can open in Obsidian)."""
 
@@ -414,6 +423,7 @@ class Settings(BaseModel):
     slides: SlideSettings = Field(default_factory=SlideSettings)
     routing: RoutingSettings = Field(default_factory=RoutingSettings)
     watchtower: WatchtowerSettings = Field(default_factory=WatchtowerSettings)
+    workflows: WorkflowSettings = Field(default_factory=WorkflowSettings)
 
 
 def load_settings(path: Path | None = None) -> Settings:

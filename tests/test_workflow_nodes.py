@@ -110,8 +110,9 @@ async def test_a_keyboard_step_presses_each_key_in_order(tmp_path: Path) -> None
     assert rig.confirms == []  # ordinary keys never ask
 
 
-async def test_risky_keys_ask_once_for_the_whole_step(tmp_path: Path) -> None:
+async def test_risky_keys_ask_once_when_workflows_ask_first(tmp_path: Path) -> None:
     rig = WorkflowRig(tmp_path, ScriptedRouter())
+    rig.assistant._workflow_asks = lambda: True
     rig.workflows.put(
         Workflow(
             "Send it",
@@ -126,10 +127,37 @@ async def test_risky_keys_ask_once_for_the_whole_step(tmp_path: Path) -> None:
 
     (tmp_path / "no").mkdir()
     no = WorkflowRig(tmp_path / "no", ScriptedRouter(), approve=False)
+    no.assistant._workflow_asks = lambda: True
     no.workflows.put(rig.workflows.all[0])
     await no.assistant.handle("send it")
     assert [c for c in no.desktop.calls if c[0] in ("press", "type")] == []
     assert no.plans[-1].steps[0].status is StepStatus.FAILED
+
+
+async def test_workflows_run_without_asking_by_default(tmp_path: Path) -> None:
+    rig = WorkflowRig(tmp_path, ScriptedRouter())
+    filler, _ = _with_logins(rig)
+    rig.workflows.put(
+        Workflow(
+            "Go",
+            Trigger("phrase", ["go"]),
+            [
+                Step("keys", {"items": "type: hello\nenter"}),
+                Step("login", {"login": "College portal"}),
+                Step("tool", {"name": "lock_pc"}),
+                Step(
+                    "tool", {"name": "shutdown_or_restart_pc", "arguments": '{"action": "restart"}'}
+                ),
+            ],
+        )
+    )
+    await rig.assistant.handle("go")
+    assert [c for c in rig.desktop.calls if c[0] in ("press", "lock")] == [
+        ("press", ("enter",)),
+        ("lock", None),
+    ]
+    assert filler.filled == [("Student Login", "s1234", "hunter2", True)]
+    assert [c.tool for c in rig.confirms] == ["shutdown_or_restart_pc"]  # HIGH still asks
 
 
 async def test_a_failing_action_stops_the_json_step(tmp_path: Path) -> None:
@@ -187,6 +215,7 @@ def _with_logins(rig: WorkflowRig) -> tuple[FakeFiller, MemoryLogins]:
 
 async def test_a_login_step_fills_in_the_saved_login_after_a_yes(tmp_path: Path) -> None:
     rig = WorkflowRig(tmp_path, ScriptedRouter())
+    rig.assistant._workflow_asks = lambda: True
     filler, logins = _with_logins(rig)
     assert logins.all()[0].password == ""  # listing never carries passwords
     rig.workflows.put(
@@ -487,3 +516,19 @@ def test_the_new_nodes_are_in_the_panel_and_the_tools_are_one_pill(
     builder.inspector.show_workflow(builder.current)
     chips = [w.text() for w in builder.inspector.findChildren(QLabel) if w.objectName() == "chip"]
     assert chips[:2] == ["Tab", "Del"]
+
+
+def test_the_builder_panels_can_be_resized(qapp: Any, tmp_path: Path) -> None:
+    builder = _builder(tmp_path, SavedKeys(), MemoryLogins())
+    builder.resize(1400, 820)
+    builder.show()
+    qapp.processEvents()
+    assert builder.splitter.count() == 3
+    builder.splitter.setSizes([320, 600, 480])
+    qapp.processEvents()
+    sidebar, _canvas, inspector = builder.splitter.sizes()
+    assert sidebar > 280 and inspector > 420  # no longer fixed widths
+    builder.toggle_logs()
+    qapp.processEvents()
+    assert builder.canvas_split.sizes()[1] >= 150
+    builder.close()

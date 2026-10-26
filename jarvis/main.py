@@ -259,6 +259,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         workflows=workflows,
         briefing=lambda: briefing.compose(datetime.now().astimezone()),
         on_open_workflows=lambda tab: open_workflows(tab),
+        workflow_asks=lambda: settings.workflows.ask_first,
     )
     speaker = Speaker(
         settings.voice.tts_voice,

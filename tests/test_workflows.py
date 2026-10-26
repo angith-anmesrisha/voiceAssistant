@@ -227,6 +227,7 @@ async def test_command_chain_passes_results_to_the_next_step(tmp_path: Path) -> 
 
 async def test_medium_risk_steps_still_ask(tmp_path: Path) -> None:
     rig = WorkflowRig(tmp_path, ScriptedRouter(), approve=False)
+    rig.assistant._workflow_asks = lambda: True  # settings.workflows.ask_first
     rig.workflows.put(
         Workflow("Bedtime", Trigger("phrase", ["bedtime"]), [Step("tool", {"name": "lock_pc"})])
     )

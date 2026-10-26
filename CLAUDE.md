@@ -227,6 +227,13 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   links (known ports, no loops, from the trigger, else in order) and drops any
   password/token-like setting; `workflow_request` also takes "make me a … workflow",
   "I want a workflow…", "automate …".
+- Workflows don't ask (owner, 2026-10-26: "i dont want it to ask for permission for any
+  workflows"): `workflows.ask_first` (default False) → workflow tool steps and
+  keys/typing/JSON steps run with `_run_tool(approved=Risk.MEDIUM)`, logins and sends
+  included. HIGH steps still need CONFIRM typed, "Ask me before going on" nodes still
+  ask, saving a workflow JARVIS proposed still asks, and actions a model chooses inside
+  agent nodes (AI click, drafts…) keep their usual confirmations. Builder panels sit in
+  `QSplitter`s (sidebar | canvas | settings, canvas over logs), sizes kept per session.
 - Quick capture: `commands.capture_command` (idea:/add a task…/todo:/add X to my Y
   tasks/quick note:) → `add_task` or `save_note` "Inbox" in `_handle` before the deck
   check, no model (mode "capture"); a trailing due ("by friday", "tomorrow") is split

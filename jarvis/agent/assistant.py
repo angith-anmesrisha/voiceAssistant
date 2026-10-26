@@ -202,6 +202,7 @@ class Assistant:
         workflows: WorkflowStore | None = None,
         briefing: Callable[[], Awaitable[str]] | None = None,
         on_open_workflows: Callable[[str], None] | None = None,
+        workflow_asks: Callable[[], bool] | None = None,
     ) -> None:
         self._router = router
         self._store = store
@@ -223,6 +224,8 @@ class Assistant:
         self.workflows = workflows
         self._briefing = briefing
         self._on_open_workflows = on_open_workflows
+        # Whether workflow steps ask before MEDIUM actions (owner: they don't).
+        self._workflow_asks = workflow_asks or (lambda: False)
         self._on_text: Callable[[str], None] | None = None  # this turn's live reply sink
         self._streamed = False
         self._writes: set[asyncio.Task[None]] = set()
@@ -664,14 +667,17 @@ class Assistant:
             return False, f"Unknown action “{step.action}”", "", False, "out"
         name, args = call
         tool = ToolCall(f"workflow_{index}", name, args)
-        outcome = await self._screen(tool, await self._run_tool(tool, workflow=True))
+        allowed = None if self._workflow_asks() else Risk.MEDIUM
+        outcome = await self._screen(
+            tool, await self._run_tool(tool, workflow=True, approved=allowed)
+        )
         return outcome.ok, outcome.summary, _result_text(outcome), outcome.ok and spec.shows, "out"
 
     async def _workflow_calls(
         self, index: int, step: Any, previous: str
     ) -> tuple[bool, str, str, bool, str]:
-        """A keyboard, typing or JSON node: several tool calls after one question that
-        lists them all (asked when any of them would ask; HIGH ones still ask again)."""
+        """A keyboard, typing or JSON node: several tool calls, after one question that
+        lists them all when workflows ask first (HIGH ones always ask themselves)."""
         try:
             calls = step_calls(step)
         except StepError as exc:
@@ -691,8 +697,8 @@ class Assistant:
                 return False, f"{name}: {exc}", "", False, "out"
             risk = max(risk, spec.risk_for(clean))
             lines.append(spec.describe(clean))
-        approved: Risk | None = None
-        if risk >= Risk.MEDIUM:
+        approved: Risk | None = None if self._workflow_asks() else Risk.MEDIUM
+        if risk >= Risk.MEDIUM and approved is None:
             listed = "; ".join(lines[:8])
             if len(lines) > 8:
                 listed += f"; and {len(lines) - 8} more"

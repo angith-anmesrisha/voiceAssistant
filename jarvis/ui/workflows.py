@@ -51,6 +51,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSplitter,
     QStyle,
     QStyledItemDelegate,
     QVBoxLayout,
@@ -169,6 +170,8 @@ QLabel#chip {{ background: {theme.css(theme.BG_DEEP)}; color: {theme.css(theme.I
 QLabel#help {{ color: {theme.css(theme.TEXT_DIM)}; font-size: 9pt;
   border: 1px solid {theme.css(theme.rgba(theme.STEEL, 120))}; border-radius: 9px;
   padding: 1px 7px; }}
+QSplitter::handle {{ background: {theme.css(theme.rgba(theme.CYAN, 22))}; }}
+QSplitter::handle:hover {{ background: {theme.css(theme.rgba(theme.CYAN, 120))}; }}
 QScrollArea {{ border: none; background: transparent; }}
 QScrollBar:vertical {{ background: transparent; width: 8px; }}
 QScrollBar::handle:vertical {{ background: {theme.css(theme.rgba(theme.STEEL, 120))};
@@ -620,7 +623,8 @@ class Inspector(QFrame):
         super().__init__()
         self._builder = builder
         self.setObjectName("panel")
-        self.setFixedWidth(340)
+        self.setMinimumWidth(280)  # the splitter handle on its left resizes it
+        self.setMaximumWidth(720)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         self.area = QScrollArea()
@@ -1078,7 +1082,8 @@ class WorkflowBuilder(QWidget):
         # Left: the saved workflows.
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(240)
+        sidebar.setMinimumWidth(170)
+        sidebar.setMaximumWidth(460)
         left = QVBoxLayout(sidebar)
         left.setContentsMargins(14, 16, 14, 14)
         title = QLabel("WORKFLOWS")
@@ -1113,7 +1118,11 @@ class WorkflowBuilder(QWidget):
         grid.addWidget(self.duplicate_button, 1, 0)
         grid.addWidget(self.delete_button, 1, 1)
         left.addLayout(grid)
-        root.addWidget(sidebar)
+        # Every panel can be resized by dragging the lines between them.
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.setChildrenCollapsible(False)
+        self.splitter.setHandleWidth(5)
+        self.splitter.addWidget(sidebar)
 
         # Middle: top bar, canvas, logs.
         middle = QVBoxLayout()
@@ -1154,7 +1163,11 @@ class WorkflowBuilder(QWidget):
         self.pane.add_button.clicked.connect(lambda: self.open_palette())
         self.pane.run_button.clicked.connect(self.test)
         self.pane.node_panel.chosen.connect(self._palette_chosen)
-        middle.addWidget(self.pane, 1)
+        self.canvas_split = QSplitter(Qt.Orientation.Vertical)
+        self.canvas_split.setChildrenCollapsible(False)
+        self.canvas_split.setHandleWidth(5)
+        self.canvas_split.addWidget(self.pane)
+        middle.addWidget(self.canvas_split, 1)
 
         self.logs = QFrame()
         self.logs.setObjectName("logs")
@@ -1174,20 +1187,28 @@ class WorkflowBuilder(QWidget):
         logs_box.addLayout(logs_head)
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        self.log.setFixedHeight(130)
+        self.log.setMinimumHeight(60)
         self.log.setFont(theme.font(theme.BODY_FAMILY, 9))
         self.log.setVisible(False)
         self._logs_open = False
         logs_box.addWidget(self.log)
-        middle.addWidget(self.logs)
+        self.canvas_split.addWidget(self.logs)
+        self.canvas_split.setStretchFactor(0, 1)
+        self.canvas_split.setStretchFactor(1, 0)
         holder = QWidget()
         holder.setLayout(middle)
         holder.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        root.addWidget(holder, 1)
+        holder.setMinimumWidth(420)
+        self.splitter.addWidget(holder)
 
         # Right: settings.
         self.inspector = Inspector(self)
-        root.addWidget(self.inspector)
+        self.splitter.addWidget(self.inspector)
+        self.splitter.setStretchFactor(0, 0)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setStretchFactor(2, 0)
+        self.splitter.setSizes([240, 700, 340])
+        root.addWidget(self.splitter)
 
         self.scene.node_selected.connect(self._node_selected)
         self.scene.nodes_moved.connect(self._nodes_moved)
@@ -1838,6 +1859,9 @@ class WorkflowBuilder(QWidget):
         self._logs_open = not self._logs_open
         self.log.setVisible(self._logs_open)
         self.logs_toggle.setText("Hide" if self._logs_open else "Show")
+        if self._logs_open:  # open at a useful height; drag the line above to resize
+            total = sum(self.canvas_split.sizes())
+            self.canvas_split.setSizes([max(200, total - 190), 190])
 
     def save(self) -> bool:
         if self._current is None:
