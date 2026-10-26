@@ -234,6 +234,11 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   ask, saving a workflow JARVIS proposed still asks, and actions a model chooses inside
   agent nodes (AI click, drafts…) keep their usual confirmations. Builder panels sit in
   `QSplitter`s (sidebar | canvas | settings, canvas over logs), sizes kept per session.
+  Save is never greyed out: a press with something missing says what (state label) and
+  goes there (`_point_to`: trigger field, the step, or the node panel); a phrase trigger
+  with no phrase takes the workflow's name. Saved logins can be edited (pick one; a
+  blank password keeps it); a rename updates `login` steps in saved workflows
+  (`rename_login`).
 - Quick capture: `commands.capture_command` (idea:/add a task…/todo:/add X to my Y
   tasks/quick note:) → `add_task` or `save_note` "Inbox" in `_handle` before the deck
   check, no model (mode "capture"); a trailing due ("by friday", "tomorrow") is split

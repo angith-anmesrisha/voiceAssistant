@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import copy
 import json
+import re
 from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
@@ -233,7 +234,7 @@ def problems(workflow: Workflow) -> list[str]:
         found.append("Give it a name.")
     trigger = workflow.trigger
     if trigger.kind == "phrase" and not [p for p in trigger.phrases if p.strip()]:
-        found.append("Add at least one phrase that starts it.")
+        found.append("Add a phrase that starts it (Save uses the name if there is none).")
     if trigger.kind == "time" and parse_clock(trigger.at) is None:
         found.append("Set the time as HH:MM, e.g. 07:30.")
     if trigger.kind == "folder" and not trigger.folder.strip():
@@ -1304,7 +1305,7 @@ class WorkflowBuilder(QWidget):
         if self.connections is None:
             return
         dialog: QDialog = (
-            LoginsDialog(self, self.connections)
+            LoginsDialog(self, self.connections, self.rename_login)
             if service == "logins"
             else ConnectDialog(self, self.connections, service)
         )
@@ -1315,6 +1316,29 @@ class WorkflowBuilder(QWidget):
             step = self._current.step(showing)
             if step is not None:
                 self.inspector.show_step(self._current, step)
+
+    def rename_login(self, old: str, new: str) -> None:
+        """A saved login was renamed: workflows that use it follow."""
+
+        def follow(workflow: Workflow) -> bool:
+            changed = False
+            for step in workflow.steps:
+                login = str(step.settings.get("login") or "")
+                if step.action == "login" and login.strip().lower() == old.strip().lower():
+                    step.settings["login"] = new
+                    changed = True
+            return changed
+
+        for workflow in self._store.all:
+            if follow(workflow):
+                self._store.put(workflow)
+        if self._current is not None:
+            was_clean = not self.dirty
+            if follow(self._current):
+                if was_clean:
+                    self._saved = self._json()
+                self._draw()
+                self._update_state()
 
     def _row_of(self, workflow_id: str) -> int:
         for i in range(self.list.count()):
@@ -1471,7 +1495,8 @@ class WorkflowBuilder(QWidget):
         self.state.setToolTip("\n".join(found))
         self.state.style().unpolish(self.state)
         self.state.style().polish(self.state)
-        self.save_button.setEnabled(not found)
+        # Always pressable: a press with something missing says what and goes there.
+        self.save_button.setEnabled(True)
         self.save_button.setToolTip("\n".join(found) or "Save (Ctrl+S)")
         self.pane.run_button.setEnabled(bool(run_order(self._current)))
 
@@ -1866,13 +1891,52 @@ class WorkflowBuilder(QWidget):
     def save(self) -> bool:
         if self._current is None:
             return False
-        found = problems(self._current)
+        workflow = self._current
+        trigger = workflow.trigger
+        if trigger.kind == "phrase" and not any(p.strip() for p in trigger.phrases):
+            # A new workflow's phrase defaults to its name ("valorant").
+            name = " ".join(workflow.name.split()).lower()
+            if name and name != "new workflow":
+                self._remember()
+                trigger.phrases = [name]
+                self._draw()
+        found = problems(workflow)
         if found:
-            self._say(found[0])
-            self.inspector.show_workflow(self._current)
+            self._point_to(found[0])
+            self._update_state()
+            self._say("⚠ " + found[0])
             return False
-        self._store.put(copy.deepcopy(self._current))
+        self._store.put(copy.deepcopy(workflow))
         self._saved = self._json()
-        self.refresh(self._current.id)
+        self.refresh(workflow.id)
         self._update_state()
+        if trigger.kind == "phrase" and trigger.phrases:
+            self.state.setText(f"✓ SAVED · SAY “{trigger.phrases[0].upper()}”")
         return True
+
+    def _point_to(self, problem: str) -> None:
+        """Show where ``problem`` (from :func:`problems`) is fixed."""
+        if problem.startswith("Give it a name"):
+            self.name.setFocus()
+            self.name.selectAll()
+        elif problem.startswith("Add at least one step"):
+            self.select_node("")
+            self.open_palette()
+        elif problem.startswith(("Add a phrase", "Set the time", "Choose the folder")):
+            self.select_node(TRIGGER_ID)
+            field = next(
+                (
+                    self.inspector.fields[k]
+                    for k in ("phrases", "at", "folder")
+                    if k in self.inspector.fields
+                ),
+                None,
+            )
+            if field is not None:
+                field.setFocus()
+        elif number := re.match(r"Step (\d+)", problem):
+            index = int(number.group(1)) - 1
+            if self._current is not None and 0 <= index < len(self._current.steps):
+                self.select_node(self._current.steps[index].id)
+        else:
+            self.inspector.show_workflow(self._current)

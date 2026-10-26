@@ -532,3 +532,62 @@ def test_the_builder_panels_can_be_resized(qapp: Any, tmp_path: Path) -> None:
     qapp.processEvents()
     assert builder.canvas_split.sizes()[1] >= 150
     builder.close()
+
+
+def test_save_is_never_greyed_out_and_points_to_what_is_missing(qapp: Any, tmp_path: Path) -> None:
+    from jarvis.agent.workflows import WorkflowStore
+    from jarvis.ui.workflows import WorkflowBuilder
+
+    store = WorkflowStore(tmp_path / "workflows.json")
+    builder = WorkflowBuilder(store, lambda _w: None)
+    builder.new_workflow()
+    builder.name.setText("Valorant")
+    assert builder.save_button.isEnabled()
+    assert not builder.save()  # no steps yet: the node panel opens
+    assert "Add at least one step" in builder.state.text()
+    assert not builder.pane.node_panel.isHidden()
+    step = add_from_panel(builder, "open_app")
+    assert not builder.save()
+    assert builder.inspector.showing == step.id  # its missing setting is shown
+    builder.set_setting(step.id, "app", "Riot Client")
+    assert builder.save()
+    saved = store.all[0]
+    assert saved.name == "Valorant" and saved.trigger.phrases == ["valorant"]
+    assert "SAY “VALORANT”" in builder.state.text()
+
+
+def test_a_saved_login_can_be_changed_without_retyping_it(qapp: Any, tmp_path: Path) -> None:
+    from jarvis.ui.connections import LoginsDialog
+
+    logins = MemoryLogins()
+    logins.put(Login("Valorant", "Riot Client", "angith", "old-pass"))
+    builder = _builder(tmp_path, SavedKeys(), logins)
+    builder._store.put(
+        Workflow("Play", Trigger("phrase", ["play"]), [Step("login", {"login": "valorant"})])
+    )
+    dialog = LoginsDialog(builder, builder.connections, builder.rename_login)
+    dialog.list.setCurrentRow(0)
+    assert dialog.name.text() == "Valorant" and dialog.username.text() == "angith"
+    assert dialog.password.text() == ""  # never shown
+    dialog.username.setText("angith2")
+    dialog.add()  # blank password: kept
+    saved = logins.get("Valorant")
+    assert saved is not None and (saved.username, saved.password) == ("angith2", "old-pass")
+    assert len(logins.all()) == 1 and "Updated" in dialog.note.text()
+
+    dialog.list.setCurrentRow(0)
+    dialog.name.setText("Riot")
+    dialog.password.setText("new-pass")
+    dialog.add()
+    assert [x.name for x in logins.all()] == ["Riot"]
+    riot = logins.get("Riot")
+    assert riot is not None and riot.password == "new-pass"
+    play = next(w for w in builder._store.all if w.name == "Play")
+    assert play.steps[0].settings["login"] == "Riot"  # the workflow follows the rename
+
+    dialog.start_new()
+    dialog.name.setText("riot")
+    dialog.site.setText("x")
+    dialog.username.setText("y")
+    dialog.add()
+    assert "already a login" in dialog.note.text() and len(logins.all()) == 1

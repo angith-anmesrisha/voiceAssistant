@@ -273,11 +273,20 @@ class ConnectDialog(QDialog):
 
 
 class LoginsDialog(QDialog):
-    """Saved logins for the "Fill in a login" node: add and remove."""
+    """Saved logins for the "Fill in a login" node: add, edit and remove. Pick one in
+    the list to change it; a blank password keeps the saved one. ``on_renamed`` is told
+    when a login's name changes, so workflows using it can follow."""
 
-    def __init__(self, parent: QWidget | None, connections: Connections) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None,
+        connections: Connections,
+        on_renamed: Callable[[str, str], None] | None = None,
+    ) -> None:
         super().__init__(parent)
         self._logins = connections.logins
+        self._on_renamed = on_renamed
+        self._editing: str | None = None  # the name of the login being changed
         self.setWindowTitle("Saved logins")
         self.setMinimumWidth(480)
         layout = QVBoxLayout(self)
@@ -288,19 +297,29 @@ class LoginsDialog(QDialog):
         layout.addWidget(heading)
         about = QLabel(
             "Kept in Windows Credential Manager, encrypted for your Windows account. A login "
-            "is only typed into a window whose title contains its window words, after you "
-            "say yes. No AI ever sees it."
+            "is only typed into a window whose title contains its window words, and only by "
+            "a workflow. No AI ever sees it. Pick one below to change it."
         )
         about.setWordWrap(True)
         about.setObjectName("hint")
         layout.addWidget(about)
         self.list = QListWidget()
         self.list.setFixedHeight(120)
+        self.list.currentItemChanged.connect(lambda item, _old: self._pick(item))
         layout.addWidget(self.list)
+        row = QHBoxLayout()
+        self.new_button = QPushButton("+ New login")
+        self.new_button.clicked.connect(self.start_new)
+        row.addWidget(self.new_button)
+        row.addStretch(1)
         remove = QPushButton("Remove selected")
         remove.setObjectName("danger")
         remove.clicked.connect(self.remove_selected)
-        layout.addWidget(remove, 0, Qt.AlignmentFlag.AlignRight)
+        row.addWidget(remove)
+        layout.addLayout(row)
+        self.form_title = QLabel("NEW LOGIN")
+        self.form_title.setObjectName("section")
+        layout.addWidget(self.form_title)
         form = QFormLayout()
         form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
         self.name = QLineEdit()
@@ -328,40 +347,90 @@ class LoginsDialog(QDialog):
         buttons.addStretch(1)
         done = QPushButton("Done")
         done.clicked.connect(self.accept)
-        add = QPushButton("Save login")
-        add.setObjectName("primary")
-        add.clicked.connect(self.add)
+        self.save_button = QPushButton("Save login")
+        self.save_button.setObjectName("primary")
+        self.save_button.clicked.connect(self.add)
         buttons.addWidget(done)
-        buttons.addWidget(add)
+        buttons.addWidget(self.save_button)
         layout.addLayout(buttons)
         self.refresh()
 
-    def refresh(self) -> None:
+    def refresh(self, select: str | None = None) -> None:
+        self.list.blockSignals(True)
         self.list.clear()
         for login in self._logins.all():
             item = QListWidgetItem(login.describe())
             item.setData(Qt.ItemDataRole.UserRole, login.name)
             self.list.addItem(item)
+            if select is not None and login.name.lower() == select.lower():
+                self.list.setCurrentItem(item)
+        self.list.blockSignals(False)
+
+    def _pick(self, item: QListWidgetItem | None) -> None:
+        """Fill the form with the chosen login (never its password)."""
+        if item is None:
+            return
+        name = str(item.data(Qt.ItemDataRole.UserRole))
+        login = next((x for x in self._logins.all() if x.name == name), None)
+        if login is None:
+            return
+        self._editing = login.name
+        self.name.setText(login.name)
+        self.site.setText(login.site)
+        self.username.setText(login.username)
+        self.password.clear()
+        self.password.setPlaceholderText("Saved; leave blank to keep it")
+        self.form_title.setText(f"CHANGE “{login.name.upper()}”")
+        self.save_button.setText("Save changes")
+        self.note.setText("")
+
+    def start_new(self) -> None:
+        self._editing = None
+        self.list.blockSignals(True)
+        self.list.clearSelection()
+        self.list.setCurrentRow(-1)
+        self.list.blockSignals(False)
+        for box in (self.name, self.site, self.username, self.password):
+            box.clear()
+        self.password.setPlaceholderText("")
+        self.form_title.setText("NEW LOGIN")
+        self.save_button.setText("Save login")
+        self.name.setFocus()
 
     def add(self) -> None:
+        """Save the form: a new login, or changes to the one picked."""
         name, site = self.name.text().strip(), self.site.text().strip()
         username, password = self.username.text().strip(), self.password.text()
+        old = self._editing
+        if old is not None and not password:
+            kept = self._logins.get(old)
+            password = kept.password if kept is not None else ""
         if not (name and site and (username or password)):
             self.note.setText("Give it a name, the window title words and the login.")
             return
+        renamed = old is not None and old.strip().lower() != name.lower()
+        if (old is None or renamed) and any(
+            x.name.lower() == name.lower() for x in self._logins.all()
+        ):
+            self.note.setText(f"There's already a login called “{name}”. Pick it to change it.")
+            return
         try:
             self._logins.put(Login(name, site, username, password))
+            if renamed and old is not None:
+                self._logins.remove(old)
         except Exception as exc:
             self.note.setText(f"Couldn't save it ({type(exc).__name__}).")
             return
-        for box in (self.name, self.site, self.username, self.password):
-            box.clear()
-        self.note.setText(f"Saved “{name}”.")
+        if renamed and old is not None and self._on_renamed is not None:
+            self._on_renamed(old, name)
+        self.start_new()
         self.refresh()
+        self.note.setText(f"Updated “{name}”." if old is not None else f"Saved “{name}”.")
 
     def remove_selected(self) -> None:
         item = self.list.currentItem()
         if item is None:
             return
         self._logins.remove(str(item.data(Qt.ItemDataRole.UserRole)))
+        self.start_new()
         self.refresh()

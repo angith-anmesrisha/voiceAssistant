@@ -179,7 +179,7 @@ def test_the_canvas_builder_links_tests_and_saves(qapp: QApplication, tmp_path: 
     builder = WorkflowBuilder(store, tested.append)
     builder.show()
     builder.new_workflow()
-    assert not builder.save_button.isEnabled()  # no phrase, no steps
+    assert builder.save_button.isEnabled()  # always; a press says what is missing
     builder.name.setText("Study Mode")
     builder.select_node(TRIGGER_ID)
     assert "phrases" in builder.inspector.fields
