@@ -136,7 +136,15 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 - `assets/fonts/`: Orbitron, Rajdhani, Inter (OFL).
 
 ## Decisions
-- Local first (owner, 2026-10-25: "all normal conversations should be routed here [local].
+- Cloud first again (owner, 2026-10-26: "the local model is really very slow ... use all the
+  free models from groq, then gemini and then openrouter"): `routing.local_first` now
+  defaults to False; Ollama is last in the fallback. Groq fallbacks: minimax-m2.7,
+  gpt-oss-120b, gpt-oss-20b (Llama 3.3 70B was shut down 2026-08-16, stripped from
+  saved settings via `RETIRED_GROQ_MODELS`). OpenRouter `fallback_models` are the free
+  slide models, plus up to 4 free tool-capable models listed at probe time
+  (`free_models`); only `is_free` ids are used. The old local-first behaviour below
+  still works with `routing.local_first: true`.
+- Local first (owner, 2026-10-25, superseded by default on 2026-10-26: "all normal conversations should be routed here [local].
   only the ones that actually require cloud models ... to cloud"): `routing.local_first`.
   A request is conversation when `groups_for` finds no tool group, it isn't a screen
   question or a plan, and `is_conversation` sees no action verb at the start and nothing
@@ -363,8 +371,8 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
 - Models: Groq `qwen/qwen3.8-27b` (owner's choice; Preview, free tier 8K tokens/min,
   `reasoning_effort: "none"`), then `minimaxai/minimax-m2.7` (Preview, agentic; owner asked
   for "kimi k3 or something light but very good", 2026-10-24; Groq has no Kimi; no
-  reasoning field, its <think> is stripped), `openai/gpt-oss-120b` ("low") and
-  `llama-3.3-70b-versatile` (no reasoning field) for chat when qwen is rate-limited; STT
+  reasoning field, its <think> is stripped), `openai/gpt-oss-120b` and `openai/gpt-oss-20b` ("low") for chat when qwen is
+  rate-limited; STT
   `whisper-large-v3-turbo` with `verbose_json`, dropping segments with no_speech_prob ≥ 0.6
   or avg_logprob ≤ -1 (Whisper invents "I'm going to go." from silence). Gemini (the
   backup, so fast first) `gemini-3.5-flash-lite` ("low"), then 3.8 Flash (timed out on the

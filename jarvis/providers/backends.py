@@ -49,14 +49,26 @@ class GroqProvider(OpenAICompatibleProvider):
             return self.settings.reasoning_effort  # "none": no thinking
         if model.startswith("openai/gpt-oss"):
             return "low"  # gpt-oss can't turn reasoning off
-        return ""  # Llama and MiniMax have no reasoning setting (MiniMax's <think> is stripped)
+        return ""  # MiniMax has no reasoning setting (its <think> is stripped)
 
 
 class OpenRouterProvider(OpenAICompatibleProvider):
     """Optional online provider: many hosted models (free and paid) behind one key."""
 
+    MORE_FREE = 4  # free tool-capable models found at probe time, tried after the list
+
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
+        super().__init__(*args, **kwargs)
+        self._more_free: list[str] = []
+
     def reasoning_for(self, model: str) -> str:
         return ""
+
+    def fallbacks_for(self, capability: Capability) -> list[str]:
+        if capability is not Capability.CHAT:
+            return []
+        configured = [m for m in self.settings.fallback_models if is_free(m)]
+        return configured + [m for m in self._more_free if m not in configured]
 
     def _check_models(self, response: httpx.Response, latency: int) -> ProviderStatus:
         """If the configured free model is gone, use another free one that fits."""
@@ -67,6 +79,7 @@ class OpenRouterProvider(OpenAICompatibleProvider):
         if not listed:
             return ProviderStatus(ProviderState.READY, latency_ms=latency)
         ids = {str(item.get("id", "")) for item in listed}
+        self._more_free = free_models(listed)[: self.MORE_FREE]
         for capability in (Capability.CHAT, Capability.VISION):
             configured = self.configured_model(capability)
             if not configured or configured in ids:
@@ -81,6 +94,20 @@ class OpenRouterProvider(OpenAICompatibleProvider):
                     latency_ms=latency,
                 )
         return ProviderStatus(ProviderState.READY, latency_ms=latency)
+
+
+def is_free(model_id: str) -> bool:
+    return model_id.endswith(":free") or model_id == "openrouter/free"
+
+
+def free_models(models: list[dict[str, Any]]) -> list[str]:
+    """Every free OpenRouter model that can call tools, in the listed order."""
+    return [
+        str(item.get("id", ""))
+        for item in models
+        if str(item.get("id", "")).endswith(":free")
+        and "tools" in (item.get("supported_parameters") or [])
+    ]
 
 
 def pick_free_model(models: list[dict[str, Any]], *, vision: bool = False) -> str:

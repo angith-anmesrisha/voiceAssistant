@@ -277,7 +277,7 @@ async def test_all_groq_models_limited_names_each(monkeypatch: pytest.MonkeyPatc
     with pytest.raises(Exception) as caught:
         await groq.chat([{"role": "user", "content": "hi"}])
     text = str(caught.value)
-    assert "qwen/qwen3.8-27b: HTTP 429" in text and "llama-3.3-70b-versatile" in text
+    assert "qwen/qwen3.8-27b: HTTP 429" in text and "openai/gpt-oss-20b" in text
 
 
 async def test_cut_off_reply_is_marked(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -356,7 +356,7 @@ async def test_diagnostics_report_says_whose_side(monkeypatch: pytest.MonkeyPatc
     ]
     text = diagnosis_report(results)
     assert "Groq: none of its models answered" in text and "Rate limit reached" in text
-    assert "llama-3.3-70b-versatile: HTTP 429" in text  # every Groq model was tried
+    assert "openai/gpt-oss-20b: HTTP 429" in text  # every Groq model was tried
     assert "your Gemini account, not JARVIS" in text
     assert "Ollama: working (qwen3.5:4b" in text
 
@@ -494,3 +494,30 @@ def test_old_saved_priority_gains_openrouter() -> None:
     assert old.priority == ["groq", "gemini", "openrouter", "ollama"]
     custom = ProvidersConfig.model_validate({"priority": ["ollama", "groq"]})
     assert custom.priority == ["ollama", "groq"]
+
+
+def test_cloud_first_and_all_the_free_models() -> None:
+    from jarvis.app.config import RoutingSettings
+    from jarvis.providers.backends import OpenRouterProvider
+
+    assert RoutingSettings().local_first is False  # the local model was too slow
+    config = ProvidersConfig.model_validate(
+        {"groq": {"fallback_models": ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"]}}
+    )
+    assert config.groq.fallback_models == ["openai/gpt-oss-120b"]  # shut down on Groq
+    assert config.priority == ["groq", "gemini", "openrouter", "ollama"]
+    provider = OpenRouterProvider(
+        "openrouter", "OpenRouter", ProvidersConfig().openrouter, httpx.AsyncClient()
+    )
+    listed = {
+        "data": [
+            {"id": "paid/model", "supported_parameters": ["tools"]},
+            {"id": "new/free-one:free", "supported_parameters": ["tools"]},
+            {"id": "no/tools:free", "supported_parameters": []},
+        ]
+    }
+    request = httpx.Request("GET", "https://openrouter.ai/api/v1/models")
+    provider._check_models(httpx.Response(200, json=listed, request=request), 10)
+    fallbacks = provider.fallbacks_for(Capability.CHAT)
+    assert fallbacks[-1] == "new/free-one:free" and "paid/model" not in fallbacks
+    assert all(m.endswith(":free") or m == "openrouter/free" for m in fallbacks)

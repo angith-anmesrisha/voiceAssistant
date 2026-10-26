@@ -59,13 +59,14 @@ def _groq() -> ProviderSettings:
         stt_model="whisper-large-v3-turbo",
         reasoning_effort="none",
         # When qwen is rate-limited (free tier: 8K tokens/min, 1K requests/day per model),
-        # these answer instead (console.groq.com/docs/models, 2026-10-24): MiniMax M2.7
-        # (preview, built for agent and tool work), then the production gpt-oss-120b and
-        # Llama 3.3 70B. All run on Groq's servers, so none of them loads the PC.
+        # the rest of Groq's free chat models answer instead (console.groq.com/docs/models,
+        # checked 2026-10-26): MiniMax M2.7 (preview, built for agent and tool work), then
+        # the production gpt-oss-120b and gpt-oss-20b. Llama 3.3 70B was shut down on
+        # 2026-08-16 (console.groq.com/docs/deprecations). All run on Groq's servers.
         fallback_models=[
             "minimaxai/minimax-m2.7",
             "openai/gpt-oss-120b",
-            "llama-3.3-70b-versatile",
+            "openai/gpt-oss-20b",
         ],
         # The owner asked for Llama Prompt Guard 2 (86M). It is a classifier, not a chat
         # model (console.groq.com/docs/model/meta-llama/llama-prompt-guard-2-86m, 512
@@ -104,6 +105,15 @@ def _openrouter() -> ProviderSettings:
         api_key_env="OPENROUTER_API_KEY",
         chat_model="nvidia/nemotron-3.5-super-vl:free",
         vision_model="nvidia/nemotron-3.5-super-vl:free",
+        # The other free models, tried in turn (plus any free tool-capable model the
+        # provider lists at the time, see OpenRouterProvider). Only ":free" ids are used.
+        fallback_models=[
+            "nvidia/nemotron-3-super-120b-a12b:free",
+            "nvidia/nemotron-3-ultra-550b-a55b:free",
+            "poolside/laguna-s-2.1:free",
+            "dots-studio/dots-3-note-preview:free",
+            "openrouter/free",
+        ],
         timeout_s=30.0,
     )
 
@@ -162,6 +172,11 @@ class ProvidersConfig(BaseModel):
                 part = data.get(name)
                 if isinstance(part, dict):
                     data[name] = {**default().model_dump(), **part}
+            groq = data.get("groq")
+            if isinstance(groq, dict) and isinstance(groq.get("fallback_models"), list):
+                groq["fallback_models"] = [  # shut down by Groq on 2026-08-16
+                    m for m in groq["fallback_models"] if m not in RETIRED_GROQ_MODELS
+                ]
             ollama = data.get("ollama")
             if isinstance(ollama, dict) and ollama.get("fallback_models") == ["qwen3.5:latest"]:
                 ollama["fallback_models"] = _ollama().fallback_models  # the old default
@@ -174,14 +189,17 @@ class ProvidersConfig(BaseModel):
         return settings
 
 
-class RoutingSettings(BaseModel):
-    """Where requests go (owner, 2026-10-25: everyday conversation on the local models,
-    the cloud only for what needs it)."""
+RETIRED_GROQ_MODELS = frozenset({"llama-3.3-70b-versatile", "llama-3.1-8b-instant"})
 
-    # Conversation (no PC actions, no screen, nothing current or online) is answered by
-    # Ollama on this PC; anything else, or a local failure, goes to the cloud providers.
-    # A provider chosen by the user ("use Groq from now on") still wins.
-    local_first: bool = True
+
+class RoutingSettings(BaseModel):
+    """Where requests go. Owner, 2026-10-26: "the local model is really very slow ... use
+    all the free models from groq, then gemini and then openrouter", so everything goes
+    to the cloud first and Ollama only answers when no cloud provider can."""
+
+    # True: conversation (no PC actions, no screen, nothing current or online) is
+    # answered by Ollama on this PC first. Off by default since 2026-10-26.
+    local_first: bool = False
     # Longest wait for a local answer before asking the cloud instead.
     local_timeout_s: float = 90.0
     # Keep the local model loaded (Ollama unloads it after 5 idle minutes, and loading
