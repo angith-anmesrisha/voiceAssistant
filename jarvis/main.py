@@ -171,6 +171,15 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         writing=_writing_tools(settings, router, lambda: pick_upload(), bus, spawn, guard),
     )
 
+    from jarvis.app.secrets import login_store
+    from jarvis.tools.autofill import register_autofill_tools
+    from jarvis.tools.telegram import register_telegram_tools
+
+    # Saved logins (Credential Manager) for the workflow "Fill in a login" node.
+    logins = login_store()
+    register_autofill_tools(registry, ui if sys.platform == "win32" else None, logins)
+    register_telegram_tools(registry, client)
+
     from jarvis.agent.workflows import (
         WorkflowStore,
         WorkflowTriggers,
@@ -397,8 +406,13 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
                 },
                 on_option=set_option,
             )
+            from jarvis.tools.telegram import find_chat
+            from jarvis.ui.connections import Connections
+
             builder = WorkflowBuilder(
-                workflows, lambda workflow: controller.run_workflow(workflow, "test")
+                workflows,
+                lambda workflow: controller.run_workflow(workflow, "test"),
+                Connections(logins, find_chat=lambda token: find_chat(client, token)),
             )
 
             async def light_up(event: PlanUpdated) -> None:

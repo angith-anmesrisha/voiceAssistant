@@ -28,6 +28,10 @@ class ToolResult:
         return {"ok": self.ok, "summary": self.summary, **self.data}
 
 
+# Tools in this group are never offered to the model, and the assistant refuses them
+# unless a workflow step runs them (the login fill-in).
+WORKFLOW_ONLY = "workflow_only"
+
 ToolFunc = Callable[..., ToolResult | Awaitable[ToolResult]]
 RiskRule = Risk | Callable[[dict[str, Any]], Risk]
 
@@ -124,7 +128,8 @@ class ToolRegistry:
         return [
             spec.declaration()
             for spec in self._tools.values()
-            if groups is None or spec.group == "core" or spec.group in groups
+            if spec.group != WORKFLOW_ONLY
+            and (groups is None or spec.group == "core" or spec.group in groups)
         ]
 
     def groups(self) -> set[str]:

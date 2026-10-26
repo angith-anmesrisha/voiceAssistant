@@ -151,9 +151,15 @@ python -m jarvis --hidden   # starts in the tray
   fact), **Tasks & reminders**, **JARVIS AI** (ask JARVIS, summarise, translate, pull
   out action items, research, study a document, write a document, make a deck, the
   briefing), **Web & info** (weather, news, web search, prices, Wikipedia, YouTube),
-  **Apps & files**, **Messaging** (WhatsApp, asks every time), **PC** (volume, dark
-  mode, health check, close an app, tidy the desktop, lock) and **Core** (say, show a
-  checklist, wait, ask me yes/no, **If** with true/false outputs, any tool). Drag
+  **Apps & files**, **Messaging** (WhatsApp and Telegram, both ask every time),
+  **Keyboard & screen** (press keys and shortcuts in order, type text, fill in a
+  saved login, click something JARVIS finds from your description), **PC** (volume,
+  dark mode, health check, close an app, tidy the desktop, lock) and **Core** (say,
+  show a checklist, wait, ask me yes/no, **If** with true/false outputs, run JSON
+  actions, any tool). Nodes that need an account (Gmail, Calendar, Telegram, logins)
+  show a Connect card in their settings: set it up once there. Logins are kept in
+  Windows Credential Manager and only ever typed by a workflow, after you say yes,
+  into a window whose title matches; no AI sees them. Drag
   nodes around, drag from a node's dot to another to link them (or to empty canvas to
   add a node there), hover a link and click its ✕ to remove it; the right-hand panel
   edits the selected node as you type. Zoom, fit, tidy up, undo/redo sit bottom left;
@@ -162,7 +168,9 @@ python -m jarvis --hidden   # starts in the tray
   prep, Focus mode, Scan reader (folder), PC check-up (If), Weekly review, Shut down
   for the day, Study Mode, Start work, Development environment, Research brief,
   Prepare my presentation and more. Or describe it: "Whenever I start work, open my
-  project folder and show my pending tasks." JARVIS shows the workflow it would make
+  project folder and show my pending tasks", or "make me a workflow that logs into my
+  college portal and tells me my timetable". JARVIS designs the whole graph, branches
+  included, shows the workflow it would make
   and saves it only if you say yes. Then saying "activate study mode" runs every step
   on the card, ticking each off; risky steps still ask first, and a node can use the
   result of the one before it (`{previous}`, `{step 2}`, `{today}`, `{file}`), so a
@@ -223,7 +231,10 @@ python -m jarvis --hidden   # starts in the tray
   Settings › your calendar › "Secret address in iCal format"; Outlook: Publish calendar
   › ICS) into the `JARVIS_CALENDAR_ICS` environment variable, e.g.
   `setx JARVIS_CALENDAR_ICS "https://calendar.google.com/calendar/ical/.../basic.ics"`.
-  Several addresses can be given separated by spaces. JARVIS never writes to it.
+  Several addresses can be given separated by spaces. JARVIS never writes to it. (The
+  Connect card on a Calendar node in the workflow builder saves it for you, as does
+  the one on a Gmail node for the email settings and on a Telegram node for
+  `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`.)
 - **Weather, news and web answers.** "Will it rain tomorrow?", "latest news on the
   election", "what's the price of a PS5?": it reads the results and answers, saying
   where it came from. "Keep an eye on news about SpaceX" checks once a day.

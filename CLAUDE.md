@@ -24,7 +24,12 @@ working rules and safety rules still apply where they don't conflict.
   approved text is what runs, output screened by Prompt Guard, tools default MEDIUM);
   `set_dark_mode` (MEDIUM, writes only the two HKCU Personalize theme values) and
   `set_wifi` (MEDIUM, WinRT radio API); the phone dashboard (off until a phone is paired
-  with a one-time code). Still no generic shell, command-line or registry tool.
+  with a one-time code). Owner, 2026-10-26 ("find the username box and type in the
+  username, then the password box"): `fill_login` (MEDIUM, group `WORKFLOW_ONLY`: never
+  offered to a model and refused in `_run_tool` unless a workflow step runs it; takes
+  only a login's name; the login lives in Windows Credential Manager, `app/secrets.py`;
+  types only into a window whose title contains the login's saved words; never logged).
+  Still no generic shell, command-line or registry tool.
 - Never claim a provider/model answered unless it did; the UI shows the real provider/model.
 
 ## Stack
@@ -200,8 +205,28 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   builder lights nodes up (main subscribes `builder.show_run`). Agent nodes
   (`Action.request`: inbox summary, draft replies (draft_reply MEDIUM, Drafts only),
   emails → tasks, summarise, translate, action items) go through `_converse`. Colours
-  stay in the HUD palette (no greens); icons are drawn, no image files. 49 nodes,
-  17 templates, MAX_STEPS 30.
+  stay in the HUD palette (no greens); icons are drawn, no image files. 55 nodes,
+  20 templates, MAX_STEPS 30.
+- Workflow builder round 2 (owner, 2026-10-26): group "Keyboard & screen": `keys`
+  (lines "ctrl+c", "tab x3", "copy" = named shortcut, "type: …", "wait: 1"/"500ms"),
+  `type_text`, `login` (→ `fill_login`), `ai_click` (agent request: read_ui →
+  click_element, look_at_screen fallback, no typing); `json_actions` (Core: list of
+  {keys|type|wait|open|tool+args|action+settings}, ≤60 calls, `json_calls`); `telegram`
+  (`tools/telegram.py`, Bot API sendMessage, MEDIUM, env `TELEGRAM_BOT_TOKEN`/
+  `TELEGRAM_CHAT_ID`, token never logged or shown, `find_chat` via getUpdates);
+  "Ask JARVIS" is now "Prompt JARVIS". `Action.sequence` steps (`step_calls`) ask once
+  for the whole step at the riskiest call's level (`_run_tool(approved=)`; HIGH still
+  asks itself), an optional app is raised first (0.8 s for the foreground tracker).
+  `Action.connection` (gmail/calendar/telegram/logins) shows a Connect card in the
+  node settings: `ui/connections.py` (`Connections`, `ConnectDialog` saving with
+  `keys.save_key`, secrets masked and never shown again, `LoginsDialog` →
+  `LoginStore`). Builder tidy: sidebar search, "+ New workflow", one tool pill,
+  settings in a card, `{ } Variables` tooltip, a shortcuts chip list instead of the
+  HOW TO wall. Proposals: `proposal_prompt` lists nodes by group with outputs and asks
+  for `links` `[from, port, to]` (step numbers, "trigger"); `parse_proposal` keeps sane
+  links (known ports, no loops, from the trigger, else in order) and drops any
+  password/token-like setting; `workflow_request` also takes "make me a … workflow",
+  "I want a workflow…", "automate …".
 - Quick capture: `commands.capture_command` (idea:/add a task…/todo:/add X to my Y
   tasks/quick note:) → `add_task` or `save_note` "Inbox" in `_handle` before the deck
   check, no model (mode "capture"); a trailing due ("by friday", "tomorrow") is split
@@ -264,7 +289,8 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   pynput. Risk: LOW, except clicks on Send/Pay/Delete/Call/Save-style names and
   double-clicks in Explorer (MEDIUM), and `type_into(submit=True)` (Enter, MEDIUM).
   Never read or driven: shells, terminals, regedit, mmc, Settings, Control Panel, Task
-  Manager, UAC, the Run box, JARVIS itself; password fields are never read or typed;
+  Manager, UAC, the Run box, JARVIS itself; password fields are never read, and only
+  `fill_login` (workflows only) types into one;
   runnable files are never double-clicked. All four tools' output is screened by Prompt
   Guard. The module is imported on its worker thread after Qt starts, because it sets the
   process DPI mode on import.

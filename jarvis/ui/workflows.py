@@ -79,6 +79,7 @@ from jarvis.agent.workflows import (
 from jarvis.app.events import PlanUpdated, StepStatus
 from jarvis.ui import theme
 from jarvis.ui.canvas import FlowScene, FlowView, NodeView, snap
+from jarvis.ui.connections import ConnectDialog, Connections, LoginsDialog
 from jarvis.ui.node_icons import GROUP_STYLE, accent, icon, paint_icon
 
 STYLE = f"""
@@ -151,6 +152,23 @@ QFrame#logs {{ background: {theme.css(theme.rgba(theme.BG, 245))};
 QFrame#card {{ background: {theme.css(theme.rgba(theme.PANEL_TOP, 120))};
   border: 1px solid {theme.css(theme.rgba(theme.CYAN, 50))}; border-radius: 12px; }}
 QFrame#card:hover {{ border-color: {theme.css(theme.rgba(theme.CYAN, 160))}; }}
+QFrame#group {{ background: {theme.css(theme.rgba(theme.PANEL_TOP, 90))};
+  border: 1px solid {theme.css(theme.rgba(theme.CYAN, 38))}; border-radius: 10px; }}
+QFrame#connect {{ background: {theme.css(theme.rgba(theme.PANEL_TOP, 110))};
+  border: 1px solid {theme.css(theme.rgba(theme.AMBER, 120))}; border-radius: 10px; }}
+QFrame#connected {{ background: {theme.css(theme.rgba(theme.PANEL_TOP, 110))};
+  border: 1px solid {theme.css(theme.rgba(theme.CYAN, 110))}; border-radius: 10px; }}
+QFrame#pill {{ background: {theme.css(theme.rgba(theme.BG, 235))};
+  border: 1px solid {theme.css(theme.rgba(theme.STEEL, 120))}; border-radius: 17px; }}
+QFrame#pill QPushButton {{ background: transparent; border: none; border-radius: 15px;
+  padding: 0; font-size: 12pt; }}
+QFrame#pill QPushButton:hover {{ background: {theme.css(theme.rgba(theme.CYAN, 50))}; }}
+QLabel#chip {{ background: {theme.css(theme.BG_DEEP)}; color: {theme.css(theme.ICE)};
+  border: 1px solid {theme.css(theme.rgba(theme.STEEL, 140))}; border-radius: 5px;
+  padding: 1px 7px; font-family: "{theme.LABEL_FAMILY}"; font-size: 9.5pt; }}
+QLabel#help {{ color: {theme.css(theme.TEXT_DIM)}; font-size: 9pt;
+  border: 1px solid {theme.css(theme.rgba(theme.STEEL, 120))}; border-radius: 9px;
+  padding: 1px 7px; }}
 QScrollArea {{ border: none; background: transparent; }}
 QScrollBar:vertical {{ background: transparent; width: 8px; }}
 QScrollBar::handle:vertical {{ background: {theme.css(theme.rgba(theme.STEEL, 120))};
@@ -187,6 +205,20 @@ _TIP = (
     "In text, {previous} is the result of the node before, {step 2} the result of node 2, "
     "{today} today's date, and {file} the file that started a folder workflow."
 )
+_SHORTCUT_HELP = (
+    ("Tab", "Add a node"),
+    ("Del", "Delete the selection"),
+    ("Ctrl+D", "Duplicate a node"),
+    ("Ctrl+Z", "Undo (Ctrl+Shift+Z redoes)"),
+    ("Ctrl+S", "Save"),
+    ("F", "Fit the view"),
+)
+_SERVICE_TITLES = {
+    "gmail": "Gmail account",
+    "calendar": "Calendar feed",
+    "telegram": "Telegram bot",
+    "logins": "Saved logins",
+}
 _COLUMN = 180.0  # the canvas's distance between columns...
 _ROW = 150.0  # ... and rows
 
@@ -279,11 +311,25 @@ def layout(workflow: Workflow) -> None:
 
 
 def setting_field(
-    setting: Setting, value: Any, parent: QWidget, changed: Callable[[], None]
+    setting: Setting,
+    value: Any,
+    parent: QWidget,
+    changed: Callable[[], None],
+    logins: list[str] | None = None,
 ) -> tuple[QWidget, Callable[[], Any]]:
     """An input for one setting and a function that reads it; ``changed`` is called on
-    every edit."""
+    every edit. ``logins``: the saved login names, for a "login" setting."""
     current = setting.default if value is None else value
+    if setting.kind == "login":
+        names = QComboBox()
+        names.setEditable(True)
+        names.addItems(logins or [])
+        names.setCurrentText(str(current or ""))
+        line = names.lineEdit()
+        if line is not None:
+            line.setPlaceholderText("Pick a saved login")
+        names.currentTextChanged.connect(lambda _text: changed())
+        return names, lambda: names.currentText().strip()
     if setting.kind in ("long", "list"):
         box = QPlainTextEdit()
         text = "\n".join(map(str, current)) if isinstance(current, list) else str(current)
@@ -624,6 +670,52 @@ class Inspector(QFrame):
         label.setObjectName("hint")
         layout.addWidget(label)
 
+    def _group(self, layout: QVBoxLayout, title: str) -> QFormLayout:
+        """A rounded card of fields under a small heading."""
+        box = QFrame()
+        box.setObjectName("group")
+        inner = QVBoxLayout(box)
+        inner.setContentsMargins(12, 10, 12, 12)
+        inner.setSpacing(6)
+        inner.addWidget(self._label(title))
+        form = QFormLayout()
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
+        form.setVerticalSpacing(8)
+        inner.addLayout(form)
+        layout.addWidget(box)
+        return form
+
+    def _connection(self, layout: QVBoxLayout, service: str) -> None:
+        """The "Connect" card for a node that needs a service set up once."""
+        connections = self._builder.connections
+        if connections is None:
+            return
+        on = connections.connected(service)
+        card = QFrame()
+        card.setObjectName("connected" if on else "connect")
+        row = QHBoxLayout(card)
+        row.setContentsMargins(12, 9, 10, 9)
+        dot = QLabel("●")
+        dot.setStyleSheet(f"color: {theme.css(theme.CYAN if on else theme.AMBER)};")
+        row.addWidget(dot)
+        words = QVBoxLayout()
+        words.setSpacing(0)
+        what = QLabel(_SERVICE_TITLES.get(service, service.title()))
+        what.setFont(theme.font(theme.LABEL_FAMILY, 11, QFont.Weight.Bold, 0.5))
+        words.addWidget(what)
+        status = QLabel(connections.status(service))
+        status.setObjectName("hint")
+        status.setWordWrap(True)
+        words.addWidget(status)
+        row.addLayout(words, 1)
+        button = QPushButton("Manage" if service == "logins" else ("Change" if on else "Connect"))
+        if not on:
+            button.setObjectName("primary")
+        button.clicked.connect(lambda: self._builder.open_connection(service))
+        row.addWidget(button)
+        self.fields["connection"] = button
+        layout.addWidget(card)
+
     def show_step(self, workflow: Workflow, step: Step) -> None:
         self.showing = step.id
         layout = self._fresh()
@@ -638,38 +730,54 @@ class Inspector(QFrame):
         self._header(layout, name, colour, spec.title, f"Node {number} · {spec.group}")
         if spec.blurb:
             self._hint(layout, spec.blurb)
-        form = QFormLayout()
-        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapAllRows)
-        for setting in spec.settings:
-            widget, read = setting_field(
-                setting,
-                step.settings.get(setting.name),
-                self,
-                self._changed_by(setting.name),
-            )
-            label = self._label(setting.label + (" *" if setting.required else ""))
-            form.addRow(label, widget)
-            self.readers[setting.name] = read
-            self.fields[setting.name] = widget
-        if not spec.settings:
-            form.addRow(QLabel("Nothing to set: it just runs."))
-        layout.addLayout(form)
+        if spec.connection:
+            self._connection(layout, spec.connection)
+        connections = self._builder.connections
+        logins = connections.login_names() if connections is not None else []
+        if spec.settings:
+            form = self._group(layout, "SETTINGS")
+            for setting in spec.settings:
+                widget, read = setting_field(
+                    setting,
+                    step.settings.get(setting.name),
+                    self,
+                    self._changed_by(setting.name),
+                    logins,
+                )
+                label = self._label(setting.label + (" *" if setting.required else ""))
+                label.setObjectName("hint")
+                if setting.kind not in ("text", "login", "folder", "file") and setting.hint:
+                    label.setToolTip(setting.hint)
+                form.addRow(label, widget)
+                if setting.kind == "list" and setting.hint:
+                    tip = QLabel(setting.hint)
+                    tip.setObjectName("hint")
+                    tip.setWordWrap(True)
+                    form.addRow(tip)
+                self.readers[setting.name] = read
+                self.fields[setting.name] = widget
+        else:
+            self._hint(layout, "Nothing to set: it just runs.")
         if spec.outputs != ("out",):
             self._hint(
                 layout,
-                f"Two outputs: {spec.outputs[0]} and {spec.outputs[1]}. Link each to what "
-                "should happen next; an output with nothing linked ends there.",
+                f"Two outputs, {spec.outputs[0]} and {spec.outputs[1]}: link each to what "
+                "should happen next. One with nothing linked ends there.",
             )
-        self._hint(layout, _TIP)
-        row = QHBoxLayout()
+        tips = QHBoxLayout()
+        variables = QLabel("{ } Variables")
+        variables.setObjectName("help")
+        variables.setToolTip(_TIP)
+        tips.addWidget(variables)
+        tips.addStretch(1)
         duplicate = QPushButton("Duplicate")
         duplicate.clicked.connect(lambda: self._builder.duplicate_node(step.id))
-        remove = QPushButton("Delete node")
+        remove = QPushButton("Delete")
         remove.setObjectName("danger")
         remove.clicked.connect(lambda: self._builder.remove_node(step.id))
-        row.addWidget(duplicate)
-        row.addWidget(remove)
-        layout.addLayout(row)
+        tips.addWidget(duplicate)
+        tips.addWidget(remove)
+        layout.addLayout(tips)
         layout.addStretch(1)
 
     def show_trigger(self, workflow: Workflow) -> None:
@@ -776,7 +884,8 @@ class Inspector(QFrame):
         self._header(layout, "branch", theme.CYAN, workflow.name or "Workflow", "Workflow")
         about = QPlainTextEdit(workflow.description)
         about.setPlaceholderText("What it's for (optional)")
-        about.setFixedHeight(64)
+        about.setFixedHeight(72)
+        about.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         about.textChanged.connect(
             lambda: self._builder.set_description(about.toPlainText().strip())
         )
@@ -790,17 +899,25 @@ class Inspector(QFrame):
             text.setWordWrap(True)
             text.setObjectName("problem" if found else "hint")
             layout.addWidget(text)
-        layout.addWidget(self._label("HOW TO"))
-        for line in (
-            "Click a node to change it; drag nodes to move them.",
-            "Drag from a node's right-hand dot to another node to link them, or let go on "
-            "empty canvas to add a node there.",
-            "The + at the top right, at the end of an open output, or Tab adds a node.",
-            "Hover a link and click its ✕ to remove it. Delete removes the selection.",
-            "Ctrl+Z undoes, Ctrl+S saves, F fits the view.",
-            "Or tell JARVIS: “Whenever I start work, open my project folder and show my tasks.”",
-        ):
-            self._hint(layout, "• " + line)
+        layout.addWidget(self._label("SHORTCUTS"))
+        keys = QGridLayout()
+        keys.setHorizontalSpacing(8)
+        keys.setVerticalSpacing(6)
+        for n, (key, what) in enumerate(_SHORTCUT_HELP):
+            chip = QLabel(key)
+            chip.setObjectName("chip")
+            keys.addWidget(chip, n, 0, Qt.AlignmentFlag.AlignLeft)
+            text = QLabel(what)
+            text.setObjectName("hint")
+            keys.addWidget(text, n, 1)
+        keys.setColumnStretch(1, 1)
+        layout.addLayout(keys)
+        self._hint(
+            layout,
+            "Drag from a node's dot to link it, or to empty canvas to add a node there. "
+            "Or just tell JARVIS: “Make me a workflow that logs into my college portal "
+            "every morning and tells me my timetable.”",
+        )
         layout.addStretch(1)
 
     def read(self) -> dict[str, Any]:
@@ -886,6 +1003,11 @@ class CanvasPane(QWidget):
         self.add_button.setToolTip("Add a node (Tab)")
         self.add_button.setCursor(Qt.CursorShape.PointingHandCursor)
         self.tools: list[QPushButton] = []
+        self.pill = QFrame(self)
+        self.pill.setObjectName("pill")
+        pill = QHBoxLayout(self.pill)
+        pill.setContentsMargins(4, 3, 4, 3)
+        pill.setSpacing(1)
         for text, tip, slot in (
             ("⤢", "Zoom to fit (F)", view.fit),
             ("+", "Zoom in", view.zoom_in),
@@ -894,12 +1016,19 @@ class CanvasPane(QWidget):
             ("↶", "Undo (Ctrl+Z)", builder.undo),
             ("↷", "Redo (Ctrl+Shift+Z)", builder.redo),
         ):
-            button = QPushButton(text, self)
-            button.setObjectName("tool")
-            button.setFixedSize(34, 34)
+            if len(self.tools) in (3, 4):  # zoom | tidy | undo, redo
+                gap = QFrame()
+                gap.setFixedSize(1, 18)
+                gap.setStyleSheet(f"background: {theme.css(theme.rgba(theme.STEEL, 120))};")
+                pill.addWidget(gap)
+            button = QPushButton(text)
+            button.setFixedSize(30, 30)
             button.setToolTip(tip)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.clicked.connect(slot)
+            pill.addWidget(button)
             self.tools.append(button)
+        self.pill.adjustSize()
         self.run_button = QPushButton("▶  Test workflow", self)
         self.run_button.setObjectName("run")
         self.run_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -909,10 +1038,7 @@ class CanvasPane(QWidget):
         w, h = self.width(), self.height()
         self.view.setGeometry(0, 0, w, h)
         self.add_button.move(w - 56, 16)
-        x = 16
-        for n, button in enumerate(self.tools):
-            button.move(x, h - 50)
-            x += 52 if n in (2, 3) else 40
+        self.pill.move(16, h - 54)
         self.run_button.resize(max(self.run_button.sizeHint().width(), 200), 40)
         self.run_button.move((w - self.run_button.width()) // 2, h - 58)
         self.node_panel.setGeometry(w - self.node_panel.width(), 0, self.node_panel.width(), h)
@@ -922,10 +1048,16 @@ class CanvasPane(QWidget):
 class WorkflowBuilder(QWidget):
     """The builder. ``on_test`` runs a workflow as it stands (not saved)."""
 
-    def __init__(self, store: WorkflowStore, on_test: Callable[[Workflow], None]) -> None:
+    def __init__(
+        self,
+        store: WorkflowStore,
+        on_test: Callable[[Workflow], None],
+        connections: Connections | None = None,
+    ) -> None:
         super().__init__()
         self._store = store
         self._on_test = on_test
+        self.connections = connections
         self._current: Workflow | None = None
         self._saved = ""  # the workflow as last saved/opened (JSON), to spot changes
         self._undo: list[str] = []
@@ -952,6 +1084,15 @@ class WorkflowBuilder(QWidget):
         title = QLabel("WORKFLOWS")
         title.setObjectName("title")
         left.addWidget(title)
+        self.new_button = QPushButton("+  New workflow")
+        self.new_button.setObjectName("primary")
+        self.new_button.clicked.connect(self.new_workflow)
+        left.addWidget(self.new_button)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Search workflows")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self._filter)
+        left.addWidget(self.search)
         self.list = QListWidget()
         self.list.setObjectName("plain")
         self.list.setItemDelegate(ListLook(self.list))
@@ -961,8 +1102,6 @@ class WorkflowBuilder(QWidget):
         left.addWidget(self.list, 1)
         grid = QGridLayout()
         grid.setSpacing(6)
-        self.new_button = QPushButton("New")
-        self.new_button.clicked.connect(self.new_workflow)
         self.template_button = QPushButton("Templates")
         self.template_button.clicked.connect(self.open_templates)
         self.duplicate_button = QPushButton("Duplicate")
@@ -970,8 +1109,7 @@ class WorkflowBuilder(QWidget):
         self.delete_button = QPushButton("Delete")
         self.delete_button.setObjectName("danger")
         self.delete_button.clicked.connect(self.delete)
-        grid.addWidget(self.new_button, 0, 0)
-        grid.addWidget(self.template_button, 0, 1)
+        grid.addWidget(self.template_button, 0, 0, 1, 2)
         grid.addWidget(self.duplicate_button, 1, 0)
         grid.addWidget(self.delete_button, 1, 1)
         left.addLayout(grid)
@@ -1095,6 +1233,7 @@ class WorkflowBuilder(QWidget):
             )
             item.setData(Qt.ItemDataRole.UserRole, workflow.id)
             self.list.addItem(item)
+        self._filter(self.search.text())
         if self._current is not None and self._store.get(self._current.id) is None:
             self._loading = False
             self._show(self._current, dirty=True)  # being made, not saved yet
@@ -1125,6 +1264,36 @@ class WorkflowBuilder(QWidget):
             return
         found = self._store.get(workflow_id)
         self._show(copy.deepcopy(found) if found else None)
+
+    def _filter(self, text: str) -> None:
+        words = text.lower().split()
+        for i in range(self.list.count()):
+            item = self.list.item(i)
+            item.setHidden(not all(w in item.text().lower() for w in words))
+
+    def visible_workflows(self) -> list[str]:
+        return [
+            self.list.item(i).text().split("\n")[0]
+            for i in range(self.list.count())
+            if not self.list.item(i).isHidden()
+        ]
+
+    def open_connection(self, service: str) -> None:
+        """Set up a node's service (or manage saved logins), then show the node again."""
+        if self.connections is None:
+            return
+        dialog: QDialog = (
+            LoginsDialog(self, self.connections)
+            if service == "logins"
+            else ConnectDialog(self, self.connections, service)
+        )
+        dialog.setStyleSheet(STYLE)
+        dialog.exec()
+        showing = self.inspector.showing
+        if showing not in ("", "trigger") and self._current is not None:
+            step = self._current.step(showing)
+            if step is not None:
+                self.inspector.show_step(self._current, step)
 
     def _row_of(self, workflow_id: str) -> int:
         for i in range(self.list.count()):

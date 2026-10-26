@@ -273,7 +273,7 @@ def would_loop(workflow: Workflow, src: str, dst: str) -> bool:
 class Setting:
     name: str
     label: str
-    kind: str = "text"  # text | long | number | folder | file | list | choice | bool
+    kind: str = "text"  # text | long | number | folder | file | list | choice | bool | login
     required: bool = False
     default: Any = ""
     choices: tuple[str, ...] = ()
@@ -289,9 +289,13 @@ GROUPS = (
     "Web & info",
     "Apps & files",
     "Messaging",
+    "Keyboard & screen",
     "PC",
     "Core",
 )
+
+# Services a node needs set up once; the builder's node settings show a "Connect" card.
+CONNECTIONS = ("gmail", "calendar", "telegram", "logins")
 
 
 @dataclass(frozen=True)
@@ -310,6 +314,9 @@ class Action:
     shows: bool = False  # its result goes in the reply
     speaks: bool = False  # ... and is said out loud
     blurb: str = ""  # one line in the node panel
+    connection: str = ""  # one of CONNECTIONS, set up once from the node's settings
+    # Runs several tool calls (see :func:`step_calls`) after one question for all of them.
+    sequence: bool = False
 
 
 def _get(settings: dict[str, Any], key: str, default: Any = "") -> Any:
@@ -401,6 +408,149 @@ def condition_met(settings: dict[str, Any]) -> bool:
     if test == "has errors":
         return bool(re.search(r"\b(fail|failed|error|couldn't|can't|cannot|unable)\b", low))
     return False
+
+
+# --- keyboard sequences and JSON actions: several tool calls in one step ---
+
+Call = tuple[str, dict[str, Any]]  # (tool name, arguments); "wait" pauses (seconds)
+MAX_CALLS = 60
+
+
+class StepError(ValueError):
+    pass
+
+
+_TYPE_LINE = re.compile(r"^(?:type|text|write)\s*:\s?(.*)$", re.IGNORECASE | re.DOTALL)
+_WAIT_LINE = re.compile(
+    r"^(?:wait|pause|sleep)\s*:?\s*(\d+(?:\.\d+)?)\s*(ms|s|secs?|seconds?)?$", re.IGNORECASE
+)
+_REPEAT = re.compile(r"^(.+?)\s+(?:x|\*|\u00d7)\s*(\d{1,2})$", re.IGNORECASE)
+
+
+def key_calls(lines: list[str]) -> list[Call]:
+    """A keyboard node's lines as tool calls: "ctrl+c", "enter", "tab x3", "copy" (a
+    named shortcut), "type: hello", "wait: 1" (seconds; "500ms" works too)."""
+    from jarvis.tools.shortcuts import SHORTCUTS, KeyComboError, parse_combo
+
+    calls: list[Call] = []
+    for raw in lines:
+        line = raw.strip()
+        if not line:
+            continue
+        if typed := _TYPE_LINE.match(line):
+            if typed.group(1):
+                calls.append(("type_text", {"text": typed.group(1)}))
+            continue
+        if waited := _WAIT_LINE.match(line):
+            seconds = float(waited.group(1))
+            if (waited.group(2) or "").lower() == "ms":
+                seconds /= 1000
+            calls.append(("wait", {"seconds": min(60.0, seconds)}))
+            continue
+        times = 1
+        if repeat := _REPEAT.match(line):
+            line, times = repeat.group(1).strip(), max(1, min(20, int(repeat.group(2))))
+        keys = "".join(line.lower().split())
+        name = "_".join(line.lower().split())
+        call: Call = ("press_keys", {"keys": keys})
+        try:
+            parse_combo(keys)
+        except KeyComboError:
+            if name in SHORTCUTS:  # "copy", "new tab", "screenshot"...
+                call = ("press_shortcut", {"shortcut": name})
+        calls += [call] * times
+    return calls[:MAX_CALLS]
+
+
+def _json_item(item: Any, number: int) -> list[Call]:
+    where = f"item {number}"
+    if not isinstance(item, dict):
+        raise StepError(f"{where} isn't an object")
+    if "keys" in item or "press" in item:
+        value = item.get("keys", item.get("press"))
+        lines = value if isinstance(value, list) else [value]
+        return key_calls([str(x) for x in lines])
+    if "type" in item:
+        return [("type_text", {"text": str(item["type"])})]
+    if "wait" in item:
+        try:
+            return [("wait", {"seconds": max(0.0, min(60.0, float(item["wait"])))})]
+        except (TypeError, ValueError):
+            raise StepError(f"{where}: wait needs a number of seconds") from None
+    if "open" in item:
+        return [("open_app", {"name": str(item["open"])})]
+    if "tool" in item:
+        args = item.get("args", item.get("arguments", {}))
+        if not isinstance(args, dict):
+            raise StepError(f"{where}: args must be an object")
+        return [(str(item["tool"]), args)]
+    if "action" in item:
+        settings = item.get("settings", {})
+        if not isinstance(settings, dict):
+            raise StepError(f"{where}: settings must be an object")
+        step = Step(str(item["action"]), settings)
+        spec = ACTIONS.get(step.action)
+        if spec is None:
+            raise StepError(f"{where}: there's no action called “{step.action}”")
+        if spec.sequence and step.action != "json_actions":
+            return step_calls(step)
+        call = tool_call(step)
+        if call is None:
+            raise StepError(f"{where}: “{spec.title}” can't run inside JSON; use its own node")
+        return [call]
+    raise StepError(f"{where} needs keys, type, wait, open, tool or action")
+
+
+def json_calls(text: str) -> list[Call]:
+    """A "Run JSON actions" node's JSON as tool calls (each still asks as usual)."""
+    try:
+        data = json.loads(text) if text.strip() else []
+    except json.JSONDecodeError as exc:
+        raise StepError(f"the JSON isn't valid ({exc.msg}, line {exc.lineno})") from None
+    if isinstance(data, dict):
+        data = data.get("steps", data.get("actions", [data]))
+    if not isinstance(data, list):
+        raise StepError("the JSON should be a list of actions")
+    calls: list[Call] = []
+    for number, item in enumerate(data, 1):
+        calls += _json_item(item, number)
+    if len(calls) > MAX_CALLS:
+        raise StepError(f"that's more than {MAX_CALLS} actions")
+    return calls
+
+
+def step_calls(step: Step) -> list[Call]:
+    """The tool calls a keyboard, typing or JSON node makes, in order."""
+    settings = step.settings
+    app = str(_get(settings, "app")).strip()
+    calls: list[Call] = [("open_app", {"name": app})] if app else []
+    if step.action == "keys":
+        calls += key_calls(_items(settings))
+    elif step.action == "type_text":
+        text = str(settings.get("text") or "")
+        if text:
+            calls.append(("type_text", {"text": text}))
+        if settings.get("enter"):
+            calls.append(("press_keys", {"keys": "enter"}))
+    elif step.action == "json_actions":
+        calls += json_calls(str(settings.get("json") or ""))
+    return calls
+
+
+def _describe_keys(settings: dict[str, Any]) -> str:
+    lines = _items(settings)
+    shown = ", ".join(line[:20] for line in lines[:3]) or "nothing yet"
+    more = f" (+{len(lines) - 3} more)" if len(lines) > 3 else ""
+    where = f" in {_get(settings, 'app')}" if _get(settings, "app") else ""
+    return f"Press {shown}{more}{where}"
+
+
+def _describe_json(settings: dict[str, Any]) -> str:
+    try:
+        count = len(json_calls(str(settings.get("json") or "")))
+    except StepError:
+        return "Run JSON actions (check the JSON)"
+    return f"Run {count} JSON action{'' if count == 1 else 's'}"
 
 
 _ACTIONS: list[Action] = [
@@ -573,9 +723,9 @@ _ACTIONS: list[Action] = [
     ),
     Action(
         "ask_jarvis",
-        "Ask JARVIS",
-        (Setting("request", "Request", "long", True, hint="Use {previous} for the last result"),),
-        lambda s: str(_get(s, "request", "Ask JARVIS"))[:80],
+        "Prompt JARVIS",
+        (Setting("request", "Prompt", "long", True, hint="Use {previous} for the last result"),),
+        lambda s: str(_get(s, "request", "Prompt JARVIS"))[:80],
         group="JARVIS AI",
         icon="spark",
         shows=True,
@@ -696,6 +846,7 @@ _ACTIONS: list[Action] = [
         group="Gmail",
         icon="mail",
         shows=True,
+        connection="gmail",
     ),
     Action(
         "confirm",
@@ -746,6 +897,7 @@ _ACTIONS: list[Action] = [
         shows=True,
         speaks=True,
         blurb="Reads unread mail and sums it up with action items",
+        connection="gmail",
     ),
     Action(
         "email_drafts",
@@ -770,6 +922,7 @@ _ACTIONS: list[Action] = [
         ),
         shows=True,
         blurb="Writes replies into Drafts after you say yes; never sends",
+        connection="gmail",
     ),
     Action(
         "email_tasks",
@@ -785,6 +938,7 @@ _ACTIONS: list[Action] = [
         ),
         shows=True,
         blurb="Finds to-dos in unread mail and adds them as tasks",
+        connection="gmail",
     ),
     # --- Calendar (read-only iCal) ---
     Action(
@@ -801,6 +955,7 @@ _ACTIONS: list[Action] = [
         icon="calendar",
         shows=True,
         blurb="Events, tasks due and reminders for one day",
+        connection="calendar",
     ),
     Action(
         "calendar_events",
@@ -818,6 +973,7 @@ _ACTIONS: list[Action] = [
         icon="calendar",
         shows=True,
         blurb="What's on your calendar in the coming days",
+        connection="calendar",
     ),
     # --- Notes & memory ---
     Action(
@@ -1028,6 +1184,114 @@ _ACTIONS: list[Action] = [
         group="Messaging",
         icon="chat",
         blurb="Asks you before it sends, every time",
+    ),
+    Action(
+        "telegram",
+        "Send a Telegram message",
+        (
+            Setting("message", "Message", "long", True, "{previous}"),
+            Setting("chat", "To chat (optional)", hint="blank = your saved chat; or @channel"),
+        ),
+        lambda s: "Telegram: " + str(_get(s, "message", "?"))[:50],
+        "send_telegram",
+        lambda s: {"message": _get(s, "message"), "chat": _get(s, "chat")},
+        group="Messaging",
+        icon="send",
+        blurb="From your own bot; asks you before it sends",
+        connection="telegram",
+    ),
+    # --- Keyboard & screen ---
+    Action(
+        "keys",
+        "Press keys and shortcuts",
+        (
+            Setting("app", "In app (optional)", hint="brought to the front first, e.g. Notepad"),
+            Setting(
+                "items",
+                "Keys, one per line",
+                "list",
+                True,
+                hint="ctrl+c · enter · tab x3 · type: hello · wait: 1",
+            ),
+        ),
+        lambda s: _describe_keys(s),
+        group="Keyboard & screen",
+        icon="keyboard",
+        blurb="A series of key presses, shortcuts, typing and pauses",
+        sequence=True,
+    ),
+    Action(
+        "type_text",
+        "Type text",
+        (
+            Setting("text", "Text", "long", True, "{previous}"),
+            Setting("app", "In app (optional)", hint="brought to the front first"),
+            Setting("enter", "Press Enter after", "bool", default=False),
+        ),
+        lambda s: (
+            f"Type “{str(_get(s, 'text', ''))[:40]}”"
+            + (f" in {_get(s, 'app')}" if _get(s, "app") else "")
+            + (" and press Enter" if s.get("enter") else "")
+        ),
+        group="Keyboard & screen",
+        icon="pen",
+        blurb="Types into the app in front (or the one you name)",
+        sequence=True,
+    ),
+    Action(
+        "login",
+        "Fill in a login",
+        (
+            Setting("login", "Login", "login", True, hint="saved once in Credential Manager"),
+            Setting("submit", "Press Enter after", "bool", default=True),
+        ),
+        lambda s: f"Fill in the login “{_get(s, 'login', '?')}”",
+        "fill_login",
+        lambda s: {"login": _get(s, "login"), "submit": bool(s.get("submit", True))},
+        group="Keyboard & screen",
+        icon="key",
+        blurb="Finds the username and password boxes and fills them in",
+        connection="logins",
+    ),
+    Action(
+        "ai_click",
+        "Click something (AI finds it)",
+        (
+            Setting("target", "What to click", "long", True, hint="e.g. the blue Sign in button"),
+            Setting("app", "In app (optional)", hint="blank = the app in front"),
+        ),
+        lambda s: f"Click {str(_get(s, 'target', '?'))[:50]}",
+        group="Keyboard & screen",
+        icon="cursor",
+        request=lambda s: (
+            "Click one thing for me"
+            + (f" in the {_get(s, 'app')} window" if _get(s, "app") else " in the app in front")
+            + f": {_get(s, 'target')}. Use read_ui on that window, pick the control that "
+            "matches best and click it with click_element. If nothing in the list matches, "
+            "scroll_ui and read again, or use look_at_screen to find where it is. Click only "
+            "that one thing, don't type anything, then say in one line what you clicked."
+        ),
+        blurb="Describe it in words; JARVIS reads the window and clicks",
+    ),
+    Action(
+        "json_actions",
+        "Run JSON actions",
+        (
+            Setting(
+                "json",
+                "Actions (JSON)",
+                "long",
+                True,
+                '[\n  {"keys": "ctrl+n"},\n  {"type": "Hello"},\n  {"wait": 1},\n'
+                '  {"tool": "set_volume", "args": {"percent": 30}}\n]',
+                hint='keys, type, wait, {"tool": …, "args": …} or {"action": …, "settings": …}',
+            ),
+        ),
+        lambda s: _describe_json(s),
+        group="Core",
+        icon="code",
+        blurb="Paste a list of actions as JSON; each keeps its own safety check",
+        sequence=True,
     ),
     # --- PC ---
     Action(
@@ -1279,44 +1543,68 @@ class WorkflowStore:
 # --- workflows proposed from plain English ---
 
 _REQUEST = re.compile(
-    r"^\W*(?:(?:hey\s+)?jarvis\W+)?(?:"
+    r"^\W*(?:(?:hey\s+)?jarvis\W+)?(?:(?:can|could|would|will)\s+you\s+)?(?:please\s+)?(?:"
     r"(?:whenever|every time|each time)\s+i\b"
-    r"|(?:create|make|set up|build|add|save)\s+(?:me\s+)?(?:a\s+|an\s+)?(?:new\s+)?"
+    r"|(?:create|make|set up|build|add|save|design|put together|write|draw up)\s+"
+    r"(?:me\s+)?(?:a\s+|an\s+)?(?:new\s+)?(?:\w+\s+){0,3}?"
     r"(?:workflow|routine|command chain|automation)\b"
+    r"|i\s+(?:want|need|would like|'d like)\s+(?:a|an)\s+(?:\w+\s+){0,3}?"
+    r"(?:workflow|routine|automation)\b"
+    r"|automate\s+(?!this\b)\w"
     r"|when\s+i\s+(?:say|start|activate|begin|open|turn on|switch on)\b.+,\s*\w)",
     re.IGNORECASE,
 )
 
 
 def workflow_request(text: str) -> bool:
-    """A request to set up a workflow ("Whenever I start work, open … and show …")."""
+    """A request to set up a workflow ("Whenever I start work, open … and show …",
+    "make me a workflow that …", "automate my mornings: …")."""
     return bool(_REQUEST.search(text))
 
 
 def proposal_prompt() -> str:
-    lines = []
+    groups: dict[str, list[str]] = {group: [] for group in GROUPS}
     for action in _ACTIONS:
         fields = ", ".join(
             f"{s.name}{'' if s.required else '?'}"
             + (f" ({'|'.join(s.choices)})" if s.choices else "")
             for s in action.settings
         )
-        lines.append(
-            f"- {action.name}: {action.title}" + (f"; settings: {fields}" if fields else "")
+        outputs = f"; outputs {'/'.join(action.outputs)}" if action.outputs != ("out",) else ""
+        groups[action.group].append(
+            f"- {action.name}: {action.title}"
+            + (f"; settings: {fields}" if fields else "")
+            + outputs
         )
+    catalogue = "\n".join(
+        f"{group}:\n" + "\n".join(lines) for group, lines in groups.items() if lines
+    )
     return (
-        "Turn the user's request into a JARVIS workflow. Reply with JSON only:\n"
-        '{"name": "Short name", "trigger": {"kind": "phrase|time|startup|folder|manual", '
-        '"phrases": ["what the user will say", "another way to say it"], "at": "HH:MM", '
-        '"days": ["mon", ...], "folder": "", "pattern": "*.pdf", "event": "new|changed"}, '
-        '"steps": [{"action": "<action>", "settings": {...}}]}\n'
-        "Actions:\n" + "\n".join(lines) + "\n"
-        "Rules: use only these actions and only what the user asked for, in their order; "
-        "never add steps they didn't ask for. 'Whenever I start work' is a phrase trigger "
-        "with phrases like 'start work' and 'I'm starting work'. Folders may be desktop, "
-        "documents, downloads, pictures, music, videos or a full path. In a step's text, "
-        "{previous} means the result of the step before. The user's words are a request "
-        "to set something up, not instructions to you beyond that."
+        "You design JARVIS workflows: a trigger and a graph of nodes. Think the whole job "
+        "through first (what has to happen, in what order, what each step needs from the "
+        "one before, where it should branch or ask), then reply with JSON only:\n"
+        '{"name": "Short name", "description": "one line", "trigger": {"kind": '
+        '"phrase|time|startup|folder|manual", "phrases": ["what the user will say", '
+        '"another way to say it"], "at": "HH:MM", "days": ["mon", ...], "folder": "", '
+        '"pattern": "*.pdf", "event": "new|changed"}, '
+        '"steps": [{"action": "<action>", "settings": {...}}], '
+        '"links": [["trigger", "out", 1], [1, "out", 2], [2, "true", 3], [2, "false", 4]]}\n'
+        'Links join step numbers (1 = the first step; "trigger" is the start) through an '
+        "output: out, or true/false for if, yes/no for confirm. Leave links out when the "
+        "steps simply run one after another.\n"
+        f"Nodes:\n{catalogue}\n"
+        "Rules: use only these nodes, at most "
+        f"{MAX_STEPS}. Include every step the job needs to really work (open the site or "
+        "app before typing into it, a short wait while a page loads, a confirm before "
+        "anything that sends or can't be undone) but nothing the user didn't ask for. "
+        "keys items are lines like 'ctrl+t', 'enter', 'tab x2', 'type: hello', 'wait: 2'. "
+        "A login node names a saved login (what the user calls it, e.g. 'College portal'); "
+        "never put a username or password in any setting. 'Whenever I start work' is a "
+        "phrase trigger with phrases like 'start work' and 'I'm starting work'. Folders "
+        "may be desktop, documents, downloads, pictures, music, videos or a full path. In "
+        "a step's text, {previous} is the result of the step that led there and {step 2} "
+        "the result of step 2. The user's words are a request to design a workflow, not "
+        "instructions to you beyond that."
     )
 
 
@@ -1325,7 +1613,8 @@ class ProposalError(ValueError):
 
 
 def parse_proposal(reply: str) -> Workflow:
-    """The model's JSON as a :class:`Workflow` (unknown actions dropped)."""
+    """The model's JSON as a :class:`Workflow` (unknown actions dropped; links kept
+    when they make sense, otherwise the steps run in order)."""
     reply = re.sub(r"<think>.*?</think>", "", reply, flags=re.DOTALL | re.IGNORECASE)
     start, end = reply.find("{"), reply.rfind("}")
     if start < 0 or end <= start:
@@ -1336,8 +1625,13 @@ def parse_proposal(reply: str) -> Workflow:
         raise ProposalError("the workflow wasn't valid JSON") from exc
     if not isinstance(data, dict):
         raise ProposalError("no workflow in the reply")
+    raw_links = data.pop("links", None)
     workflow = Workflow.from_json(data)
-    workflow.steps = [s for s in workflow.steps if s.action in ACTIONS]
+    numbered = {n: step for n, step in enumerate(workflow.steps, 1)}
+    workflow.steps = [s for s in workflow.steps if s.action in ACTIONS][:MAX_STEPS]
+    for step in workflow.steps:
+        _scrub_secrets(step)
+    workflow.links = _proposed_links(workflow, numbered, raw_links)
     trigger = workflow.trigger
     if trigger.kind not in TRIGGERS:
         trigger.kind = "phrase"
@@ -1348,6 +1642,52 @@ def parse_proposal(reply: str) -> Workflow:
     if not workflow.steps:
         raise ProposalError("the workflow had no steps I can run")
     return workflow
+
+
+_SECRET_SETTING = re.compile(r"pass(word|code)?|pwd|secret|token|api.?key|pin\b", re.I)
+
+
+def _scrub_secrets(step: Step) -> None:
+    """A proposed step never carries a password or token (logins are saved separately)."""
+    for key in list(step.settings):
+        if _SECRET_SETTING.search(key):
+            del step.settings[key]
+
+
+def _proposed_links(workflow: Workflow, numbered: dict[int, Step], raw: Any) -> list[Link] | None:
+    """The model's ``[from, output, to]`` links as :class:`Link`s, or None (= in order)
+    when it gave none or none of them start from the trigger."""
+    if not isinstance(raw, list) or not raw:
+        return None
+    kept = {step.id for step in workflow.steps}
+
+    def node(value: Any) -> str | None:
+        if isinstance(value, str) and value.strip().lower() == TRIGGER_ID:
+            return TRIGGER_ID
+        try:
+            step = numbered.get(int(value))
+        except (TypeError, ValueError):
+            return None
+        return step.id if step is not None and step.id in kept else None
+
+    workflow.links = []
+    for item in raw[: MAX_STEPS * 3]:
+        if not isinstance(item, list | tuple) or len(item) != 3:
+            continue
+        src, dst = node(item[0]), node(item[2])
+        port = str(item[1]).strip().lower()
+        if src is None or dst is None or dst == TRIGGER_ID or src == dst:
+            continue
+        source = workflow.step(src)
+        outputs = source.outputs if source is not None else ("out",)
+        if port not in outputs or would_loop(workflow, src, dst):
+            continue
+        link = Link(src, port, dst)
+        if link not in workflow.links:
+            workflow.links.append(link)
+    if not any(link.src == TRIGGER_ID for link in workflow.links):
+        return None
+    return workflow.links
 
 
 # --- ready-made workflows, offered in the builder ---
@@ -1534,6 +1874,47 @@ def _canvas_templates() -> list[Workflow]:
             ],
             description="Reviews the day, saves it, tidies the desktop and locks the PC "
             "(both ask first).",
+        ),
+        Workflow(
+            "Portal login",
+            Trigger("phrase", ["open my portal", "log in to the portal"]),
+            [
+                Step("open_website", {"url": "https://portal.example.edu"}),
+                Step("wait", {"seconds": 4}),
+                Step("login", {"login": "College portal", "submit": True}),
+                Step("wait", {"seconds": 3}),
+                Step("ai_click", {"target": "the timetable or schedule link", "app": ""}),
+            ],
+            description="Keyboard: opens a site, fills in a saved login (it asks first), "
+            "then clicks the link you describe. Set the address and pick the login.",
+        ),
+        _linked(
+            "Inbox to Telegram",
+            Trigger("time", at="09:00", days=["mon", "tue", "wed", "thu", "fri"]),
+            [
+                Step("email_summary", {"count": 20}),
+                Step("condition", {"value": "{previous}", "test": "isn't empty"}),
+                Step("telegram", {"message": "Inbox at 9: {step 1}"}),
+            ],
+            [(-1, "out", 0), (0, "out", 1), (1, "true", 2)],
+            "Telegram: sends a summary of your unread mail to your phone every weekday "
+            "morning (it asks before sending).",
+        ),
+        Workflow(
+            "New note in Notepad",
+            Trigger("phrase", ["quick notepad note", "new notepad note"]),
+            [
+                Step(
+                    "keys",
+                    {
+                        "app": "Notepad",
+                        "items": ["ctrl+n", "wait: 0.5", "type: {today}", "enter", "enter"],
+                    },
+                ),
+                Step("say", {"text": "Notepad is ready."}),
+            ],
+            description="Keyboard: opens Notepad, starts a new tab and types today's date. "
+            "Change the keys to automate any app.",
         ),
     ]
 

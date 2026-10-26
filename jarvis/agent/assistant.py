@@ -38,6 +38,7 @@ from jarvis.agent.workflows import (
     ACTIONS,
     TRIGGER_ID,
     ProposalError,
+    StepError,
     Workflow,
     WorkflowStore,
     checklist_text,
@@ -46,6 +47,7 @@ from jarvis.agent.workflows import (
     parse_proposal,
     proposal_prompt,
     run_order,
+    step_calls,
     tool_call,
     workflow_request,
 )
@@ -57,7 +59,14 @@ from jarvis.providers.router import NO_VISION, AllProvidersFailedError, Diagnosi
 from jarvis.storage.db import HistoryStore
 from jarvis.storage.memory import Memory
 from jarvis.tools.plugins import is_plugin_tool
-from jarvis.tools.registry import ArgumentError, Risk, ToolRegistry, ToolResult, validate_args
+from jarvis.tools.registry import (
+    WORKFLOW_ONLY,
+    ArgumentError,
+    Risk,
+    ToolRegistry,
+    ToolResult,
+    validate_args,
+)
 from jarvis.tools.slides import DeckRequest, deck_command
 from jarvis.voice.spoken_text import without_thinking
 
@@ -636,6 +645,8 @@ class Assistant:
             if self._briefing is None:
                 return False, "The briefing isn't available", "", False, "out"
             return True, "Given", await self._briefing(), True, "out"
+        if spec.sequence:
+            return await self._workflow_calls(index, step, previous)
         if step.action == "ask_jarvis" or spec.request is not None:
             if spec.request is not None:
                 request = spec.request(settings).strip()
@@ -653,8 +664,61 @@ class Assistant:
             return False, f"Unknown action “{step.action}”", "", False, "out"
         name, args = call
         tool = ToolCall(f"workflow_{index}", name, args)
-        outcome = await self._screen(tool, await self._run_tool(tool))
+        outcome = await self._screen(tool, await self._run_tool(tool, workflow=True))
         return outcome.ok, outcome.summary, _result_text(outcome), outcome.ok and spec.shows, "out"
+
+    async def _workflow_calls(
+        self, index: int, step: Any, previous: str
+    ) -> tuple[bool, str, str, bool, str]:
+        """A keyboard, typing or JSON node: several tool calls after one question that
+        lists them all (asked when any of them would ask; HIGH ones still ask again)."""
+        try:
+            calls = step_calls(step)
+        except StepError as exc:
+            return False, f"Couldn't run it: {exc}", "", False, "out"
+        if not calls:
+            return False, "There's nothing to do yet", "", False, "out"
+        risk, lines = Risk.LOW, []
+        for name, args in calls:
+            if name == "wait":
+                continue
+            spec = self._registry.get(name)
+            if spec is None:
+                return False, f"There is no tool called {name}", "", False, "out"
+            try:
+                clean = validate_args(spec.parameters, args)
+            except ArgumentError as exc:
+                return False, f"{name}: {exc}", "", False, "out"
+            risk = max(risk, spec.risk_for(clean))
+            lines.append(spec.describe(clean))
+        approved: Risk | None = None
+        if risk >= Risk.MEDIUM:
+            listed = "; ".join(lines[:8])
+            if len(lines) > 8:
+                listed += f"; and {len(lines) - 8} more"
+            question = f"{step.describe()}: {listed}"
+            if not await self._confirm(ConfirmRequest(step.action, Risk.MEDIUM, question)):
+                await self._emit(EntryKind.ACTION, f"Declined: {step.describe()}")
+                return False, "You said no", "", False, "out"
+            approved = Risk.MEDIUM
+        outputs: list[str] = []
+        for number, (name, args) in enumerate(calls, 1):
+            if name == "wait":
+                await asyncio.sleep(float(args.get("seconds", 0)))
+                continue
+            call = ToolCall(f"workflow_{index}_{number}", name, args)
+            outcome = await self._screen(
+                call, await self._run_tool(call, workflow=True, approved=approved)
+            )
+            if not outcome.ok:
+                return False, f"Stopped at action {number}: {outcome.summary}", "", False, "out"
+            if name not in _KEYBOARD_TOOLS:
+                outputs.append(_result_text(outcome))
+            if name == "open_app":
+                await asyncio.sleep(_SETTLE_APP_S)  # so keys go to the app just raised
+        done = f"Done: {len(calls)} action{'' if len(calls) == 1 else 's'}"
+        output = "\n".join(outputs) or previous
+        return True, done, output, bool(outputs) and step.action == "json_actions", "out"
 
     async def _propose_workflow(self, conversation: int, shown: str, text: str) -> Reply:
         """Turn "Whenever I start work, open … and show …" into a workflow, show it, and
@@ -990,19 +1054,27 @@ class Assistant:
             True, without_thinking(seen.content or "") or "Nothing notable on screen."
         )
 
-    async def _run_tool(self, call: ToolCall) -> ToolResult:
+    async def _run_tool(
+        self, call: ToolCall, *, workflow: bool = False, approved: Risk | None = None
+    ) -> ToolResult:
+        """Run one tool call, asking first at MEDIUM and HIGH risk. ``workflow``: a
+        workflow step runs it (only then may WORKFLOW_ONLY tools run); ``approved``: the
+        user already said yes to this much risk for the whole step."""
         spec = self._registry.get(call.name)
         if spec is None:
             return ToolResult(False, f"There is no tool called {call.name}.")
+        if spec.group == WORKFLOW_ONLY and not workflow:
+            logger.warning("Refused {}: only a workflow step may run it", spec.name)
+            return ToolResult(False, f"{call.name} only runs from a workflow step.")
         try:
             args = validate_args(spec.parameters, call.arguments)
         except ArgumentError as exc:
             return ToolResult(False, f"Invalid arguments: {exc}.")
         risk = spec.risk_for(args)
         description = spec.describe(args)
-        if risk >= Risk.MEDIUM:
-            approved = await self._confirm(ConfirmRequest(spec.name, risk, description))
-            if not approved:
+        if risk >= Risk.MEDIUM and not (approved is not None and risk <= approved):
+            said_yes = await self._confirm(ConfirmRequest(spec.name, risk, description))
+            if not said_yes:
                 await self._emit(EntryKind.ACTION, f"Declined: {description}")
                 self._recent.append(f"declined: {description}")
                 self._failed = True
@@ -1029,6 +1101,11 @@ _OPEN_BUILDER = re.compile(
     re.IGNORECASE,
 )
 
+
+# Keyboard tools in a keys/typing/JSON step: their results aren't passed on.
+_KEYBOARD_TOOLS = frozenset({"press_keys", "press_shortcut", "type_text", "open_app"})
+# After raising an app, wait until the foreground tracker (0.5 s) has seen it.
+_SETTLE_APP_S = 0.8
 
 # Notes on workflow steps that didn't run because no link led to them.
 _OFF_PATH = ("Not on this path", "Not linked")

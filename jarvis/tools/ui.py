@@ -5,11 +5,13 @@ the model picks one, and ``click_element`` / ``type_into`` act on it and return 
 window as it looks afterwards, so the model can check each step (look, act, check).
 
 Limits: shells, terminals, system editors, Windows Settings, Control Panel, Task Manager
-and JARVIS itself are never read or driven; password fields are never read or typed
-into; programs are never started by double-clicking them in Explorer. Clicks that send,
-pay, delete and the like, and pressing Enter after typing, ask first (see
-``click_risk``). Everything read here is outside text: the assistant screens it with the
-prompt-injection guard and the prompt treats it as information, never instructions.
+and JARVIS itself are never read or driven; password fields are never read, and only
+``fill_login`` (a workflow's "Fill in a login" node, with a login saved in Credential
+Manager) types into one; programs are never started by double-clicking them in
+Explorer. Clicks that send, pay, delete and the like, and pressing Enter after typing,
+ask first (see ``click_risk``). Everything read here is outside text: the assistant
+screens it with the prompt-injection guard and the prompt treats it as information,
+never instructions.
 """
 
 from __future__ import annotations
@@ -228,6 +230,39 @@ class UiDriver(Protocol):
     async def scroll(self, element_id: int | None, down: bool, amount: int) -> None: ...
 
 
+# Text boxes that are never a login's username: the browser's address bar, search boxes.
+_NOT_USERNAME = re.compile(r"\b(address|search|url|omnibox|find)\b", re.IGNORECASE)
+_USERNAME = re.compile(
+    r"\b(user\s?name|user|e-?mail|login|log in|sign in|account|phone|mobile|id|"
+    r"roll|register\w*)\b",
+    re.IGNORECASE,
+)
+
+
+def login_fields(boxes: list[tuple[str, bool]]) -> tuple[int | None, int | None]:
+    """Which of a window's text boxes, given in reading order as (name, is_password),
+    take a login's username and password: (username index, password index).
+
+    The password box is the first password box. The username box is the box before it
+    that is named like one (user, email, login...), else the nearest plain box before
+    it; address and search bars never count. With no password box (a two-step sign-in),
+    the username box is the one named like one, or the only plain box."""
+    password = next((i for i, (_name, secret) in enumerate(boxes) if secret), None)
+    plain = [
+        i
+        for i, (name, secret) in enumerate(boxes)
+        if not secret and not _NOT_USERNAME.search(name) and (password is None or i < password)
+    ]
+    named = [i for i in plain if _USERNAME.search(boxes[i][0])]
+    if password is not None:
+        if named:
+            return named[-1], password
+        return (plain[-1] if plain else None), password
+    if named:
+        return named[0], None
+    return (plain[0] if len(plain) == 1 else None), None
+
+
 def _clip(text: str, limit: int = 100) -> str:
     text = " ".join(str(text or "").split())
     return text if len(text) <= limit else text[: limit - 1] + "…"
@@ -286,7 +321,7 @@ class WindowsUi:
         await asyncio.sleep(_SETTLE_S)
         return await self._run(lambda: self._read(self._hwnd))
 
-    def _find(self, window: str) -> int:
+    def _find(self, window: str, *, title_only: bool = False) -> int:
         import uiautomation as uia
 
         if not window.strip():
@@ -305,7 +340,9 @@ class WindowsUi:
                         continue
                 except Exception:
                     continue
-                if wanted in title.lower() or wanted == app_label(process).lower():
+                if wanted in title.lower() or (
+                    not title_only and wanted == app_label(process).lower()
+                ):
                     reason = blocked_reason(process, title, own=top.ProcessId == os.getpid())
                     if reason:
                         raise UiError(reason)
@@ -452,6 +489,71 @@ class WindowsUi:
             wheel(wheelTimes=max(1, min(amount, 20)) * 3)
 
         await self._run(go)
+
+    async def fill_login(self, site: str, username: str, password: str, submit: bool) -> str:
+        """Type a saved login into the window whose title contains ``site``: the username
+        box, then the password box (see :func:`login_fields`), then Enter if ``submit``.
+        Returns what was filled ("username and password", "username" or "password").
+        Nothing typed is logged or read back."""
+        if not site.strip():
+            raise UiError("the login has no window title words to match")
+
+        def go() -> str:
+            import uiautomation as uia
+
+            hwnd = self._find(site, title_only=True)
+            root = uia.ControlFromHandle(hwnd)
+            if root is None:
+                raise UiError("that window has closed")
+            boxes: list[tuple[str, bool]] = []
+            controls: list[Any] = []
+            started = time.monotonic()
+            for visited, (control, _depth) in enumerate(uia.WalkControl(root, maxDepth=_MAX_DEPTH)):
+                if visited >= _MAX_NODES or time.monotonic() - started > _WALK_BUDGET_S:
+                    break
+                try:
+                    if control.ControlTypeName != "EditControl" or control.IsOffscreen:
+                        continue
+                    if not control.IsEnabled or control.BoundingRectangle.isempty():
+                        continue
+                    boxes.append((str(control.Name or ""), bool(control.IsPassword)))
+                except Exception:
+                    continue
+                controls.append(control)
+            user_at, pass_at = login_fields(boxes)
+            if user_at is None and pass_at is None:
+                raise UiError("I couldn't find a username or password box in that window")
+
+            def put(control: Any, text: str) -> None:
+                if uia.GetForegroundWindow() != hwnd:
+                    self._bring_to_front(hwnd)
+                    if uia.GetForegroundWindow() != hwnd:
+                        raise UiError("the login window wasn't in front, so I stopped")
+                control.SetFocus()
+                if not control.HasKeyboardFocus:
+                    control.Click(simulateMove=False)
+                if not control.HasKeyboardFocus:
+                    raise UiError("I couldn't put the cursor in the login box")
+                self._press(["ctrl", "a"])
+                self._press(["backspace"])
+                self._type_text(text)
+                time.sleep(0.1)
+
+            filled = []
+            if user_at is not None and username:
+                put(controls[user_at], username)
+                filled.append("username")
+            if pass_at is not None and password:
+                put(controls[pass_at], password)
+                filled.append("password")
+            if not filled:
+                raise UiError("there was nothing to fill in")
+            if submit:
+                self._press(["enter"])
+            logger.info("Filled a login ({})", " and ".join(filled))  # never what
+            return " and ".join(filled)
+
+        return await self._run(go)
 
     def close(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)

@@ -27,6 +27,7 @@ GROUP_STYLE: dict[str, tuple[QColor, str]] = {
     "Apps & files": (QColor(186, 230, 253), "folder"),
     "Messaging": (QColor(45, 212, 191), "chat"),
     "PC": (QColor(148, 163, 184), "monitor"),
+    "Keyboard & screen": (QColor(196, 181, 253), "keyboard"),
     "Core": (QColor(251, 146, 60), "gear"),
 }
 
@@ -334,6 +335,34 @@ def _hand(p: QPainter) -> None:
     p.drawPath(_path((10, 8.5), (16, 12), (10, 15.5), closed=True))
 
 
+def _keyboard(p: QPainter) -> None:
+    p.drawRoundedRect(QRectF(2.5, 6.5, 19, 11.5), 2, 2)
+    for x in (6, 9.5, 13, 16.5):
+        _lines(p, (x, 10, x + 1, 10))
+    _lines(p, (7.5, 14.5, 16.5, 14.5))
+
+
+def _cursor(p: QPainter) -> None:
+    p.drawPath(_path((6, 3.5), (6, 18), (9.8, 14.4), (12.6, 20.5), (15, 19.4), (12.3, 13.4),
+                     (17.5, 13.2), closed=True))  # fmt: skip
+
+
+def _key(p: QPainter) -> None:
+    p.drawEllipse(QRectF(3, 8, 8, 8))
+    _lines(p, (11, 12, 21, 12), (17.5, 12, 17.5, 15.5), (20.5, 12, 20.5, 14.5))
+
+
+def _code(p: QPainter) -> None:
+    p.drawPath(_path((8, 6.5), (3, 12), (8, 17.5)))
+    p.drawPath(_path((16, 6.5), (21, 12), (16, 17.5)))
+    _lines(p, (13.5, 5, 10.5, 19))
+
+
+def _send(p: QPainter) -> None:
+    p.drawPath(_path((3, 11.5), (21, 3.5), (14, 20.5), (11, 13.5), closed=True))
+    _lines(p, (11, 13.5, 21, 3.5))
+
+
 def _plus(p: QPainter) -> None:
     _lines(p, (12, 5, 12, 19), (5, 12, 19, 12))
 
@@ -377,6 +406,11 @@ _ICONS: dict[str, Draw] = {
     "mic": _mic,
     "power": _power,
     "hand": _hand,
+    "keyboard": _keyboard,
+    "cursor": _cursor,
+    "key": _key,
+    "code": _code,
+    "send": _send,
     "plus": _plus,
 }
 NAMES = tuple(_ICONS)
