@@ -657,6 +657,11 @@ class Assistant:
                 request = str(settings.get("request") or "").strip()
             if not request:
                 return False, "No request was set", "", False, "out"
+            if spec.connection == "gmail":
+                problem = await self._mailbox_problem(index, step.action)
+                if problem is not None:
+                    return problem
+            self._failed = self._blocked = False
             result = await self._converse(request, spoken, history=False)
             text = without_thinking(result.content or "")
             failed = self._failed or self._blocked or says_it_cannot(text)
@@ -672,6 +677,23 @@ class Assistant:
             tool, await self._run_tool(tool, workflow=True, approved=allowed)
         )
         return outcome.ok, outcome.summary, _result_text(outcome), outcome.ok and spec.shows, "out"
+
+    async def _mailbox_problem(
+        self, index: int, action: str
+    ) -> tuple[bool, str, str, bool, str] | None:
+        """Check the mailbox before a Gmail node hands its request to a model, so a missing
+        or refused sign-in fails the step with the real reason instead of an apology. No
+        unread mail finishes a summary/tasks node without a model call."""
+        call = ToolCall(f"workflow_{index}_mail", "check_email", {"count": 1})
+        if self._registry.get("check_email") is None:
+            return False, "Email isn't available in this copy of JARVIS", "", False, "out"
+        outcome = await self._run_tool(call, workflow=True, approved=Risk.LOW)
+        if not outcome.ok:
+            note = f"{outcome.summary} Open this node's Gmail Connect card to fix it."
+            return False, note, note, True, "out"
+        if action != "email_drafts" and outcome.summary.startswith("No unread"):
+            return True, "No unread email", "No unread email.", True, "out"
+        return None
 
     async def _workflow_calls(
         self, index: int, step: Any, previous: str
@@ -1114,7 +1136,7 @@ _KEYBOARD_TOOLS = frozenset({"press_keys", "press_shortcut", "type_text", "open_
 _SETTLE_APP_S = 0.8
 
 # Notes on workflow steps that didn't run because no link led to them.
-_OFF_PATH = ("Not on this path", "Not linked")
+_OFF_PATH = ("Not on this path", "Not linked: nothing leads to it")
 
 
 def _result_text(outcome: ToolResult) -> str:
@@ -1160,9 +1182,9 @@ def trim_old_windows(messages: list[Message]) -> None:
 
 
 _CANNOT = re.compile(
-    r"^\W*(?:(?:sorry|unfortunately|apologies)\W+)?(?:but\s+)?i(?:\s+am|'m)?\s+"
-    r"(?:can'?t|cannot|couldn'?t|could\s+not|was\s+unable|unable|not\s+able|"
-    r"wasn'?t\s+able|don'?t\s+have\s+(?:the\s+)?(?:ability|access|permission))\b",
+    r"^\W*(?:(?:sorry|unfortunately|apologies)\W+)?(?:but\s+)?i(?:\s+am|['\u2019]m)?\s+"
+    r"(?:can['\u2019]?t|cannot|couldn['\u2019]?t|could\s+not|was\s+unable|unable|not\s+able|"
+    r"wasn['\u2019]?t\s+able|don['\u2019]?t\s+have\s+(?:the\s+)?(?:ability|access|permission))\b",
     re.IGNORECASE,
 )
 

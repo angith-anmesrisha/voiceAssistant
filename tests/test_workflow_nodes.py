@@ -591,3 +591,77 @@ def test_a_saved_login_can_be_changed_without_retyping_it(qapp: Any, tmp_path: P
     dialog.username.setText("y")
     dialog.add()
     assert "already a login" in dialog.note.text() and len(logins.all()) == 1
+
+
+# --- Gmail nodes check the mailbox first ---
+
+
+def _with_mailbox(rig: WorkflowRig, imap: Any) -> None:
+    from jarvis.tools.email_imap import Mailbox, register_email_tools
+    from jarvis.tools.registry import ToolRegistry
+
+    box = None if imap is None else Mailbox("me@gmail.com", "pw", connect=lambda host: imap)
+    mail = ToolRegistry()
+    register_email_tools(mail, lambda: box)
+    registry = rig.assistant._registry
+    for name in mail.names():
+        registry._tools[name] = mail._tools[name]
+
+
+async def test_a_gmail_node_with_no_mailbox_fails_with_the_reason(tmp_path: Path) -> None:
+    router = ScriptedRouter()  # no model is asked
+    rig = WorkflowRig(tmp_path, router)
+    _with_mailbox(rig, None)
+    rig.workflows.put(Workflow("Inbox", Trigger("phrase", ["inbox"]), [Step("email_summary", {})]))
+    await rig.assistant.handle("inbox")
+    step = rig.plans[-1].steps[0]
+    assert step.status is StepStatus.FAILED
+    assert "no mailbox is connected" in step.note and "Connect card" in step.note
+    assert "restart" not in step.note
+    assert router.requests == []
+
+
+async def test_a_refused_sign_in_fails_the_gmail_node(tmp_path: Path) -> None:
+    from tests.test_email import FakeImap
+
+    rig = WorkflowRig(tmp_path, ScriptedRouter())
+    _with_mailbox(rig, FakeImap({}, set(), refuse=True))
+    rig.workflows.put(Workflow("Inbox", Trigger("phrase", ["inbox"]), [Step("email_tasks", {})]))
+    await rig.assistant.handle("inbox")
+    step = rig.plans[-1].steps[0]
+    assert step.status is StepStatus.FAILED and "app password" in step.note
+
+
+async def test_no_unread_mail_needs_no_model(tmp_path: Path) -> None:
+    from tests.test_email import FakeImap
+
+    router = ScriptedRouter()
+    rig = WorkflowRig(tmp_path, router)
+    _with_mailbox(rig, FakeImap({}, set()))
+    rig.workflows.put(Workflow("Inbox", Trigger("phrase", ["inbox"]), [Step("email_summary", {})]))
+    await rig.assistant.handle("inbox")
+    step = rig.plans[-1].steps[0]
+    assert step.status is StepStatus.DONE and step.note == "No unread email"
+    assert router.requests == []
+
+
+async def test_an_apology_with_a_curly_apostrophe_fails_the_step(tmp_path: Path) -> None:
+    from tests.test_email import FakeImap, message
+
+    router = ScriptedRouter(
+        text_reply("I\u2019m unable to reach your Gmail account at the moment.")
+    )
+    rig = WorkflowRig(tmp_path, router)
+    _with_mailbox(rig, FakeImap({"7": message(7, "Priya <p@w.com>", "Hi", "Hello")}, {"7"}))
+    rig.workflows.put(Workflow("Inbox", Trigger("phrase", ["inbox"]), [Step("email_summary", {})]))
+    await rig.assistant.handle("inbox")
+    assert rig.plans[-1].steps[0].status is StepStatus.FAILED
+    assert len(router.requests) == 1
+
+
+def test_curly_apostrophes_count_as_cannot() -> None:
+    from jarvis.agent.assistant import says_it_cannot
+
+    assert says_it_cannot("I\u2019m unable to reach it")
+    assert says_it_cannot("Sorry, I can\u2019t do that")
+    assert says_it_cannot("I couldn\u2019t open it")

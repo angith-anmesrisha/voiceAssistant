@@ -269,8 +269,8 @@ def register_email_tools(
         found = mailbox()
         if found is None:
             raise EmailError(
-                f"no mailbox is connected. Set {ADDRESS_ENV} and {PASSWORD_ENV} (an app "
-                "password) as environment variables, then restart JARVIS"
+                "no mailbox is connected. Add your address and an app password in a Gmail "
+                f"node's Connect card (or set {ADDRESS_ENV} and {PASSWORD_ENV})"
             )
         return found
 

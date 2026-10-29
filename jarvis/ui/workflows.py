@@ -1841,6 +1841,8 @@ class WorkflowBuilder(QWidget):
         self._run_seen = {}
         self.log.clear()
         self._log(f"▶ Testing “{self._current.name}”")
+        for warning in warnings(self._current):
+            self._log(f"⚠ {warning} Drag from the node before it to this one to link them.")
         self.log_state.setText("Running…")
         if not self._logs_open:
             self.toggle_logs()

@@ -239,6 +239,13 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   with no phrase takes the workflow's name. Saved logins can be edited (pick one; a
   blank password keeps it); a rename updates `login` steps in saved workflows
   (`rename_login`).
+- Gmail nodes check first (owner, 2026-10-29: the inbox summary said ✓ over the model's
+  "I’m unable to reach your Gmail"): agent nodes with `connection == "gmail"` run
+  `check_email` (count 1) before the model (`_mailbox_problem`); a failure fails the step
+  with the tool's reason + "Open this node's Gmail Connect card", no unread mail
+  finishes summary/tasks nodes with "No unread email" and no model call. `_CANNOT`
+  accepts curly apostrophes. Testing a workflow logs a ⚠ line per unlinked step; the
+  run note is "Not linked: nothing leads to it".
 - Quick capture: `commands.capture_command` (idea:/add a task…/todo:/add X to my Y
   tasks/quick note:) → `add_task` or `save_note` "Inbox" in `_handle` before the deck
   check, no model (mode "capture"); a trailing due ("by friday", "tomorrow") is split
