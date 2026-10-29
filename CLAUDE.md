@@ -551,6 +551,14 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   be NEEDS_TOOLS (or a think block), the controller moves to SPEAKING on the first piece
   and doesn't speak `Reply.streamed` replies again. `voice.speak_while_writing`,
   `voice.end_silence_s`. Samples: /mnt/project-files/jarvis/voice-samples/.
+- Fluent pieces (owner, 2026-10-29: the voice "reads very bad, not fluent"): pieces were
+  cut at commas mid-sentence ("Good morning," / "sir. It's…"), the comma was stripped and
+  `speakable` added a full stop, so every clause ended like a sentence, then 0.22 s of
+  silence. Now a piece keeps its comma (`speakable` leaves ,;: endings), runs stop at the
+  last full stop when one fits (`_clauses_upto`), the first piece is the whole first
+  sentence when ≤60 chars, and only sentence ends get 0.22 s (a comma 0.06 s).
+  `voice.neural_voice` takes mixes ("bm_george+bm_fable", "bm_george*6+am_michael*4",
+  `neural.blend`). Comparison samples: voice-samples/round-2/.
 - Voice (owner asked for a free, unlimited JARVIS-like voice, 2026-10-24): local Kokoro
   `bm_george` at speed 1.15 (0.95 felt slow; owner picked 1.15 over 1.05 on 2026-10-25), 0.22 s between sentences,
   first piece cut at its first comma when over 70 chars so audio starts sooner, a

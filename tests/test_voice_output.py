@@ -202,7 +202,8 @@ def test_neural_playback_speaks_pieces_and_stops(monkeypatch: pytest.MonkeyPatch
     played = FakeStream.made[0]
     pieces = len(voice.made)
     assert voice.made[0] == "Certainly." and pieces >= 3
-    assert played.frames == pieces * 24_000 + (pieces - 1) * int(0.22 * 24_000)
+    pauses = sum(int((0.22 if made.endswith(".") else 0.06) * 24_000) for made in voice.made[:-1])
+    assert played.frames == pieces * 24_000 + pauses
     assert not played.aborted
 
     original = FakeStream.__init__
@@ -304,3 +305,22 @@ def test_reply_language_by_script(text: str, language: str | None) -> None:
 
     found = script_language(text)
     assert (found[0] if found else None) == language
+
+
+def test_pieces_keep_sentences_whole() -> None:
+    from jarvis.voice.feed import SpeechFeed
+
+    reply = "Good morning, sir. It's twenty-two degrees in Kochi, with light rain after four."
+    feed = SpeechFeed(reply, closed=True)
+    assert feed.take(60, single=True) == "Good morning, sir."
+    feed = SpeechFeed("Right. The meeting starts at ten, in room four.", closed=True)
+    assert feed.take(40) == "Right."  # not "Right. The meeting starts at ten,"
+    # A comma at the end of a piece stays, so the voice doesn't end it like a sentence.
+    assert speakable("with Arjun,") == "with Arjun,"
+
+
+def test_voices_can_be_mixed() -> None:
+    assert neural.blend("bm_george") == [("bm_george", 1.0)]
+    assert neural.blend("bm_george+bm_fable") == [("bm_george", 1.0), ("bm_fable", 1.0)]
+    assert neural.blend("bm_george*6 + am_michael*4") == [("bm_george", 6.0), ("am_michael", 4.0)]
+    assert neural.blend("bm_george*x") == [] and neural.blend("+") == []

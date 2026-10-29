@@ -13,6 +13,7 @@ import threading
 import time
 
 _BOUNDARY = re.compile(r"(?<=[,.;:!?…])\s+|\n+")
+_SENTENCE_END = re.compile(r"[.!?…]\s*$|\n\s*$")
 
 
 class SpeechFeed:
@@ -76,15 +77,28 @@ class SpeechFeed:
 
 def _clauses_upto(text: str, max_chars: int, *, single: bool = False) -> str:
     """The longest run of whole clauses from the start of ``text`` within ``max_chars``
-    (at least one clause; a single very long clause is cut at a space)."""
+    (at least one clause; a single very long clause is cut at a space). A run that would
+    stop inside a sentence stops at the last full stop in it instead: a piece is spoken
+    on its own, and pieces cut mid-sentence ("Good morning," / "sir. It's ...") are what
+    made the voice sound choppy (owner, 2026-10-29)."""
     ends = [m.end() for m in _BOUNDARY.finditer(text)]
     if not ends or ends[-1] < len(text):
         ends.append(len(text))
     chosen = ends[0]
+    if single:
+        # The first piece: the whole first sentence when it's short ("Good morning, sir."),
+        # else its first clause.
+        first = next((end for end in ends if _SENTENCE_END.search(text[:end])), None)
+        if first is not None and len(text[:first].strip()) <= max_chars:
+            chosen = first
     for end in [] if single else ends[1:]:
         if len(text[:end].strip()) > max_chars:
             break
         chosen = end
+    if not _SENTENCE_END.search(text[:chosen]):
+        whole = [end for end in ends if end < chosen and _SENTENCE_END.search(text[:end])]
+        if whole:
+            chosen = whole[-1]
     piece = text[:chosen]
     if len(piece.strip()) > max_chars * 1.5:
         cut = text.rfind(" ", 0, max_chars)

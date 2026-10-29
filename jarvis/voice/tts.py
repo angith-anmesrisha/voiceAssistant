@@ -33,6 +33,7 @@ from jarvis.voice.spoken_text import script_language, speakable
 _SVSF_ASYNC = 1
 _SVSF_PURGE = 2
 _SENTENCE_PAUSE_S = 0.22  # between sentences: natural, not hurried
+_CLAUSE_PAUSE_S = 0.06  # after a piece that ends at a comma: just a breath
 _BLOCK = 1200  # frames written at a time (50 ms), so stop() is quick
 _FIRST_CHARS = 60  # the first piece: one short clause, so speech starts quickly
 _LONGEST_CHARS = 280
@@ -211,13 +212,20 @@ class Speaker:
         from jarvis.voice.neural import SAMPLE_RATE
 
         voice = self._neural
-        pause = np.zeros(int(_SENTENCE_PAUSE_S * SAMPLE_RATE), dtype=np.float32)
+
+        def pause(after: str) -> Any:
+            ends = after.rstrip().endswith((".", "!", "?", "…"))
+            seconds = _SENTENCE_PAUSE_S if ends else _CLAUSE_PAUSE_S
+            return np.zeros(int(seconds * SAMPLE_RATE), dtype=np.float32)
+
         pool = ThreadPoolExecutor(1, thread_name_prefix="tts-synth")
         stream = sd.OutputStream(samplerate=SAMPLE_RATE, channels=1, dtype="float32", latency="low")
 
         def make(piece: str) -> tuple[str, Any, float]:
             started = time.perf_counter()
-            audio = voice.synthesize(speakable(piece.rstrip(",;: ")))
+            # The comma stays: Kokoro then keeps the voice up, as mid-sentence, instead of
+            # ending every clause like a sentence.
+            audio = voice.synthesize(speakable(piece))
             return piece, audio, time.perf_counter() - started
 
         try:
@@ -232,7 +240,7 @@ class Speaker:
                 following = feed.take(self._budget(playing), stop=self._stop)
                 pending = pool.submit(make, following) if following else None
                 if following is not None:
-                    audio = np.concatenate([audio, pause])
+                    audio = np.concatenate([audio, pause(piece)])
                 for start in range(0, len(audio), _BLOCK):
                     if self._stop.is_set():
                         stream.abort()

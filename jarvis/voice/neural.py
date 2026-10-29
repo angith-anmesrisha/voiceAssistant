@@ -136,6 +136,22 @@ def _split_phonemes(phonemes: str, limit: int = _MAX_PHONEMES) -> list[str]:
     return [*parts, phonemes] if phonemes else parts
 
 
+def blend(voice: str) -> list[tuple[str, float]]:
+    """A voice, or a mix of voices: "bm_george", "bm_george+bm_fable" (half each) or
+    "bm_george*6+am_michael*4" (weights). [] if it can't be read."""
+    mix = []
+    for part in voice.replace(" ", "").split("+"):
+        name, _, weight = part.partition("*")
+        try:
+            amount = float(weight) if weight else 1.0
+        except ValueError:
+            return []
+        if not name or amount <= 0:
+            return []
+        mix.append((name, amount))
+    return mix
+
+
 class KokoroVoice:
     """Loaded model plus one voice. ``synthesize`` is safe to call from one thread at a time."""
 
@@ -158,11 +174,17 @@ class KokoroVoice:
         except (ValueError, KeyError) as exc:
             raise VoiceModelError("the voice model has no phoneme table") from exc
         voices = np.load(folder / MODEL_FILES[1].name)
-        if voice not in voices:
+        mix = blend(voice)
+        if not mix or any(name not in voices for name, _ in mix):
             logger.warning("Voice {} isn't in the model; using {}", voice, DEFAULT_VOICE)
-            voice = DEFAULT_VOICE
+            voice, mix = DEFAULT_VOICE, [(DEFAULT_VOICE, 1.0)]
         self.voice = voice
-        self._style = np.asarray(voices[voice], dtype=np.float32)
+        total = sum(weight for _, weight in mix)
+        self._style = np.sum(
+            [np.asarray(voices[name], dtype=np.float32) * (weight / total) for name, weight in mix],
+            axis=0,
+            dtype=np.float32,
+        )
         self.speed = max(0.5, min(2.0, speed))
         self._lock = threading.Lock()
         self.synthesize("Ready.")  # the first run is slow (allocations); do it now

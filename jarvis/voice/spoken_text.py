@@ -46,7 +46,7 @@ def _line(line: str) -> str:
     line = _EMPHASIS.sub("", line)
     line = re.sub(r"(?<![A-Za-z0-9])_+|_+(?![A-Za-z0-9])", "", line)  # _italic_, not snake_case
     line = line.strip()
-    if line and not line.endswith(_SENTENCE_END):
+    if line and not line.endswith((*_SENTENCE_END, ",", ";", ":")):
         line += "."
     return line
 
