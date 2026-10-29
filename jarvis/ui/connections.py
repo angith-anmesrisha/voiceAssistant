@@ -108,6 +108,12 @@ SERVICES: dict[str, Service] = {
                 "TELEGRAM_BOT_TOKEN", "Bot token", secret=True, hint="123456:ABC… from @BotFather"
             ),
             Field("TELEGRAM_CHAT_ID", "Your chat", hint="press Find my chat"),
+            Field(
+                "TELEGRAM_PROXY",
+                "Proxy (optional)",
+                required=False,
+                hint="only if your network blocks Telegram: http://host:port",
+            ),
         ),
         "In Telegram, message @BotFather, send /newbot and copy the token. Then send your "
         "new bot any message and press Find my chat. Every send asks you first.",
@@ -176,12 +182,16 @@ class Connections:
         return self.gmail.addresses()
 
     def save(self, service: str, values: dict[str, str]) -> bool:
-        """Save the filled-in fields (blank ones keep what's saved)."""
+        """Save the filled-in fields. A blank secret or required field keeps what's saved;
+        a blank optional one (like the proxy) is cleared."""
         spec = SERVICES[service]
         ok = True
         for field in spec.fields:
-            value = values.get(field.key, "").strip()
-            if value:
+            if field.key not in values:
+                continue
+            value = values[field.key].strip()
+            clears = not field.secret and not field.required and self.value(field.key)
+            if value or clears:
                 ok = self._save(field.key, value) and ok
         logger.info("Saved the {} connection", service)  # never the values
         return ok
@@ -291,6 +301,9 @@ class ConnectDialog(QDialog):
         if find is None or not token:
             self.note.setText("Paste the bot token first.")
             return
+        proxy = self.inputs["TELEGRAM_PROXY"].text().strip()
+        if proxy != self._connections.value("TELEGRAM_PROXY"):
+            self._connections.save("telegram", {"TELEGRAM_PROXY": proxy})
         self.note.setText("Looking for your message to the bot…")
 
         async def go() -> None:

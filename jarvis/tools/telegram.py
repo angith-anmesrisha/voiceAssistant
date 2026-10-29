@@ -19,12 +19,28 @@ from jarvis.tools.registry import Risk, ToolRegistry, ToolResult, ToolSpec
 
 TOKEN = "TELEGRAM_BOT_TOKEN"
 CHAT = "TELEGRAM_CHAT_ID"
+PROXY = "TELEGRAM_PROXY"  # optional http(s) proxy, for networks that block Telegram
 API = "https://api.telegram.org/bot{token}/{method}"
 MAX_TEXT = 4096  # Telegram's limit for one message
 
 
 class TelegramError(RuntimeError):
     pass
+
+
+_proxied: dict[str, httpx.AsyncClient] = {}
+
+
+def _through_proxy(client: httpx.AsyncClient) -> httpx.AsyncClient:
+    """The client to use: ``client``, or one through ``TELEGRAM_PROXY`` when it's set."""
+    proxy = (get_key(PROXY) or "").strip()
+    if not proxy:
+        return client
+    if not proxy.lower().startswith(("http://", "https://")):
+        raise TelegramError("the Telegram proxy must start with http:// or https://")
+    if proxy not in _proxied:
+        _proxied[proxy] = httpx.AsyncClient(proxy=proxy)
+    return _proxied[proxy]
 
 
 async def _call(
@@ -35,6 +51,7 @@ async def _call(
     files: dict[str, tuple[str, bytes, str]] | None = None,
 ) -> Any:
     url = API.format(token=token, method=method)
+    client = _through_proxy(client)
     timeout = httpx.Timeout(60.0 if files else 20.0, connect=15.0)
     response = None
     for attempt in range(2):  # one retry: a first connection can be slow

@@ -542,3 +542,17 @@ def test_the_bots_own_name_is_not_taken_as_the_chat_and_old_passwords_can_go() -
     gmail.forget_app_password()
     assert saved["JARVIS_EMAIL_PASSWORD"] == "" and saved["JARVIS_EMAIL_ADDRESS"] == ""
     assert connections.status("gmail") == "Not set up yet"
+
+
+def test_a_telegram_proxy_is_used_only_when_set(monkeypatch: pytest.MonkeyPatch) -> None:
+    from jarvis.tools import telegram
+
+    client = httpx.AsyncClient()
+    monkeypatch.delenv("TELEGRAM_PROXY", raising=False)
+    assert telegram._through_proxy(client) is client
+    monkeypatch.setenv("TELEGRAM_PROXY", "http://127.0.0.1:8080")
+    proxied = telegram._through_proxy(client)
+    assert proxied is not client and telegram._through_proxy(client) is proxied
+    monkeypatch.setenv("TELEGRAM_PROXY", "socks5://127.0.0.1:1080")
+    with pytest.raises(telegram.TelegramError, match="http://"):
+        telegram._through_proxy(client)
