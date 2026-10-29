@@ -497,3 +497,48 @@ async def test_any_number_of_gmail_accounts_are_read() -> None:
     ]
     read = await call(registry, "read_email", id="5:m5")
     assert read.ok and read.data["subject"] == "Hi 5"
+
+
+async def test_telegram_retries_a_failed_connection_then_says_what_to_check() -> None:
+    from jarvis.tools.telegram import TelegramError, find_chat
+
+    tries: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        tries.append(request.url.path)
+        raise httpx.ConnectTimeout("timed out", request=request)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    with pytest.raises(TelegramError) as caught:
+        await find_chat(client, "SECRET-TOKEN")
+    assert len(tries) == 2
+    assert "blocked on this network" in str(caught.value)
+    assert "SECRET-TOKEN" not in str(caught.value)
+
+
+def test_the_bots_own_name_is_not_taken_as_the_chat_and_old_passwords_can_go() -> None:
+    from PySide6.QtWidgets import QApplication
+
+    from jarvis.ui.connections import ConnectDialog, Connections, GmailDialog
+
+    _app = QApplication.instance() or QApplication([])
+    saved = {"JARVIS_EMAIL_ADDRESS": "me@gmail.com", "JARVIS_EMAIL_PASSWORD": "abcd"}
+
+    def save(name: str, value: str) -> bool:
+        saved[name] = value
+        return True
+
+    connections = Connections(get=saved.get, save=save)
+    dialog = ConnectDialog(None, connections, "telegram")
+    dialog.inputs["TELEGRAM_BOT_TOKEN"].setText("123:abc")
+    dialog.inputs["TELEGRAM_CHAT_ID"].setText("@JarvisMorningDigestBot")
+    dialog.save()
+    assert "your bot's name" in dialog.note.text() and "TELEGRAM_CHAT_ID" not in saved
+    dialog.inputs["TELEGRAM_CHAT_ID"].setText("987654321")
+    dialog.save()
+    assert saved["TELEGRAM_CHAT_ID"] == "987654321"
+    assert connections.status("gmail").startswith("Old app password for me@gmail.com")
+    gmail = GmailDialog(None, connections)
+    gmail.forget_app_password()
+    assert saved["JARVIS_EMAIL_PASSWORD"] == "" and saved["JARVIS_EMAIL_ADDRESS"] == ""
+    assert connections.status("gmail") == "Not set up yet"

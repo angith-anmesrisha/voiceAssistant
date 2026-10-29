@@ -35,14 +35,30 @@ async def _call(
     files: dict[str, tuple[str, bytes, str]] | None = None,
 ) -> Any:
     url = API.format(token=token, method=method)
+    timeout = httpx.Timeout(60.0 if files else 20.0, connect=15.0)
+    response = None
+    for attempt in range(2):  # one retry: a first connection can be slow
+        try:
+            if files is None:
+                response = await client.post(url, json=payload, timeout=timeout)
+            else:  # multipart: plain form fields plus the file
+                response = await client.post(url, data=payload, files=files, timeout=timeout)
+            break
+        except (httpx.ConnectError, httpx.ConnectTimeout) as exc:  # never str(exc): has the URL
+            if attempt == 0:
+                continue
+            raise TelegramError(
+                f"couldn't connect to api.telegram.org ({type(exc).__name__}). Telegram may "
+                "be blocked on this network: open https://api.telegram.org in your browser to "
+                "check, or try another network or a VPN"
+            ) from None
+        except httpx.HTTPError as exc:
+            raise TelegramError(f"Telegram didn't answer ({type(exc).__name__})") from None
+    assert response is not None
     try:
-        if files is None:
-            response = await client.post(url, json=payload)
-        else:  # multipart: plain form fields plus the file
-            response = await client.post(url, data=payload, files=files, timeout=60)
         data = response.json()
-    except (httpx.HTTPError, ValueError) as exc:  # never str(exc): it holds the URL
-        raise TelegramError(f"Telegram didn't answer ({type(exc).__name__})") from None
+    except ValueError:
+        raise TelegramError(f"Telegram didn't answer (HTTP {response.status_code})") from None
     if not isinstance(data, dict) or not data.get("ok"):
         description = str(data.get("description", "") if isinstance(data, dict) else "")
         if response.status_code == 401:

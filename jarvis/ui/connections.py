@@ -160,8 +160,15 @@ class Connections:
             accounts = self.gmail_accounts()
             if accounts:
                 return "Signed in (read-only): " + ", ".join(accounts)
-            return f"Connected with an app password as {self.value('JARVIS_EMAIL_ADDRESS')}"
+            return (
+                f"Old app password for {self.value('JARVIS_EMAIL_ADDRESS')}. Press Change to "
+                "sign in with Google instead"
+            )
         return "Connected"
+
+    def forget(self, key: str) -> None:
+        self._save(key, "")
+        logger.info("Removed a saved connection setting")
 
     def gmail_accounts(self) -> list[str]:
         if self.gmail is None or not self.value("JARVIS_GOOGLE_CLIENT_ID"):
@@ -265,6 +272,13 @@ class ConnectDialog(QDialog):
             self.note.setObjectName("problem")
             self.note.setStyleSheet("")
             return
+        chat = values.get("TELEGRAM_CHAT_ID", "").strip()
+        if chat.startswith("@") and chat.lower().endswith("bot"):
+            self.note.setText(
+                "That's your bot's name. This needs your chat with it: send the bot any "
+                "message in Telegram, then press Find my chat (it fills in a number)."
+            )
+            return
         if not self._connections.save(self._spec.name, values):
             self.note.setText("Saved for now, but Windows didn't keep it for next time.")
         self.accept()
@@ -325,6 +339,11 @@ class GmailDialog(ConnectDialog):
         layout.insertWidget(at, label)
         layout.insertWidget(at + 1, self.accounts)
         layout.insertLayout(at + 2, row)
+        if connections.value("JARVIS_EMAIL_PASSWORD"):
+            self.forget_button = QPushButton("Stop using the old app password")
+            self.forget_button.setObjectName("danger")
+            self.forget_button.clicked.connect(self.forget_app_password)
+            layout.insertWidget(at + 3, self.forget_button)
         self.save_button.setText("Done")
         self.note.setText(
             "The sign-in is kept in Windows Credential Manager. JARVIS never logs it, and "
@@ -336,6 +355,13 @@ class GmailDialog(ConnectDialog):
         self.accounts.clear()
         for address in self._connections.gmail_accounts():
             self.accounts.addItem(address)
+
+    def forget_app_password(self) -> None:
+        """Remove the IMAP app password (and its address and server) for good."""
+        for key in ("JARVIS_EMAIL_PASSWORD", "JARVIS_EMAIL_ADDRESS", "JARVIS_EMAIL_IMAP"):
+            self._connections.forget(key)
+        self.forget_button.hide()
+        self.note.setText("The app password is removed. Sign in with Google to read Gmail.")
 
     def _save_client(self) -> bool:
         values = self.values()
