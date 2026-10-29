@@ -90,6 +90,10 @@ _GROUPS: dict[str, re.Pattern[str]] = {
         r"papers?|quiz me|flashcards)\b",
         re.IGNORECASE,
     ),
+    "brief": re.compile(
+        r"\b(morning (brief|briefing|report|intelligence)|daily brief|brief (pdf|to telegram))\b",
+        re.IGNORECASE,
+    ),
     "email": re.compile(
         r"\b(e-?mails?|inbox|mail|mails|gmail|outlook|unread|reply to|draft (a )?repl(y|ies)|"
         r"newsletters?|messages from)\b",

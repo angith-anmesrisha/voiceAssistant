@@ -128,3 +128,90 @@ def _key(name: str) -> str:
 
 def login_store() -> LoginStore:
     return WindowsLogins() if sys.platform == "win32" else MemoryLogins()
+
+
+# --- tokens (Gmail sign-ins): one secret per account, e.g. a Google refresh token ---
+
+TOKEN_PREFIX = "JARVIS Gmail: "
+
+
+class TokenStore(Protocol):
+    def accounts(self) -> list[str]: ...
+    def get(self, account: str) -> str | None: ...
+    def put(self, account: str, token: str) -> None: ...
+    def remove(self, account: str) -> None: ...
+
+
+class MemoryTokens:
+    """Tokens kept only while JARVIS runs (tests, and PCs without Credential Manager)."""
+
+    def __init__(self) -> None:
+        self._items: dict[str, str] = {}
+
+    def accounts(self) -> list[str]:
+        return sorted(self._items)
+
+    def get(self, account: str) -> str | None:
+        return self._items.get(account.strip().lower())
+
+    def put(self, account: str, token: str) -> None:
+        self._items[account.strip().lower()] = token
+
+    def remove(self, account: str) -> None:
+        self._items.pop(account.strip().lower(), None)
+
+
+class WindowsTokens:
+    """Tokens in Windows Credential Manager, one generic credential per account."""
+
+    def __init__(self, prefix: str = TOKEN_PREFIX) -> None:
+        self._prefix = prefix
+
+    def accounts(self) -> list[str]:
+        import win32cred
+
+        try:
+            found = win32cred.CredEnumerate(self._prefix + "*", 0) or []
+        except Exception:  # none saved yet
+            return []
+        names = [str(c.get("TargetName") or "") for c in found]
+        return sorted(n.removeprefix(self._prefix) for n in names if n.startswith(self._prefix))
+
+    def get(self, account: str) -> str | None:
+        import win32cred
+
+        try:
+            cred = win32cred.CredRead(
+                self._prefix + account.strip().lower(), win32cred.CRED_TYPE_GENERIC, 0
+            )
+        except Exception:
+            return None
+        blob = cred.get("CredentialBlob") or b""
+        return blob.decode("utf-16-le") if isinstance(blob, bytes) else str(blob)
+
+    def put(self, account: str, token: str) -> None:
+        import win32cred
+
+        win32cred.CredWrite(
+            {
+                "Type": win32cred.CRED_TYPE_GENERIC,
+                "TargetName": self._prefix + account.strip().lower(),
+                "UserName": account.strip().lower(),
+                "CredentialBlob": token,
+                "Persist": win32cred.CRED_PERSIST_LOCAL_MACHINE,
+            },
+            0,
+        )
+        logger.info("Saved a sign-in to Credential Manager")  # never the account or token
+
+    def remove(self, account: str) -> None:
+        import win32cred
+
+        with contextlib.suppress(Exception):
+            win32cred.CredDelete(
+                self._prefix + account.strip().lower(), win32cred.CRED_TYPE_GENERIC, 0
+            )
+
+
+def token_store() -> TokenStore:
+    return WindowsTokens() if sys.platform == "win32" else MemoryTokens()

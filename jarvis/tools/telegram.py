@@ -27,9 +27,19 @@ class TelegramError(RuntimeError):
     pass
 
 
-async def _call(client: httpx.AsyncClient, token: str, method: str, payload: dict[str, Any]) -> Any:
+async def _call(
+    client: httpx.AsyncClient,
+    token: str,
+    method: str,
+    payload: dict[str, Any],
+    files: dict[str, tuple[str, bytes, str]] | None = None,
+) -> Any:
+    url = API.format(token=token, method=method)
     try:
-        response = await client.post(API.format(token=token, method=method), json=payload)
+        if files is None:
+            response = await client.post(url, json=payload)
+        else:  # multipart: plain form fields plus the file
+            response = await client.post(url, data=payload, files=files, timeout=60)
         data = response.json()
     except (httpx.HTTPError, ValueError) as exc:  # never str(exc): it holds the URL
         raise TelegramError(f"Telegram didn't answer ({type(exc).__name__})") from None
@@ -43,6 +53,25 @@ async def _call(client: httpx.AsyncClient, token: str, method: str, payload: dic
 
 async def send_message(client: httpx.AsyncClient, token: str, chat: str, text: str) -> None:
     await _call(client, token, "sendMessage", {"chat_id": chat, "text": text[:MAX_TEXT]})
+
+
+MAX_CAPTION = 1024
+
+
+async def send_document(
+    client: httpx.AsyncClient,
+    token: str,
+    chat: str,
+    name: str,
+    content: bytes,
+    caption: str = "",
+    mime: str = "application/pdf",
+) -> None:
+    """Send a file (a PDF by default) to the chat, with an optional caption."""
+    payload = {"chat_id": chat}
+    if caption.strip():
+        payload["caption"] = caption.strip()[:MAX_CAPTION]
+    await _call(client, token, "sendDocument", payload, {"document": (name, content, mime)})
 
 
 async def find_chat(client: httpx.AsyncClient, token: str) -> tuple[str, str] | None:

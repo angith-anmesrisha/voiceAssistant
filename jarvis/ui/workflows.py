@@ -81,7 +81,7 @@ from jarvis.agent.workflows import (
 from jarvis.app.events import PlanUpdated, StepStatus
 from jarvis.ui import theme
 from jarvis.ui.canvas import FlowScene, FlowView, NodeView, snap
-from jarvis.ui.connections import ConnectDialog, Connections, LoginsDialog
+from jarvis.ui.connections import ConnectDialog, Connections, GmailDialog, LoginsDialog
 from jarvis.ui.node_icons import GROUP_STYLE, accent, icon, paint_icon
 
 STYLE = f"""
@@ -222,6 +222,7 @@ _SERVICE_TITLES = {
     "calendar": "Calendar feed",
     "telegram": "Telegram bot",
     "logins": "Saved logins",
+    "zai": "Z.ai (writes the brief)",
 }
 _COLUMN = 180.0  # the canvas's distance between columns...
 _ROW = 150.0  # ... and rows
@@ -719,6 +720,7 @@ class Inspector(QFrame):
         button.clicked.connect(lambda: self._builder.open_connection(service))
         row.addWidget(button)
         self.fields["connection"] = button
+        self.fields[f"connection:{service}"] = button
         layout.addWidget(card)
 
     def show_step(self, workflow: Workflow, step: Step) -> None:
@@ -735,8 +737,8 @@ class Inspector(QFrame):
         self._header(layout, name, colour, spec.title, f"Node {number} · {spec.group}")
         if spec.blurb:
             self._hint(layout, spec.blurb)
-        if spec.connection:
-            self._connection(layout, spec.connection)
+        for service in filter(None, spec.connection.split(",")):
+            self._connection(layout, service)
         connections = self._builder.connections
         logins = connections.login_names() if connections is not None else []
         if spec.settings:
@@ -1304,11 +1306,13 @@ class WorkflowBuilder(QWidget):
         """Set up a node's service (or manage saved logins), then show the node again."""
         if self.connections is None:
             return
-        dialog: QDialog = (
-            LoginsDialog(self, self.connections, self.rename_login)
-            if service == "logins"
-            else ConnectDialog(self, self.connections, service)
-        )
+        dialog: QDialog
+        if service == "logins":
+            dialog = LoginsDialog(self, self.connections, self.rename_login)
+        elif service == "gmail":
+            dialog = GmailDialog(self, self.connections)
+        else:
+            dialog = ConnectDialog(self, self.connections, service)
         dialog.setStyleSheet(STYLE)
         dialog.exec()
         showing = self.inspector.showing

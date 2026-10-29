@@ -22,7 +22,7 @@ from jarvis.tools.code_runner import register_code_tool
 from jarvis.tools.day import register_day_tools
 from jarvis.tools.desktop import Desktop, DesktopUnsupportedError
 from jarvis.tools.diagnostics import register_diagnostic_tools
-from jarvis.tools.email_imap import register_email_tools
+from jarvis.tools.email_imap import Sources, register_email_tools
 from jarvis.tools.files import FileAccessError, FileArea, default_area
 from jarvis.tools.live import register_live_tools
 from jarvis.tools.media import CameraFn, DescribeFn, register_media_tools
@@ -127,6 +127,7 @@ def build_registry(
     calendar: Calendar | None = None,
     writing: WritingTools | None = None,
     history: HistoryStore | None = None,
+    mail: Sources | None = None,
 ) -> ToolRegistry:
     registry = ToolRegistry()
     journal = undo if undo is not None else UndoJournal()
@@ -586,7 +587,7 @@ def build_registry(
             open_file=desktop.open_path if slides.open_when_done else None,
             max_slides=slides.max_slides,
         )
-    register_email_tools(registry)
+    register_email_tools(registry, sources=mail)
     register_diagnostic_tools(registry)  # reads env at call time; nothing without a mailbox
     if writing is not None:
         register_writing_tools(

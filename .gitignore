@@ -23,6 +23,11 @@ Output/
 logs/
 *.wav
 *.pcm
+# Google OAuth client files and tokens (JARVIS keeps sign-ins in Credential Manager)
+client_secret*.json
+credentials*.json
+token*.json
+*.token
 
 # Editors / OS
 .vscode/

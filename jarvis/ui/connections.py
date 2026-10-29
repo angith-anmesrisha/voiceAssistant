@@ -14,6 +14,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from loguru import logger
 from PySide6.QtCore import Qt
@@ -32,6 +33,9 @@ from PySide6.QtWidgets import (
 
 from jarvis.app.keys import get_key, save_key
 from jarvis.app.secrets import Login, LoginStore, MemoryLogins
+
+if TYPE_CHECKING:
+    from jarvis.tools.gmail_api import GmailAccounts
 
 
 @dataclass(frozen=True)
@@ -56,23 +60,31 @@ SERVICES: dict[str, Service] = {
         "gmail",
         "Gmail",
         (
-            Field("JARVIS_EMAIL_ADDRESS", "Email address", hint="you@gmail.com"),
             Field(
-                "JARVIS_EMAIL_PASSWORD",
-                "App password",
-                secret=True,
-                hint="16 letters from Google Account > Security > App passwords",
+                "JARVIS_GOOGLE_CLIENT_ID",
+                "Google OAuth client ID",
+                hint="…apps.googleusercontent.com (Desktop app client)",
             ),
             Field(
-                "JARVIS_EMAIL_IMAP",
-                "IMAP server (optional)",
-                required=False,
-                hint="filled in for Gmail, Outlook, Yahoo, iCloud and Zoho",
+                "JARVIS_GOOGLE_CLIENT_SECRET",
+                "Client secret",
+                secret=True,
+                hint="from the same Desktop app client",
             ),
         ),
-        "Use an app password, not your normal one (Google asks for 2-Step Verification "
-        "first). JARVIS only reads mail and saves replies to Drafts; it never sends. Any "
-        "IMAP mailbox works.",
+        "Signs in with Google's own page (JARVIS never sees your password) and asks only "
+        "for read-only Gmail access: it can't send, delete, archive or change mail. Once: "
+        "make a Desktop app OAuth client in your Google Cloud project with the Gmail API "
+        "on, paste its ID and secret, then press Sign in with Google for each account.",
+    ),
+    "zai": Service(
+        "zai",
+        "Z.ai",
+        (Field("ZAI_API_KEY", "Z.ai API key", secret=True, hint="from z.ai > API keys"),),
+        "Z.ai writes the morning brief. The email excerpts, tasks, news and prices in it "
+        "are sent to Z.ai, an external service, and processed there under Z.ai's terms. "
+        "Only what the summary needs is sent: sender, subject, time and the start of each "
+        "email, never your passwords or Google sign-in.",
     ),
     "calendar": Service(
         "calendar",
@@ -116,10 +128,14 @@ class Connections:
         get: Callable[[str], str | None] = get_key,
         save: Callable[[str, str], bool] = save_key,
         find_chat: FindChat | None = None,
+        gmail: GmailAccounts | None = None,
+        open_url: Callable[[str], object] | None = None,
     ) -> None:
         self.logins = logins if logins is not None else MemoryLogins()
         self._get, self._save = get, save
         self.find_chat = find_chat
+        self.gmail = gmail
+        self.open_url = open_url
 
     def value(self, key: str) -> str:
         return (self._get(key) or "").strip()
@@ -127,6 +143,8 @@ class Connections:
     def connected(self, service: str) -> bool:
         if service == "logins":
             return bool(self.login_names())
+        if service == "gmail":
+            return bool(self.gmail_accounts()) or bool(self.value("JARVIS_EMAIL_PASSWORD"))
         spec = SERVICES.get(service)
         return spec is not None and all(self.value(f.key) for f in spec.fields if f.required)
 
@@ -139,8 +157,16 @@ class Connections:
         if not self.connected(service):
             return "Not set up yet"
         if service == "gmail":
-            return f"Connected as {self.value('JARVIS_EMAIL_ADDRESS')}"
+            accounts = self.gmail_accounts()
+            if accounts:
+                return "Signed in (read-only): " + ", ".join(accounts)
+            return f"Connected with an app password as {self.value('JARVIS_EMAIL_ADDRESS')}"
         return "Connected"
+
+    def gmail_accounts(self) -> list[str]:
+        if self.gmail is None or not self.value("JARVIS_GOOGLE_CLIENT_ID"):
+            return []
+        return self.gmail.addresses()
 
     def save(self, service: str, values: dict[str, str]) -> bool:
         """Save the filled-in fields (blank ones keep what's saved)."""
@@ -270,6 +296,112 @@ class ConnectDialog(QDialog):
             self._finding = asyncio.ensure_future(go())
         except RuntimeError:  # no running event loop (tests)
             self.note.setText("Telegram can't be reached right now.")
+
+
+class GmailDialog(ConnectDialog):
+    """Gmail: the OAuth client once, then "Sign in with Google" per account (read-only).
+    Accounts can be removed, which also revokes JARVIS's access at Google."""
+
+    def __init__(self, parent: QWidget | None, connections: Connections) -> None:
+        super().__init__(parent, connections, "gmail")
+        self._busy: asyncio.Future[None] | None = None
+        layout = self.layout()
+        assert isinstance(layout, QVBoxLayout)
+        label = QLabel("SIGNED-IN ACCOUNTS")
+        label.setObjectName("section")
+        self.accounts = QListWidget()
+        self.accounts.setFixedHeight(84)
+        row = QHBoxLayout()
+        self.sign_in_button = QPushButton("Sign in with Google")
+        self.sign_in_button.setObjectName("primary")
+        self.sign_in_button.clicked.connect(self.sign_in)
+        self.remove_button = QPushButton("Remove selected")
+        self.remove_button.setObjectName("danger")
+        self.remove_button.clicked.connect(self.remove_selected)
+        row.addWidget(self.sign_in_button)
+        row.addStretch(1)
+        row.addWidget(self.remove_button)
+        at = layout.indexOf(self.note)
+        layout.insertWidget(at, label)
+        layout.insertWidget(at + 1, self.accounts)
+        layout.insertLayout(at + 2, row)
+        self.save_button.setText("Done")
+        self.note.setText(
+            "The sign-in is kept in Windows Credential Manager. JARVIS never logs it, and "
+            "never sends, deletes, archives or changes mail."
+        )
+        self.refresh()
+
+    def refresh(self) -> None:
+        self.accounts.clear()
+        for address in self._connections.gmail_accounts():
+            self.accounts.addItem(address)
+
+    def _save_client(self) -> bool:
+        values = self.values()
+        if not (
+            values["JARVIS_GOOGLE_CLIENT_ID"].strip()
+            or self._connections.value("JARVIS_GOOGLE_CLIENT_ID")
+        ):
+            self.note.setText("Paste the OAuth client ID first (see above).")
+            return False
+        self._connections.save("gmail", values)
+        return True
+
+    def save(self) -> None:
+        values = self.values()
+        if any(v.strip() for v in values.values()):
+            self._connections.save("gmail", values)
+        self.accept()
+
+    def sign_in(self) -> None:
+        gmail = self._connections.gmail
+        if gmail is None or not self._save_client():
+            return
+        opener = self._connections.open_url or _open_in_browser
+        self.note.setText("Finish signing in on Google's page in your browser…")
+        self.sign_in_button.setEnabled(False)
+
+        async def go() -> None:
+            try:
+                address = await gmail.sign_in(opener)
+            except Exception as exc:
+                self.note.setText(f"Gmail wasn't connected: {exc}.")
+            else:
+                self.note.setText(f"Signed in as {address} (read-only).")
+                self.refresh()
+            finally:
+                self.sign_in_button.setEnabled(True)
+
+        try:
+            self._busy = asyncio.ensure_future(go())
+        except RuntimeError:  # no running event loop (tests)
+            self.sign_in_button.setEnabled(True)
+            self.note.setText("Google can't be reached right now.")
+
+    def remove_selected(self) -> None:
+        gmail = self._connections.gmail
+        item = self.accounts.currentItem()
+        if gmail is None or item is None:
+            return
+        address = item.text()
+
+        async def go() -> None:
+            await gmail.remove(address)
+            self.note.setText(f"Removed {address}; JARVIS's access was revoked at Google.")
+            self.refresh()
+
+        try:
+            self._busy = asyncio.ensure_future(go())
+        except RuntimeError:
+            self.note.setText("Couldn't remove it right now.")
+
+
+def _open_in_browser(url: str) -> None:
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QDesktopServices
+
+    QDesktopServices.openUrl(QUrl(url))
 
 
 class LoginsDialog(QDialog):

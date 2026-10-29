@@ -134,6 +134,12 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     from jarvis.tools.calendar_ics import Calendar
 
     calendar = Calendar(client)  # read-only, from JARVIS_CALENDAR_ICS if set
+    from jarvis.app.secrets import token_store
+    from jarvis.tools.email_imap import mail_sources
+    from jarvis.tools.gmail_api import GmailAccounts
+
+    # Gmail via Google's API (OAuth, read-only); refresh tokens in Credential Manager.
+    gmail = GmailAccounts(client, token_store())
     memory = _long_memory(settings, client)
     desktop = WindowsDesktop()
     desktop.start_tracking()
@@ -169,6 +175,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         calendar=calendar,
         history=store,
         writing=_writing_tools(settings, router, lambda: pick_upload(), bus, spawn, guard),
+        mail=mail_sources(gmail),
     )
 
     from jarvis.app.secrets import login_store
@@ -179,6 +186,11 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     logins = login_store()
     register_autofill_tools(registry, ui if sys.platform == "win32" else None, logins)
     register_telegram_tools(registry, client)
+    from jarvis.tools.morning_brief import register_brief_tools
+
+    register_brief_tools(
+        registry, _morning_brief(settings, client, gmail, keep, calendar, memory, guard)
+    )
 
     from jarvis.agent.workflows import (
         WorkflowStore,
@@ -413,7 +425,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
             builder = WorkflowBuilder(
                 workflows,
                 lambda workflow: controller.run_workflow(workflow, "test"),
-                Connections(logins, find_chat=lambda token: find_chat(client, token)),
+                Connections(logins, find_chat=lambda token: find_chat(client, token), gmail=gmail),
             )
 
             async def light_up(event: PlanUpdated) -> None:
@@ -774,6 +786,58 @@ def _briefing(
         headlines,
         markets=markets if plan.briefing_markets else None,
         calendar=calendar,
+    )
+
+
+def _morning_brief(
+    settings: Settings,
+    client: httpx.AsyncClient,
+    gmail: Any,
+    keep: Keep,
+    calendar: Any,
+    memory: Memory | None,
+    guard: Any,
+) -> Any:
+    """The morning brief PDF: Gmail (read-only) and the day, written by Z.ai, to Telegram."""
+    from jarvis.app.keys import get_key
+    from jarvis.app.paths import briefs_dir
+    from jarvis.tools import live, telegram, web
+    from jarvis.tools.brief_pdf import markdown_pdf
+    from jarvis.tools.email_imap import mail_sources
+    from jarvis.tools.morning_brief import MorningBrief
+    from jarvis.tools.zai import ZaiWriter
+
+    plan = settings.brief
+
+    def telegram_ready() -> bool:
+        return bool(get_key(telegram.TOKEN) and get_key(telegram.CHAT))
+
+    async def send_pdf(name: str, content: bytes, caption: str) -> str:
+        token, chat = get_key(telegram.TOKEN), get_key(telegram.CHAT)
+        if not token or not chat:
+            return "Telegram isn't set up"
+        try:
+            await telegram.send_document(client, token, chat, name, content, caption)
+        except telegram.TelegramError as exc:
+            return f"Couldn't send it on Telegram: {exc}"
+        return ""
+
+    return MorningBrief(
+        writer=ZaiWriter(client, plan.models, timeout_s=plan.timeout_s),
+        mail=mail_sources(gmail),
+        quotes=lambda name: live.stock_quote(client, name, "IN"),
+        news=lambda topic, locale, limit: web.news(client, topic, locale, limit),
+        folder=briefs_dir(),
+        make_pdf=markdown_pdf,
+        keep=keep,
+        calendar=calendar,
+        memory=memory,
+        screen=guard.suspicious,
+        send_pdf=send_pdf,
+        telegram_ready=telegram_ready,
+        watchlist=lambda: plan.watchlist,
+        max_emails=plan.max_emails,
+        excerpt_chars=plan.excerpt_chars,
     )
 
 

@@ -288,13 +288,25 @@ python -m jarvis --hidden   # starts in the tray
 - **Email Assistant (reads, never sends).** "Summarise my unread email", "any action
   items in my inbox?", "what did Priya say about the budget?", "draft a reply to Priya
   saying I'll send it Thursday". JARVIS reads your inbox without marking anything as
-  read, and a reply is only ever saved to your **Drafts** folder after you've seen it
-  and said yes; you send it yourself. There is no sending code in JARVIS. To connect
-  Gmail: turn on 2-step verification, make an app password at
-  myaccount.google.com/apppasswords, then `setx JARVIS_EMAIL_ADDRESS "you@gmail.com"` and
-  `setx JARVIS_EMAIL_PASSWORD "the 16-letter app password"` and restart JARVIS (other
-  providers: also `JARVIS_EMAIL_IMAP`, e.g. `imap.zoho.in`). The "Email triage" template
+  read. Gmail connects through Google's official Gmail API with **read-only** access:
+  open any Gmail node's Connect card, paste your Google OAuth client ID and secret
+  (once; see docs/GMAIL_AND_BRIEF_SETUP.md) and press **Sign in with Google** for each account.
+  JARVIS never sees or asks for your Gmail password, and it can't send, delete, archive
+  or change mail. Because the access is read-only, a drafted reply is shown for you to
+  copy rather than saved in Gmail. Other mailboxes still work over IMAP with an app
+  password (`JARVIS_EMAIL_ADDRESS`, `JARVIS_EMAIL_PASSWORD`, `JARVIS_EMAIL_IMAP`), and
+  there a reply is saved to **Drafts** after you say yes. The "Email triage" template
   ("check my email") gives a summary, action items and what needs a reply.
+- **Morning brief (PDF to Telegram).** The "Morning brief to Telegram" template runs
+  every day at 8:00: JARVIS gathers the last 24 hours of mail from your signed-in Gmail
+  accounts, your tasks, reminders and calendar, Indian and world headlines and market
+  prices, has **Z.ai** write the report in the morning-intelligence layout, saves the
+  PDF in Documents\JARVIS Briefs, sends it to your Telegram and keeps a short summary
+  in memory ("what was in Tuesday's brief?"). Z.ai is an external service: the
+  senders, subjects, times and first lines of your emails are sent to it, and nothing
+  else from your mailbox. Market and system tables are filled in by JARVIS from the data
+  it really fetched. Put your Z.ai key in the node's Z.ai card; add stocks to follow in
+  the node or `brief.watchlist` in settings.json. Say "send me my morning brief" any time.
 - **Decision Assistant.** "Should I buy the MacBook Air or the ThinkPad?", "help me
   decide between these two job offers": the goal in a line, the options, weighted
   criteria in a small table, risks, and a clear recommendation with how sure it is and

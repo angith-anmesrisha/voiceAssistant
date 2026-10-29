@@ -445,29 +445,39 @@ def _builder(tmp_path: Path, keys: SavedKeys, logins: MemoryLogins) -> Any:
 
 
 def test_a_gmail_node_offers_to_connect_once(qapp: Any, tmp_path: Path) -> None:
-    from jarvis.ui.connections import ConnectDialog
+    from jarvis.app.secrets import MemoryTokens
+    from jarvis.tools.gmail_api import GmailAccounts
+    from jarvis.ui.connections import GmailDialog
 
     keys = SavedKeys()
     builder = _builder(tmp_path, keys, MemoryLogins())
+    tokens = MemoryTokens()
+    builder.connections.gmail = GmailAccounts(httpx.AsyncClient(), tokens, key=keys.get)
     builder.search.setText("inbox")
     assert builder.visible_workflows() == ["Inbox"]
     builder.list.setCurrentRow(1)
     step = builder.current.steps[0]
     builder.select_node(step.id)
     assert builder.inspector.fields["connection"].text() == "Connect"
-    dialog = ConnectDialog(builder, builder.connections, "gmail")
-    dialog.inputs["JARVIS_EMAIL_ADDRESS"].setText("me@gmail.com")
+    dialog = GmailDialog(builder, builder.connections)
+    assert "JARVIS_EMAIL_PASSWORD" not in dialog.inputs  # never asks for a password
+    dialog.sign_in()
+    assert "client ID first" in dialog.note.text()
+    dialog.inputs["JARVIS_GOOGLE_CLIENT_ID"].setText("123.apps.googleusercontent.com")
+    dialog.inputs["JARVIS_GOOGLE_CLIENT_SECRET"].setText("shh")
     dialog.save()
-    assert "Still needed: App password" in dialog.note.text() and keys.values == {}
-    dialog.inputs["JARVIS_EMAIL_PASSWORD"].setText("abcd efgh ijkl mnop")
-    dialog.save()
-    assert keys.values["JARVIS_EMAIL_PASSWORD"] == "abcd efgh ijkl mnop"
-    assert builder.connections.status("gmail") == "Connected as me@gmail.com"
-    again = ConnectDialog(builder, builder.connections, "gmail")
-    assert again.inputs["JARVIS_EMAIL_PASSWORD"].text() == ""  # a secret is never shown
-    assert again.inputs["JARVIS_EMAIL_ADDRESS"].text() == "me@gmail.com"
-    again.save()  # blank secret: kept
-    assert keys.values["JARVIS_EMAIL_PASSWORD"] == "abcd efgh ijkl mnop"
+    assert keys.values["JARVIS_GOOGLE_CLIENT_SECRET"] == "shh"
+    again = GmailDialog(builder, builder.connections)
+    assert again.inputs["JARVIS_GOOGLE_CLIENT_SECRET"].text() == ""  # a secret is never shown
+    tokens.put("me@gmail.com", "refresh-1")
+    tokens.put("work@gmail.com", "refresh-2")
+    again.refresh()
+    assert [again.accounts.item(i).text() for i in range(again.accounts.count())] == [
+        "me@gmail.com",
+        "work@gmail.com",
+    ]
+    status = builder.connections.status("gmail")
+    assert status == "Signed in (read-only): me@gmail.com, work@gmail.com"
     builder.select_node(step.id)
     assert builder.inspector.fields["connection"].text() == "Change"
 
@@ -616,7 +626,7 @@ async def test_a_gmail_node_with_no_mailbox_fails_with_the_reason(tmp_path: Path
     await rig.assistant.handle("inbox")
     step = rig.plans[-1].steps[0]
     assert step.status is StepStatus.FAILED
-    assert "no mailbox is connected" in step.note and "Connect card" in step.note
+    assert "no Gmail account is connected" in step.note and "Connect card" in step.note
     assert "restart" not in step.note
     assert router.requests == []
 

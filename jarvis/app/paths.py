@@ -102,6 +102,13 @@ def writing_dir() -> Path:
     return documents_dir() / "JARVIS Writing"
 
 
+def briefs_dir() -> Path:
+    """Where morning brief PDFs go: Documents/JARVIS Briefs."""
+    if os.environ.get("JARVIS_DATA_DIR"):
+        return data_dir() / "briefs"
+    return documents_dir() / "JARVIS Briefs"
+
+
 def research_dir() -> Path:
     """Where research reports go: Documents/JARVIS Research."""
     if os.environ.get("JARVIS_DATA_DIR"):

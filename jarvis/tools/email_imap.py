@@ -1,6 +1,11 @@
 """The Email Assistant: reads your inbox and saves reply drafts. It never sends.
 
-It signs in over IMAP (encrypted) with an app password kept, like API keys, only in
+Gmail accounts signed in with Google (``gmail_api.py``: the official Gmail API, OAuth 2.0,
+read-only) come first, and several can be signed in; their message ids are "<n>:<id>"
+when there's more than one. Read-only Gmail can't hold drafts, so ``draft_reply`` then
+hands the reply back to copy. With no Gmail sign-in, the older IMAP mailbox below is used.
+
+The IMAP mailbox signs in (encrypted) with an app password kept, like API keys, only in
 environment variables: ``JARVIS_EMAIL_ADDRESS`` and ``JARVIS_EMAIL_PASSWORD`` (for Gmail
 an "app password" from myaccount.google.com/apppasswords, with 2-step verification on),
 plus ``JARVIS_EMAIL_IMAP`` for a server JARVIS can't guess from the address.
@@ -25,7 +30,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from email.message import EmailMessage
 from email.utils import getaddresses, parseaddr, parsedate_to_datetime
-from typing import Any
+from typing import Any, Protocol
 
 from loguru import logger
 
@@ -68,6 +73,8 @@ class Mail:
     message_id: str
     references: str
     unread: bool
+    account: str = ""  # which signed-in mailbox it's in (Gmail API)
+    link: str = ""  # opens it in Gmail
 
     def line(self, snippet: int = 240) -> str:
         flag = "unread · " if self.unread else ""
@@ -262,53 +269,151 @@ def _logout(imap: Any) -> None:
         logger.debug("IMAP logout: {}", type(exc).__name__)
 
 
-def register_email_tools(
-    registry: ToolRegistry, mailbox: Callable[[], Mailbox | None] = Mailbox.from_environment
-) -> None:
-    def account() -> Mailbox:
-        found = mailbox()
-        if found is None:
-            raise EmailError(
-                "no mailbox is connected. Add your address and an app password in a Gmail "
-                f"node's Connect card (or set {ADDRESS_ENV} and {PASSWORD_ENV})"
-            )
+class MailSource(Protocol):
+    """A mailbox the email tools read: a Gmail API account, or an IMAP one."""
+
+    address: str
+    can_draft: bool
+
+    async def recent(
+        self, count: int = 10, unread_only: bool = True, query: str = "", newer_than: str = ""
+    ) -> list[Mail]: ...
+    async def one(self, message_id: str) -> Mail: ...
+
+
+class ImapSource:
+    """The IMAP mailbox (app password, from the environment) as a MailSource."""
+
+    can_draft = True
+
+    def __init__(self, box: Mailbox) -> None:
+        self.box = box
+        self.address = box.address
+
+    async def recent(
+        self, count: int = 10, unread_only: bool = True, query: str = "", newer_than: str = ""
+    ) -> list[Mail]:
+        return await asyncio.to_thread(self.box.recent, count, unread_only, query)
+
+    async def one(self, message_id: str) -> Mail:
+        return await asyncio.to_thread(self.box.one, message_id)
+
+
+Sources = Callable[[], list[MailSource]]
+
+
+def mail_sources(
+    gmail: Any = None, mailbox: Callable[[], Mailbox | None] = Mailbox.from_environment
+) -> Sources:
+    """Signed-in Gmail accounts (official API, read-only) first; with none, the IMAP
+    mailbox if one is set up in the environment."""
+
+    def sources() -> list[MailSource]:
+        found: list[MailSource] = list(gmail.accounts()) if gmail is not None else []
+        if not found:
+            box = mailbox()
+            if box is not None:
+                found.append(ImapSource(box))
         return found
 
-    async def check_email(count: int = 10, unread_only: bool = True, query: str = "") -> ToolResult:
+    return sources
+
+
+NOT_CONNECTED = (
+    "no Gmail account is connected. Sign in with Google in a Gmail node's Connect card (read-only)"
+)
+
+
+def register_email_tools(
+    registry: ToolRegistry,
+    mailbox: Callable[[], Mailbox | None] = Mailbox.from_environment,
+    *,
+    sources: Sources | None = None,
+) -> None:
+    listed = sources or mail_sources(None, mailbox)
+
+    def accounts() -> list[MailSource]:
+        found = listed()
+        if not found:
+            raise EmailError(NOT_CONNECTED)
+        return found
+
+    def split_id(raw: str, found: list[MailSource]) -> tuple[MailSource, str]:
+        number, colon, rest = raw.strip().partition(":")
+        if colon and number.isdigit() and 1 <= int(number) <= len(found):
+            return found[int(number) - 1], rest
+        return found[0], raw.strip()
+
+    async def check_email(
+        count: int = 10, unread_only: bool = True, query: str = "", account: str = ""
+    ) -> ToolResult:
         try:
-            box = account()
-            mails = await asyncio.to_thread(box.recent, count, unread_only, query)
+            found = accounts()
         except EmailError as exc:
             return ToolResult(False, f"Couldn't check email: {exc}.")
-        if not mails:
-            what = "unread " if unread_only else ""
-            return ToolResult(True, f"No {what}messages{' matching that' if query else ''}.")
+        many = len(found) > 1
+        picked = [
+            (n, s) for n, s in enumerate(found, 1) if not account or account.lower() in s.address
+        ] or list(enumerate(found, 1))
+        results = await asyncio.gather(
+            *(s.recent(count, unread_only, query) for _n, s in picked), return_exceptions=True
+        )
+        lines: list[str] = []
+        problems: list[str] = []
+        for (n, source), result in zip(picked, results, strict=True):
+            if isinstance(result, EmailError):
+                problems.append(f"{source.address}: {result}" if many else str(result))
+                continue
+            if isinstance(result, BaseException):
+                problems.append(f"{source.address}: {type(result).__name__}")
+                continue
+            for mail in result:
+                line = mail.line()
+                if many:
+                    line = line.replace(f"[{mail.uid}]", f"[{n}:{mail.uid}] {source.address} ·", 1)
+                lines.append(line)
+        if problems and not lines and len(problems) == len(picked):
+            return ToolResult(False, f"Couldn't check email: {'; '.join(problems)}.")
+        what = "unread " if unread_only else ""
+        note = f" Couldn't check {'; '.join(problems)}." if problems else ""
+        if not lines:
+            return ToolResult(True, f"No {what}messages{' matching that' if query else ''}.{note}")
         return ToolResult(
             True,
-            f"{len(mails)} {'unread ' if unread_only else ''}messages (newest first).",
-            {"messages": [m.line() for m in mails]},
+            f"{len(lines)} {what}messages (newest first per account).{note}",
+            {"messages": lines[: max(count, 1) * len(picked)]},
         )
 
     async def read_email(id: str) -> ToolResult:
         try:
-            mail = await asyncio.to_thread(account().one, str(id))
+            found = accounts()
+            source, message_id = split_id(str(id), found)
+            mail = await source.one(message_id)
         except EmailError as exc:
             return ToolResult(False, f"Couldn't read it: {exc}.")
-        return ToolResult(
-            True,
-            f"Message {mail.uid} from {mail.sender}: {mail.subject}",
-            {
-                "from": f"{mail.sender} <{mail.sender_address}>",
-                "to": mail.to,
-                "date": mail.date,
-                "subject": mail.subject,
-                "text": mail.text[:6000],
-            },
-        )
+        data = {
+            "from": f"{mail.sender} <{mail.sender_address}>",
+            "to": mail.to,
+            "date": mail.date,
+            "subject": mail.subject,
+            "text": mail.text[:6000],
+        }
+        if mail.link:
+            data["link"] = mail.link
+        return ToolResult(True, f"Message {id} from {mail.sender}: {mail.subject}", data)
 
     async def draft_reply(id: str, text: str) -> ToolResult:
         try:
-            folder = await asyncio.to_thread(account().save_draft, str(id), text)
+            found = accounts()
+            source, message_id = split_id(str(id), found)
+            if not isinstance(source, ImapSource):
+                return ToolResult(
+                    True,
+                    "JARVIS only has read-only Gmail access, so the reply wasn't saved in "
+                    "Gmail. Here it is to copy into your reply.",
+                    {"reply": text.strip()},
+                )
+            folder = await asyncio.to_thread(source.box.save_draft, message_id, text)
         except EmailError as exc:
             return ToolResult(False, f"Couldn't save the draft: {exc}.")
         return ToolResult(
@@ -318,7 +423,8 @@ def register_email_tools(
     registry.register(
         ToolSpec(
             "check_email",
-            "List recent inbox messages (unread only by default; query filters by words). "
+            "List recent inbox messages (unread only by default; query filters by words; "
+            "account picks one of several signed-in addresses). "
             "Read-only. Use with read_email to summarise mail or find action items.",
             {
                 "type": "object",
@@ -326,6 +432,7 @@ def register_email_tools(
                     "count": {"type": "integer", "minimum": 1, "maximum": 25},
                     "unread_only": {"type": "boolean"},
                     "query": {"type": "string", "maxLength": 100},
+                    "account": {"type": "string", "maxLength": 120},
                 },
                 "required": [],
             },
@@ -341,7 +448,7 @@ def register_email_tools(
             "Read one inbox message in full by its id (from check_email). Read-only.",
             {
                 "type": "object",
-                "properties": {"id": {"type": "string", "maxLength": 20}},
+                "properties": {"id": {"type": "string", "maxLength": 40}},
                 "required": ["id"],
             },
             read_email,
@@ -358,7 +465,7 @@ def register_email_tools(
             {
                 "type": "object",
                 "properties": {
-                    "id": {"type": "string", "maxLength": 20},
+                    "id": {"type": "string", "maxLength": 40},
                     "text": {"type": "string", "maxLength": 6000},
                 },
                 "required": ["id", "text"],

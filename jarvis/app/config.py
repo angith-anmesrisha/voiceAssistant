@@ -358,6 +358,17 @@ class WorkflowSettings(BaseModel):
     ask_first: bool = False
 
 
+class BriefSettings(BaseModel):
+    """The morning brief PDF (owner, 2026-10-29), written by Z.ai and sent to Telegram."""
+
+    # Z.ai models, tried in order (docs.z.ai; GLM-4.7-Flash is Z.ai's free tier).
+    models: list[str] = Field(default_factory=lambda: ["glm-5.2", "glm-4.7-flash"])
+    watchlist: list[str] = Field(default_factory=list)  # NSE names or symbols
+    max_emails: int = Field(default=25, ge=1, le=50)  # per account, last 24 hours
+    excerpt_chars: int = Field(default=700, ge=100, le=3000)  # of each email, to Z.ai
+    timeout_s: float = Field(default=240.0, ge=30.0, le=900.0)
+
+
 class MemorySettings(BaseModel):
     """Long-term memory as Markdown notes (a folder you can open in Obsidian)."""
 
@@ -424,6 +435,7 @@ class Settings(BaseModel):
     routing: RoutingSettings = Field(default_factory=RoutingSettings)
     watchtower: WatchtowerSettings = Field(default_factory=WatchtowerSettings)
     workflows: WorkflowSettings = Field(default_factory=WorkflowSettings)
+    brief: BriefSettings = Field(default_factory=BriefSettings)
 
 
 def load_settings(path: Path | None = None) -> Settings:

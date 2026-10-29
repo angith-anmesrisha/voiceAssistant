@@ -295,7 +295,7 @@ GROUPS = (
 )
 
 # Services a node needs set up once; the builder's node settings show a "Connect" card.
-CONNECTIONS = ("gmail", "calendar", "telegram", "logins")
+CONNECTIONS = ("gmail", "calendar", "telegram", "logins", "zai")
 
 
 @dataclass(frozen=True)
@@ -939,6 +939,31 @@ _ACTIONS: list[Action] = [
         shows=True,
         blurb="Finds to-dos in unread mail and adds them as tasks",
         connection="gmail",
+    ),
+    Action(
+        "morning_brief",
+        "Morning brief PDF to Telegram",
+        (
+            Setting(
+                "watchlist",
+                "Stocks to follow (optional)",
+                "list",
+                hint="one per line, e.g. Reliance, TCS, HDFC Bank (plus settings' watchlist)",
+            ),
+            Setting("send", "Send it to Telegram", "bool", default=True),
+        ),
+        lambda s: "Morning brief" + (" to Telegram" if _get(s, "send", True) else " (PDF only)"),
+        "morning_brief",
+        lambda s: {
+            "send": bool(_get(s, "send", True)),
+            "watchlist": ", ".join(_items({"items": s.get("watchlist")}))[:300],
+        },
+        group="Gmail",
+        icon="send",
+        shows=True,
+        blurb="Z.ai writes a PDF brief from both Gmail inboxes, your day, news and markets, "
+        "and sends it to Telegram. Email excerpts go to Z.ai, an external service.",
+        connection="zai,gmail,telegram",
     ),
     # --- Calendar (read-only iCal) ---
     Action(
@@ -1899,6 +1924,14 @@ def _canvas_templates() -> list[Workflow]:
             [(-1, "out", 0), (0, "out", 1), (1, "true", 2)],
             "Telegram: sends a summary of your unread mail to your phone every weekday "
             "morning (it asks before sending).",
+        ),
+        Workflow(
+            "Morning brief to Telegram",
+            Trigger("time", at="08:00"),
+            [Step("morning_brief", {"send": True})],
+            description="Every day at 8:00, Z.ai writes your morning intelligence PDF from "
+            "both Gmail inboxes (read-only), tasks, calendar, Indian and world news and "
+            "markets, sends it to Telegram and keeps a short summary in memory.",
         ),
         Workflow(
             "New note in Notepad",

@@ -159,7 +159,7 @@ async def test_sign_in_problems_and_no_account() -> None:
     registry = ToolRegistry()
     register_email_tools(registry, lambda: None)
     nothing = await call(registry, "check_email")
-    assert not nothing.ok and "JARVIS_EMAIL_ADDRESS" in nothing.summary
+    assert not nothing.ok and "Sign in with Google" in nothing.summary
 
 
 def test_mailbox_errors_are_email_errors() -> None:

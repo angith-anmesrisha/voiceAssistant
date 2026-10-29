@@ -85,6 +85,10 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   volume via pycaw, brightness via WMI, wallpaper via SystemParametersInfo),
   `slides.py` (`deck_command` local parser, `DeckWriter`: free models only, `parse_deck`,
   `make_presentation`), `deck_render.py` (python-pptx drawing: `THEMES`, `LAYOUTS`, `render`),
+  `gmail_api.py` (`GmailAccounts`/`GmailAccount`: Gmail API, OAuth loopback + PKCE,
+  `gmail.readonly` only, refresh tokens in Credential Manager), `zai.py` (`ZaiWriter`),
+  `morning_brief.py` (`MorningBrief`, `register_brief_tools`), `brief_pdf.py` (Markdown →
+  PDF via QTextDocument/QPdfWriter),
   `calendar_ics.py` (`Calendar`, `parse`, `events_between`), `day.py` (`my_day`,
   `calendar_events`), `tasks.py` (tasks/ideas tools, `parse_due`),
   `documents.py` (`read_text`: text, docx, xlsx, pptx, pdf via pypdf), `pc.py`
@@ -246,6 +250,33 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   finishes summary/tasks nodes with "No unread email" and no model call. `_CANNOT`
   accepts curly apostrophes. Testing a workflow logs a ⚠ line per unlinked step; the
   run note is "Not linked: nothing leads to it".
+- Gmail API + morning brief (owner, 2026-10-29: "Integrate the official Gmail API ... OAuth
+  2.0 ... minimum permissions ... read-only ... Never request my Gmail password"; "use z ai
+  to send me a pdf of morning brief like this to my telegram ... my 2 gmail ids ... A
+  short summary ... saved to jarvis memory"). `tools/gmail_api.py`: the user's own Google
+  Cloud "Desktop app" OAuth client (`JARVIS_GOOGLE_CLIENT_ID`/`_SECRET`, saved like keys),
+  Google's sign-in page in the browser, PKCE S256 + `state`, a one-shot listener on
+  127.0.0.1:<random>, scope `gmail.readonly` only (no send/modify/compose); refresh tokens
+  in Credential Manager (`secrets.WindowsTokens`, "JARVIS Gmail: <address>"), access
+  tokens in memory; Remove revokes at Google. Several accounts; email tools number ids
+  "n:id" when there are 2+; `mail_sources` prefers Gmail sign-ins, else the IMAP env
+  mailbox; `draft_reply` on Gmail returns the text (read-only can't save drafts). The
+  Gmail Connect card (`GmailDialog`) never asks for a password. `tools/zai.py`: Z.ai's
+  OpenAI-shaped `/chat/completions`, `ZAI_API_KEY`, general endpoint then the Coding Plan
+  one, `brief.models` (glm-5.2, glm-4.7-flash). `tools/morning_brief.py`: last 24 h of
+  inbox mail per account (≤`max_emails`), tasks/reminders/calendar, Google News (India,
+  RBI/SEBI, business, world, Fed/oil), Yahoo quotes (`MARKET_ROWS`), `brief.watchlist` +
+  the node's list; each email and the news screened by Prompt Guard (flagged text
+  withheld); Z.ai gets only sender, subject, time, read state, "Gmail n" and the first
+  `excerpt_chars` (700): never the user's addresses or links (it cites E3/N5, `finish`
+  swaps in links). The model writes the owner's 13-section layout; JARVIS inserts the
+  market and system-health tables (`{{MARKETS}}`/`{{HEALTH}}`) from real data and a
+  footer naming the Z.ai model; `<summary>` → `memory.note("Morning briefs")` + keep
+  state `morning_brief_last`. PDF via Qt (`brief_pdf.markdown_pdf`, "xb", Documents\
+  JARVIS Briefs), Telegram `sendDocument` with the summary as caption. Tool
+  `morning_brief` (MEDIUM, group "brief"), node "Morning brief PDF to Telegram"
+  (connections zai,gmail,telegram: the Inspector shows a card per service), template
+  "Morning brief to Telegram" daily 08:00.
 - Quick capture: `commands.capture_command` (idea:/add a task…/todo:/add X to my Y
   tasks/quick note:) → `add_task` or `save_note` "Inbox" in `_handle` before the deck
   check, no model (mode "capture"); a trailing due ("by friday", "tomorrow") is split
