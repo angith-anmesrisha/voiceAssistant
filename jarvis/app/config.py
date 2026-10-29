@@ -422,6 +422,30 @@ class SlideSettings(BaseModel):
 RETIRED_SLIDE_MODELS = frozenset({"thinkingmachines/inkling:free", "qwen/qwen3.8-27b:free"})
 
 
+class ImageSettings(BaseModel):
+    """Pictures and 3D models ("generate an image of …", "make a 3D model of …"), free.
+
+    OpenRouter has no free image model (2026-10), so its free list is checked and used
+    if one appears; then Cloudflare (when CLOUDFLARE_ACCOUNT_ID/CLOUDFLARE_API_TOKEN are
+    saved), then Pollinations (no key). Paid OpenRouter models only with allow_paid.
+    """
+
+    free_openrouter: bool = True
+    cloudflare_model: str = "@cf/black-forest-labs/flux-1-schnell"
+    cloudflare_steps: int = Field(default=6, ge=1, le=8)
+    pollinations: bool = True
+    # About 1 cent an image; OpenRouter also wants more than $1 of credit first.
+    allow_paid: bool = False
+    paid_models: list[str] = Field(default_factory=lambda: ["google/gemini-2.5-flash-image"])
+    timeout_s: float = 120.0
+    # Real 3D models (.glb) from Hugging Face's free GPUs (HF_TOKEN gives 5 min a day).
+    model_space: str = "tencent/Hunyuan3D-2"
+    model_textured: bool = True
+    model_timeout_s: float = 600.0
+    # Empty = Pictures/JARVIS Images.
+    folder: str = ""
+
+
 class Settings(BaseModel):
     log_level: str = "INFO"
     history_messages: int = 20
@@ -437,6 +461,7 @@ class Settings(BaseModel):
     watchtower: WatchtowerSettings = Field(default_factory=WatchtowerSettings)
     workflows: WorkflowSettings = Field(default_factory=WorkflowSettings)
     brief: BriefSettings = Field(default_factory=BriefSettings)
+    images: ImageSettings = Field(default_factory=ImageSettings)
 
 
 def load_settings(path: Path | None = None) -> Settings:

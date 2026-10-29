@@ -82,6 +82,12 @@ _GROUPS: dict[str, re.Pattern[str]] = {
         r"\b(ppt|pptx|power ?point|presentations?|slides?|slide ?deck|deck|keynote)\b",
         re.IGNORECASE,
     ),
+    "images": re.compile(
+        r"\b(images?|pictures?|photos? of|drawings?|draw|paint|illustrat\w*|wallpapers?|"
+        r"logos?|posters?|artwork|render(ing)?s?|3d|three[- ]d|models? of|glb|mesh|"
+        r"generate (an?|some) |imagine)\b",
+        re.IGNORECASE,
+    ),
     "writing": re.compile(
         r"\b(research|investigate|look into|find out (about|whether|if|how|why)|report|"
         r"citations?|sources|essay|article|letter|cover letter|draft|word file|"

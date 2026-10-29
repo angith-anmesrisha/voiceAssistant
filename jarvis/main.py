@@ -186,6 +186,7 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
     logins = login_store()
     register_autofill_tools(registry, ui if sys.platform == "win32" else None, logins)
     register_telegram_tools(registry, client)
+    _image_tools(registry, settings, client, lambda: pick_upload(), bus, spawn)
     from jarvis.tools.morning_brief import register_brief_tools
 
     register_brief_tools(
@@ -310,6 +311,14 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
         "gemini": "https://aistudio.google.com/apikey",
         "openrouter": "https://openrouter.ai/settings/keys",
     }
+    # Free picture and 3D services (not chat providers): label, env, where to get it.
+    extra_keys = [
+        ("Cloudflare account ID (images)", "CLOUDFLARE_ACCOUNT_ID",
+         "https://dash.cloudflare.com/?to=/:account/ai/workers-ai"),
+        ("Cloudflare API token (images)", "CLOUDFLARE_API_TOKEN",
+         "https://dash.cloudflare.com/profile/api-tokens"),
+        ("Hugging Face token (3D models)", "HF_TOKEN", "https://huggingface.co/settings/tokens"),
+    ]  # fmt: skip
 
     def key_fields() -> list[KeyField]:
         fields = []
@@ -318,6 +327,8 @@ async def _run_app(settings: Settings, args: argparse.Namespace) -> None:
             if env:
                 label = "OpenRouter" if name == "openrouter" else name.title()
                 fields.append(KeyField(label, env, url, keys.get_key(env) is not None))
+        for label, env, url in extra_keys:
+            fields.append(KeyField(label, env, url, keys.get_key(env) is not None))
         return fields
 
     def save_keys(values: dict[str, str]) -> None:
@@ -839,6 +850,61 @@ def _morning_brief(
         max_emails=plan.max_emails,
         excerpt_chars=plan.excerpt_chars,
     )
+
+
+def _image_tools(
+    registry: Any,
+    settings: Settings,
+    client: httpx.AsyncClient,
+    pick_file: Callable[[], Awaitable[Path | None]],
+    bus: Any,
+    spawn: Callable[[Any], Any],
+) -> Any:
+    """Pictures (free services only, unless paid is switched on) and 3D models."""
+    from jarvis.app.keys import get_key
+    from jarvis.app.paths import data_dir, images_dir
+    from jarvis.tools.files import default_area
+    from jarvis.tools.images import ImageMaker, register_image_tools
+    from jarvis.tools.threed import HF_TOKEN, SpaceModeller, register_model_tools
+    from jarvis.ui.media_view import Previews
+
+    plan = settings.images
+    previews = Previews(images_dir(plan.folder), data_dir() / "cache")
+
+    def notify(text: str) -> None:
+        spawn(bus.publish(UserNotice("Images", text)))
+
+    maker = ImageMaker(
+        client,
+        get_key,
+        openrouter_env=(settings.providers.openrouter.api_key_env if plan.free_openrouter else ""),
+        cloudflare_model=plan.cloudflare_model,
+        cloudflare_steps=plan.cloudflare_steps,
+        pollinations=plan.pollinations,
+        allow_paid=plan.allow_paid,
+        paid_models=plan.paid_models,
+        timeout_s=plan.timeout_s,
+        notify=notify,
+    )
+    register_image_tools(registry, maker, previews.show)
+    if plan.model_space.strip():
+        modeller = SpaceModeller(
+            lambda: get_key(HF_TOKEN),
+            space=plan.model_space.strip(),
+            textured=plan.model_textured,
+            timeout_s=plan.model_timeout_s,
+            work_dir=data_dir() / "cache",
+        )
+        register_model_tools(
+            registry,
+            maker,
+            modeller,
+            default_area(),
+            previews.show,
+            pick_file=pick_file,
+            notify=notify,
+        )
+    return previews
 
 
 def _slide_tools(

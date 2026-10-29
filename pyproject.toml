@@ -25,6 +25,7 @@ dependencies = [
     "pypdf>=5.0",
     "python-pptx>=1.0.2",
     "python-docx>=1.1",  # the writing assistant's Word files (MIT)
+    "gradio_client>=2.0",  # 3D models on Hugging Face Spaces (Apache-2.0)
     "tzdata>=2024.1; sys_platform == 'win32'",  # time zones for calendar feeds
     "winrt-runtime>=3.0; sys_platform == 'win32'",
     "winrt-Windows.Devices.Radios>=3.0; sys_platform == 'win32'",
@@ -67,7 +68,7 @@ packages = ["jarvis", "tests"]
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["qasync", "qasync.*", "sounddevice", "pynput", "pynput.*", "win32event", "win32api", "win32clipboard", "uiautomation", "pycaw", "pycaw.*", "comtypes", "pypdf", "winrt", "winrt.*", "onnxruntime", "phonemizer", "phonemizer.*", "espeakng_loader", "winerror", "win32com", "win32com.*", "pythoncom", "psutil", "pytestqt.*", "win32evtlog", "win32cred", "docx", "docx.*"]
+module = ["qasync", "qasync.*", "sounddevice", "pynput", "pynput.*", "win32event", "win32api", "win32clipboard", "uiautomation", "pycaw", "pycaw.*", "comtypes", "pypdf", "winrt", "winrt.*", "onnxruntime", "phonemizer", "phonemizer.*", "espeakng_loader", "winerror", "win32com", "win32com.*", "pythoncom", "psutil", "pytestqt.*", "win32evtlog", "win32cred", "docx", "docx.*", "gradio_client", "gradio_client.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

@@ -58,6 +58,7 @@ from jarvis.providers.openai_compat import image_part
 from jarvis.providers.router import NO_VISION, AllProvidersFailedError, Diagnosis, ProviderRouter
 from jarvis.storage.db import HistoryStore
 from jarvis.storage.memory import Memory
+from jarvis.tools.images import ImageRequest, image_command
 from jarvis.tools.plugins import is_plugin_tool
 from jarvis.tools.registry import (
     WORKFLOW_ONLY,
@@ -425,6 +426,9 @@ class Assistant:
         deck = deck_command(text) if self._registry.get("make_presentation") else None
         if deck is not None:
             return await self._presentation(conversation, shown, deck)
+        picture = image_command(text) if self._registry.get("make_image") else None
+        if picture is not None:
+            return await self._picture(conversation, shown, picture)
         await self._state.transition(AppState.THINKING)
         self._did = set()
         self._carry, self._last_groups = self._last_groups, set()
@@ -486,18 +490,39 @@ class Assistant:
 
     async def _presentation(self, conversation: int, shown: str, request: DeckRequest) -> Reply:
         """A slide deck: the tool runs directly (its own free model writes the slides)."""
-        await self._state.transition(AppState.THINKING)
-        self._did = set()
         args: dict[str, Any] = {"topic": request.topic, "slides": request.slides}
         if request.source_file:
             args["source_file"] = request.source_file
+        return await self._direct(conversation, shown, "make_presentation", args, "slides")
+
+    async def _picture(self, conversation: int, shown: str, request: ImageRequest) -> Reply:
+        """A picture or 3D model: the tool runs directly (no chat model needed)."""
+        if request.model and self._registry.get("make_3d_model"):
+            prompt = f"{request.style} {request.prompt}".strip()
+            return await self._direct(
+                conversation, shown, "make_3d_model", {"prompt": prompt}, "3d model"
+            )
+        args: dict[str, Any] = {
+            "prompt": request.prompt,
+            "aspect": request.aspect,
+            "style": request.style,
+            "three_d": request.three_d,
+        }
+        return await self._direct(conversation, shown, "make_image", args, "image")
+
+    async def _direct(
+        self, conversation: int, shown: str, tool: str, args: dict[str, Any], mode: str
+    ) -> Reply:
+        """Runs one tool without a chat model; the reply is the tool's own summary."""
+        await self._state.transition(AppState.THINKING)
+        self._did = set()
         try:
-            result = await self._run_tool(ToolCall("deck", "make_presentation", args))
+            result = await self._run_tool(ToolCall(mode, tool, args))
         finally:
             if self._state.state in (AppState.THINKING, AppState.ACTING):
                 await self._state.transition(AppState.IDLE)
         reply = result.summary
-        # Labelled with the model that really wrote the slides (none if it failed).
+        # Labelled with the model that really made it (none if it failed).
         model = str(result.data.get("model", "")) or None
         provider = str(result.data.get("provider", "")) or None
         await self._store.add_message(
@@ -505,14 +530,14 @@ class Assistant:
             {"role": "assistant", "content": reply},
             provider=provider,
             model=model,
-            mode="slides",
+            mode=mode,
         )
         await self._emit(
             EntryKind.ASSISTANT,
             reply,
             provider=provider,
             model=model,
-            mode="slides",
+            mode=mode,
             failed=not result.ok,
         )
         self._keep(shown, reply)

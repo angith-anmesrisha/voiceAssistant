@@ -83,7 +83,10 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   weather, look_up and watch_topic tools), `windows.py` (`WindowsWindows`: EnumWindows,
   raise, polite WM_CLOSE; never JARVIS or the shell), `system_ctl.py` (`WindowsSystem`:
   volume via pycaw, brightness via WMI, wallpaper via SystemParametersInfo),
-  `slides.py` (`deck_command` local parser, `DeckWriter`: free models only, `parse_deck`,
+  `images.py` (`ImageMaker`: free OpenRouter image models if listed → Cloudflare FLUX →
+  Pollinations → paid only with `images.allow_paid`; `image_command` local parser;
+  `make_image`), `threed.py` (`SpaceModeller`: Hunyuan3D-2 Space via `gradio_client`,
+  `make_3d_model`), `slides.py` (`deck_command` local parser, `DeckWriter`: free models only, `parse_deck`,
   `make_presentation`), `deck_render.py` (python-pptx drawing: `THEMES`, `LAYOUTS`, `render`),
   `gmail_api.py` (`GmailAccounts`/`GmailAccount`: Gmail API, OAuth loopback + PKCE,
   `gmail.readonly` only, refresh tokens in Credential Manager), `zai.py` (`ZaiWriter`),
@@ -134,7 +137,9 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   group, search), `Inspector` (live settings via `setting_field`), logs, `TemplateGallery`;
   `problems`, `warnings`, `layout`), `canvas.py` (`FlowScene`/`FlowView`/`NodeItem`/
   `LinkItem`: dotted grid, bezier links, ports, + stubs, drag-to-link, run status),
-  `node_icons.py` (QPainter line icons, `GROUP_STYLE`),
+  `node_icons.py` (QPainter line icons, `GROUP_STYLE`), `media_view.py` (`MediaPreview`/
+  `Previews`: picture or 3D model window, Save/Save as/Copy/Discard; `model_view.qml`
+  Qt Quick 3D turntable),
   `widgets/`: `orb.py` (particle globe when idle, morphs into the glowing ring), `stage.py`
   (backdrop, top bar, clock/state caption, reply card, status strip, `Tween`), `panels.py`
   (provider/network/safety panels in the details overlay, command bar, confirm overlay),
@@ -277,6 +282,21 @@ pywin32 (SAPI TTS), psutil, loguru, pydantic, stdlib sqlite3.
   `morning_brief` (MEDIUM, group "brief"), node "Morning brief PDF to Telegram"
   (connections zai,gmail,telegram: the Inspector shows a card per service), template
   "Morning brief to Telegram" daily 08:00.
+- Pictures and 3D (owner, 2026-10-29: "use free openrouter models ... 3d renders ... open
+  in a jarvis themed window and from there i can chose to save"; then "should be free"):
+  OpenRouter has no free image or 3D model (its guide says so) and Gemini's image models
+  have no free tier, so `ImageMaker` tries OpenRouter's free list (`:free` or all prices
+  0, listed once a session) → Cloudflare Workers AI FLUX.1 schnell (env
+  `CLOUDFLARE_ACCOUNT_ID`/`CLOUDFLARE_API_TOKEN`, ~10K neurons/day free) → Pollinations
+  classic (keyless, ≤768x768 area, one at a time, `private=true`) → paid OpenRouter
+  `/api/v1/images` only with `images.allow_paid` (off). 3D: the picture (prompt +
+  `OBJECT_STYLE`) goes to `tencent/Hunyuan3D-2` (ZeroGPU: 2 min/day anonymous, 5 with a
+  free `HF_TOKEN`; `/generation_all` textured, `/shape_generation` when over quota),
+  telemetry off, temp files removed. `image_command` ("generate an image of…", "draw a…",
+  "make a 3D model of…") runs the tool without a chat model (mode "image"/"3d model").
+  Nothing is saved until Save (Pictures\JARVIS Images, "xb"; Save as… asks before
+  replacing); a model sits in data_dir/cache only while its window is open. The key
+  overlay has the Cloudflare and Hugging Face fields. Prompts are never logged.
 - Quick capture: `commands.capture_command` (idea:/add a task…/todo:/add X to my Y
   tasks/quick note:) → `add_task` or `save_note` "Inbox" in `_handle` before the deck
   check, no model (mode "capture"); a trailing due ("by friday", "tomorrow") is split

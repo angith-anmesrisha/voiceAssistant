@@ -109,6 +109,23 @@ def briefs_dir() -> Path:
     return documents_dir() / "JARVIS Briefs"
 
 
+def images_dir(configured: str = "") -> Path:
+    """Where saved pictures and 3D models go: ``images.folder``, else Pictures/JARVIS Images."""
+    if configured.strip():
+        return Path(os.path.expandvars(configured.strip())).expanduser()
+    if os.environ.get("JARVIS_DATA_DIR"):
+        return data_dir() / "images"
+    home = Path.home()
+    if sys.platform == "win32":
+        try:
+            from jarvis.tools.files import known_folder
+
+            return known_folder("pictures", home) / "JARVIS Images"
+        except Exception:
+            pass
+    return home / "Pictures" / "JARVIS Images"
+
+
 def research_dir() -> Path:
     """Where research reports go: Documents/JARVIS Research."""
     if os.environ.get("JARVIS_DATA_DIR"):
