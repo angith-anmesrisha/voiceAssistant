@@ -478,3 +478,22 @@ def test_the_workflow_node_and_template() -> None:
     assert template.trigger.at == "08:00" and template.trigger.days == []
     assert problems(template) == []
     assert "brief" in groups_for("send me my morning brief")
+
+
+async def test_any_number_of_gmail_accounts_are_read() -> None:
+    sources: list[Any] = [
+        FakeSource(f"user{n}@gmail.com", [mail(f"m{n}", f"Hi {n}", account=f"user{n}@gmail.com")])
+        for n in range(1, 6)
+    ]
+    registry = ToolRegistry()
+    register_email_tools(registry, sources=lambda: sources)
+    listed = await call(registry, "check_email")
+    assert [line.split("]")[0] for line in listed.data["messages"]] == [
+        "[1:m1",
+        "[2:m2",
+        "[3:m3",
+        "[4:m4",
+        "[5:m5",
+    ]
+    read = await call(registry, "read_email", id="5:m5")
+    assert read.ok and read.data["subject"] == "Hi 5"

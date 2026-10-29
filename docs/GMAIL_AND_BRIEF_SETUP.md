@@ -24,7 +24,10 @@ so JARVIS never sees your password. It asks for one permission only, **read your
 3. Pick your first account. Google warns that it "hasn't verified this app". It's your
    own app, so press **Continue**. Then allow **Read your email**.
 4. When the browser tab says "JARVIS is connected to Gmail", press **Sign in with Google**
-   again for the second account.
+   again for each other account. There's no limit: every signed-in account is read by
+   "check my email", the Gmail nodes and the morning brief. If Google picks the wrong
+   account, use "Use another account" on its page. Each account must also be a test
+   user (step 1.4) while the project is in Testing.
 
 The sign-ins are kept in Windows Credential Manager ("JARVIS Gmail: …"). **Remove
 selected** forgets an account and revokes JARVIS's access at Google.
@@ -47,7 +50,7 @@ The models tried, in order, are `brief.models` in settings.json (default
 Plan endpoint, so a Coding Plan key works too.
 
 **What Z.ai receives.** For each email from the last 24 hours, Z.ai gets the sender,
-subject, time, read or unread, which account ("Gmail 1" or "Gmail 2"), and the first 700
+subject, time, read or unread, which account ("Gmail 1", "Gmail 2"…), and the first 700
 characters of the text. It also gets your open tasks, today's reminders and calendar,
 headlines and prices. It never gets your own email addresses, Gmail links, passwords or
 Google sign-in. Z.ai is an external service and processes that data under its own

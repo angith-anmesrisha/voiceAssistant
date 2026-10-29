@@ -139,7 +139,7 @@ line of ━━━━━━━━━━━━━━━━━━ :
 attention, then **Today's focus:** one sentence.
 ## 🔴 1. PRIORITY EMAIL ALERTS: the emails that need action, most urgent first, as \
 ### 🔴 HIGH / 🟠 MEDIUM — <topic>, with **From:**, **Subject:**, **Received:**, \
-**Account:** (Gmail 1 or 2), **Summary:**, **Why it matters:**, **Recommended action:**, \
+**Account:** (Gmail 1, Gmail 2, …), **Summary:**, **Why it matters:**, **Recommended action:**, \
 **Deadline:** (only if the email states one), and the email link. Skip newsletters and \
 promotions here.
 ## 📧 2. YOUR EMAIL SUMMARY: grouped bullets of the last 24 hours, then \
@@ -252,9 +252,9 @@ def market_table(data: Gathered) -> str:
 
 def health_table(data: Gathered, model: str, telegram: str, withheld_news: bool) -> str:
     rows = ["| Component | Status | Details |", "|---|---|---|"]
-    for number, (_address, status) in enumerate(data.accounts, 1):
+    for number, (address, status) in enumerate(data.accounts, 1):
         ok = status.startswith(("Retrieved", "No "))
-        rows.append(f"| Gmail {number} | {'OK' if ok else 'Problem'} | {status} |")
+        rows.append(f"| Gmail {number} ({address}) | {'OK' if ok else 'Problem'} | {status} |")
     if not data.accounts:
         rows.append("| Gmail | Not connected | Sign in with Google in a Gmail node |")
     count = len(data.all_news())
